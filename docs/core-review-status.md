@@ -1,0 +1,30 @@
+# Core desktop review — October 7, 2026
+
+## Branches and saved data
+
+Video cropping is preserved at `codex/video-cropping` (snapshot `2b34843`). The active core app is on `main`, with `codex/core-review` retained as the implementation branch. Cropping UI, C shortcuts, exporter, upload providers, crop API endpoints and crop job banners are removed from core. Compatibility-only bridge exports reject crop work for any already-installed older worker; they perform no downloads or uploads.
+
+The existing private database, account binding, sessions, browser credentials, crop job records and recovery files are retained. Generated copies remain excluded. Unfinished crop originals are quarantined from the ordinary review/removal queue and cannot be added to an album while their replacement remains unverified. Nothing was deleted from Google Photos, and no personal website or deployment changes were made.
+
+## Updated behavior
+
+- Storage selected for removal updates with each swipe, Keep instead and Undo, including in enlarged review. Sent batches remain in the total. Confirmed Trash has a separate estimate. Known Google quota metadata is used before file size, known free media count as zero, and unknown values are flagged. These counters do not claim to read Google's account storage meter.
+- Every queue thumbnail opens the existing in-app viewer. Photos support fit, zoom and pan. Videos support native controls, scrubbing, looping and Space playback. F/Escape closes the viewer; queue inspection does not make review decisions.
+- A fully verified album operation clears that batch from the working queue without resetting decisions, counters or album links. Partial/failed batches remain for retry. Clearance persists through reload, reimport, reconciliation and missing albums. Previously completed batches migrate to this behavior.
+- Completed album banners do not stack. At most one actionable failed/pending operation appears. Toasts replace one another, expire after 2.8 seconds and dismiss on click.
+
+## Verification
+
+`npm test`: 40 passing, zero failures/skips. Covers authorization, pairing/recovery, import persistence, revision conflicts, Google response validation, partial album writes/retries, full-verification queue clearance, restart/reimport behavior, legacy migration, protected crop originals and storage accounting. `npm run check`: syntax and UI wiring pass for 14 files.
+
+Chrome live checks verified bridge recovery with the existing account, loading older media, a real photo swipe/counter update/queue zoom to 125%, and a real video queue preview with a 16.37-second duration, playback, scrubbing, immediate Space pause/resume and automatic looping. Both temporary removal decisions were undone and the working queue returned to zero. No Google album writes or deletions were needed in this live check.
+
+An isolated in-memory browser harness using generated media verified the album confirmation flow, full queue clearance with retained 3 MB total after reload, fullscreen arrow decisions, fullscreen Undo, photo zoom and video playback. Its album writes are local simulated acknowledgements, not a new live Google album test. Responsive checks covered 390×844, 320×568 and 844×390 with no horizontal overflow. These are browser viewport checks, not physical iPhone/Safari tests.
+
+The Chrome localhost navigation security block required the user to open the tabs once. Subsequent checks ran autonomously; no additional extension-manager operation or permission expansion was required.
+
+## Run
+
+Run `npm start`, open `http://localhost:3000/` in Chrome, and keep the signed-in Google Photos tab open. Setup and daily-use instructions are at `/guide.html`.
+
+For isolated browser QA, run `node test/fixtures/core-review-browser.mjs`, then open the test URL printed by that server. It uses synthetic media and an in-memory database and cannot send requests to Google.

@@ -11,7 +11,7 @@ async function fixture({tabs=[{id:7,url:'https://photos.google.com/',account:'ac
  return {requests,reads,get pair(){return pair;},send:(operation,args={},popup=false)=>new Promise(resolve=>listener({operation,args},popup?{id,url:chrome.runtime.getURL('popup.html')}:{id,frameId:0,tab:{url:'http://localhost:3000/'}},resolve))};
 }
 test('status validates both server pairing and live Photos identity, with installed capabilities',async()=>{
- const f=await fixture(),result=await f.send('status');assert.equal(result.ok,true);assert.equal(result.data.version,'1.2.0');assert.equal(result.data.trimUploadSupported,true);assert.equal(result.data.recoveredTab,false);assert.deepEqual(f.reads,[[7,'identity']]);assert.equal(f.requests[0].options.headers.Authorization,'Bearer saved-token');assert.ok(f.requests[0].options.signal);
+ const f=await fixture(),result=await f.send('status');assert.equal(result.ok,true);assert.equal(result.data.version,'1.2.0');assert.equal(result.data.trimUploadSupported,undefined);assert.equal(result.data.recoveredTab,false);assert.deepEqual(f.reads,[[7,'identity']]);assert.equal(f.requests[0].options.headers.Authorization,'Bearer saved-token');assert.ok(f.requests[0].options.signal);
 });
 test('closed paired tab recovers only an exact-account open tab, retaining token',async()=>{
  const f=await fixture({saved:{token:'saved-token',account:'account',tabId:99},tabs:[{id:1,url:'https://photos.google.com/',account:'other'},{id:2,url:'https://photos.google.com/u/1/',account:'account',label:'Same account'}]});

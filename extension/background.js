@@ -1,9 +1,7 @@
-import { browserTrimUpload } from './trim-upload.js';
-import { storedSourceDownload } from './trim-download.js';
 import { photosOperation } from './photos-api.js';
 const APP='http://localhost:3000';
 let operationRunning=false;
-function version(){return chrome.runtime.getManifest?.().version||'1.2.2';}
+function version(){return chrome.runtime.getManifest?.().version||'1.3.0';}
 async function api(path,data,token){
  let r;
  try{r=await fetch(`${APP}/api/bridge${path}`,{method:data?'POST':'GET',signal:AbortSignal.timeout(['/status','/pair'].includes(path)?15000:360000),headers:{...(data?{'Content-Type':'application/json'}:{}),...(token?{Authorization:`Bearer ${token}`}:{})},...(data?{body:JSON.stringify(data)}:{})});}
@@ -50,7 +48,7 @@ async function perform(operation,args,sender){
   const saved=await chrome.storage.local.get('pair');if(!saved.pair)return {installed:true,version:version(),paired:false};
   await api('/status',null,saved.pair.token);
   const live=await livePair(saved.pair);
-  return {installed:true,version:version(),paired:true,label:live.identity.label,recoveredTab:live.recoveredTab,reconciliationSupported:true,trimSupported:true,trimUploadSupported:true,trimArchiveSupported:true};
+  return {installed:true,version:version(),paired:true,label:live.identity.label,recoveredTab:live.recoveredTab,reconciliationSupported:true};
  }
  if(operation==='pair'){
   if(!ownPopup)throw Error('Pair through the extension popup.');const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!photosTab(tab))throw Error('Open your Google Photos tab, then click this extension.');const identity=await google(tab.id,'identity');const result=await api('/pair',{code:String(args.code),...identity});await chrome.storage.local.set({pair:{token:result.token,account:identity.account,tabId:tab.id,label:identity.label}});return {label:identity.label};
@@ -76,38 +74,6 @@ async function perform(operation,args,sender){
     results.push({id:item.id,revision:item.revision,state,inAlbum});
    }
    return await api('/reconcile',{results,albumUnavailable,albumKey:snapshot.albumKey},pair.token);
-  }finally{operationRunning=false;}
- }
- if(operation==='trimConfirmSource'){
-  if(operationRunning)throw Error('Another bridge operation is in progress.');operationRunning=true;
-  try{const job=await api(`/trim-jobs/${args.jobId}`,null,pair.token);if(job.uploadStarted){if(!job.sourceMetadataConfirmed)throw Error('This upload began without confirmed source metadata. Leave the original unchanged and recreate after reconciliation.');return job;}const state=await call('itemState',{mediaKey:job.source.mediaKey});await api(`/trim-jobs/${job.id}/original-state`,{mediaKey:job.source.mediaKey,state:state.state},pair.token);const info=await call('trimInfo',{mediaKey:job.source.mediaKey});return await api(`/trim-jobs/${job.id}/source-info`,info,pair.token);}finally{operationRunning=false;}
- }
- if(operation==='trimUpload'){
-  if(operationRunning)throw Error('Another bridge operation is in progress.');operationRunning=true;
-  try{return await browserTrimUpload({jobId:args.jobId,pair,server:(path,data)=>api(path,data,pair.token),call,storage:chrome.storage.local});}finally{operationRunning=false;}
- }
- if(operation==='trimCleanup'){
-  const job=await api(`/trim-jobs/${args.jobId}`,null,pair.token);if(!['completed','cancelled'].includes(job.status)||job.account!==pair.account)throw Error('Only a closed crop can clean its Chrome upload checkpoint.');await chrome.storage.local.remove(`trim-upload:${pair.account}:${job.id}`);await chrome.storage.local.remove(`trim-source:${pair.account}:${job.id}`);return {ok:true};
- }
- if(operation==='trimSource'||operation==='trimVerify'){
-  if(operationRunning)throw Error('Another bridge operation is in progress.');operationRunning=true;
-  try{const job=await api(`/trim-jobs/${args.jobId}`,null,pair.token);
-   if(operation==='trimVerify'){if(!job.uploadStarted&&!job.sourceMetadataConfirmed){const source=await call('trimInfo',{mediaKey:job.source.mediaKey});await api(`/trim-jobs/${job.id}/source-info`,source,pair.token);}const info=await call('trimFind',{name:job.name});const state=await call('itemState',{mediaKey:job.source.mediaKey});await api(`/trim-jobs/${job.id}/original-state`,{mediaKey:job.source.mediaKey,state:state.state},pair.token);return await api(`/trim-jobs/${job.id}/metadata`,info,pair.token);}
-   if(job.exportReport)return job;if(job.archiveValidated)return api(`/trim-jobs/${job.id}/resume`,{},pair.token);
-   const info=await call('trimInfo',{mediaKey:job.source.mediaKey});if(info.size!==job.source.size)throw Error('Stored original size changed. Refresh and start a new crop.');
-   await api(`/trim-jobs/${job.id}/source-info`,info,pair.token);
-   const source=await storedSourceDownload({job,pair,call,storage:chrome.storage.local,readJob:()=>api(`/trim-jobs/${job.id}`,null,pair.token)}),archive=source.state==='archive';
-   if(!safeMedia(source.url)||!Number.isSafeInteger(source.size)||source.size<1||source.size>(archive?1024*1024*1024+16*1024*1024:1024*1024*1024)||!archive&&(source.size!==job.source.size||source.name!==job.source.name))throw Error('Stored-file download does not match the original.');
-   const current=await api(`/trim-jobs/${job.id}`,null,pair.token);if(['completed','cancelled'].includes(current.status)||current.sourceRevision!==job.sourceRevision)throw Error('The crop changed while its original was being prepared.');
-   const route=archive?'source-archive':'source',response=await fetch(source.url,{credentials:'include',redirect:'error',signal:AbortSignal.timeout(180000)});if(!response.ok||!response.body)throw Error('Chrome could not download the stored original. Resume to retry its saved request.');
-   // Archive and media bytes stay bounded; Google credentials never reach localhost.
-   const declared=response.headers.get('content-length');if(declared!==null&&Number(declared)!==source.size)throw Error('Google download byte size differs from its acknowledged request.');
-   let offset=(archive?current.archiveBytes:current.sourceBytes)||0,skipped=0;
-   if(offset>source.size)throw Error('Stored download offset exceeds its acknowledged bytes.');
-   const send=async(part,final=false)=>{const r=await fetch(`${APP}/api/bridge/trim-jobs/${job.id}/${route}`,{method:'PUT',headers:{Authorization:`Bearer ${pair.token}`,'Content-Type':'application/octet-stream','X-Source-Offset':String(offset),...(archive?{'X-Archive-Size':String(source.size)}:{}),...(final?{'X-Source-Final':'true'}:{})},body:part,signal:AbortSignal.timeout(final?360000:30000)});if(!r.ok)throw Error((await r.json()).error);return r.json();};
-   for await(const chunk of response.body){let position=Math.min(chunk.length,Math.max(0,offset-skipped));skipped+=chunk.length;if(skipped>source.size)throw Error('Google download exceeds its acknowledged byte size.');while(position<chunk.length){const part=chunk.subarray(position,position+1024*1024);await send(part);offset+=part.length;position+=part.length;}}
-   if(skipped!==source.size||offset!==source.size)throw Error('Google stored download ended before all acknowledged bytes arrived. Resume its saved checkpoint.');
-   const prepared=await send(new Uint8Array(),true);await chrome.storage.local.remove(`trim-source:${pair.account}:${job.id}`);return prepared;
   }finally{operationRunning=false;}
  }
  if(operation==='preview'||operation==='video'){

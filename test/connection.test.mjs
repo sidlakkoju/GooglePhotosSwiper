@@ -22,9 +22,9 @@ test('connection errors are recoverable and a later check succeeds',async()=>{
  const check=createConnectionCheck({refresh:async()=>{},bridge:async()=>{if(!available)throw Error('Extension disconnected. Reload this tab.');return {installed:true,paired:true,version:'1.2.2',trimUploadSupported:true,trimArchiveSupported:true,recoveredTab:true};},change:s=>changes.push(s)});
  assert.equal((await check.check()).phase,'error');available=true;assert.equal((await check.check()).phase,'connected');assert.match(changes.at(-1).detail,/open Google Photos tab/);
 });
-test('older bridge retains ordinary review but clearly requires crop update; unpaired needs fresh code',()=>{
- const legacy=describeConnection({installed:true,paired:true,label:'Test'});assert.equal(legacy.connected,true);assert.equal(legacy.phase,'update');assert.match(legacy.detail,/update for video crops/);
- const preArchive=describeConnection({installed:true,paired:true,version:'1.2.1',trimUploadSupported:true});assert.equal(preArchive.connected,true);assert.equal(preArchive.phase,'update');
+test('core review accepts the installed bridge without requiring crop capabilities; unpaired needs fresh code',()=>{
+ const legacy=describeConnection({installed:true,paired:true,label:'Test'});assert.equal(legacy.connected,true);assert.equal(legacy.phase,'connected');assert.doesNotMatch(legacy.detail,/crop/);
+ const preArchive=describeConnection({installed:true,paired:true,version:'1.2.1',trimUploadSupported:true});assert.equal(preArchive.connected,true);assert.equal(preArchive.phase,'connected');
  const unpaired=describeConnection({installed:true,paired:false,version:'1.2.0'});assert.equal(unpaired.connected,false);assert.match(unpaired.detail,/fresh code/);
  assert.throws(()=>describeConnection(null),/invalid status/);
 });

@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 .data/
 test-results/
+
+diagrams/**/.grok/

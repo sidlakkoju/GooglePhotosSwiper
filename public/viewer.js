@@ -4,7 +4,6 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   const zoomIn=dialog.querySelector('[data-in]'), zoomOut=dialog.querySelector('[data-out]'), fitButton=dialog.querySelector('[data-fit]');
   const actions=dialog.querySelector('.viewer-review'), swipeZone=dialog.querySelector('[data-swipe-zone]'), stamp=dialog.querySelector('[data-review-stamp]');
   const removeButton=dialog.querySelector('[data-remove]'), keepButton=dialog.querySelector('[data-keep]'), undoButton=dialog.querySelector('[data-undo]');
-  const cropButton=dialog.querySelector('[data-crop]');
   const help=dialog.querySelector('.viewer-help'), pointers=new Map();
   let scale=1,x=0,y=0,width=0,height=0,ready=false,request=0,gesture=null,swipe=null,canReview=false,working=false,current=null;
   const localPoint=e=>{const r=stage.getBoundingClientRect();return {x:e.clientX-r.left-r.width/2,y:e.clientY-r.top-r.height/2};};
@@ -14,7 +13,7 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   function zoom(value,anchorX=0,anchorY=0){if(!ready)return;const next=Math.min(6,Math.max(1,value));x=anchorX-(anchorX-x)*next/scale;y=anchorY-(anchorY-y)*next/scale;scale=next;paint();}
   function metrics(){const points=[...pointers.values()];if(points.length<2)return points[0]?{...points[0],distance:null}:null;return {x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2,distance:Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y)};}
   function clearSwipe(){swipe=null;stamp.hidden=true;swipeZone.textContent='Swipe left or right';stage.classList.remove('review-dragging');}
-  function controls(){cropButton.hidden=current?.type!=='video'||!canReview;cropButton.disabled=working||review.canCrop?.()===false;actions.hidden=!canReview;removeButton.disabled=keepButton.disabled=working||!current;undoButton.disabled=working||!review.canUndo?.();}
+  function controls(){actions.hidden=!canReview;removeButton.disabled=keepButton.disabled=working||!current;undoButton.disabled=working||!review.canUndo?.();}
   function clearMedia(){ready=false;video.pause();video.removeAttribute('src');video.load();video.hidden=true;image.removeAttribute('src');image.hidden=true;pointers.clear();gesture=null;clearSwipe();stage.classList.remove('panning');}
   async function show(item,playback={}){
     const token=++request;clearMedia();current=item;scale=1;x=y=0;controls();
@@ -30,7 +29,6 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   }
   async function decide(decision){if(!canReview||working||!current)return;working=true;controls();const token=request;try{const next=await review.decide(decision);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
   async function undo(){if(!canReview||working||!review.canUndo?.())return;working=true;controls();const token=request;try{const next=await review.undo();if(dialog.open&&token===request)await show(next);}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
-  cropButton.onclick=()=>{if(!working&&current?.type==='video')review.crop?.(current,video);};
   removeButton.onclick=()=>decide('remove');keepButton.onclick=()=>decide('keep');undoButton.onclick=undo;
   zoomIn.onclick=()=>zoom(scale*1.25);zoomOut.onclick=()=>zoom(scale/1.25);fitButton.onclick=fit;
   dialog.querySelector('[data-close]').onclick=()=>dialog.close();dialog.tabIndex=-1;
@@ -58,7 +56,6 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   stage.addEventListener('dblclick',e=>{if(!e.target.closest('video'))scale>1?fit():zoom(2.5);});
   dialog.addEventListener('keydown',e=>{
     if(e.ctrlKey||e.metaKey||e.altKey||e.target.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;
-    if(e.key.toLowerCase()==='c'&&current?.type==='video'&&canReview){e.preventDefault();e.stopPropagation();if(!e.repeat)review.crop?.(current,video);return;}
     if(e.key.toLowerCase()==='f'){e.preventDefault();e.stopPropagation();dialog.close();return;}
     if(canReview&&(['ArrowLeft','ArrowRight'].includes(e.key)||e.key.toLowerCase()==='z')){e.preventDefault();e.stopPropagation();if(!e.repeat){if(e.key.toLowerCase()==='z')undo();else decide(e.key==='ArrowLeft'?'remove':'keep');}return;}
     if(e.code==='Space'&&!video.hidden){e.preventDefault();e.stopPropagation();if(!e.repeat){if(video.paused)video.play().catch(()=>{});else video.pause();}return;}
