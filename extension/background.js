@@ -1,7 +1,7 @@
 import { photosOperation } from './photos-api.js';
 const APP='http://localhost:3000';
 let operationRunning=false;
-function version(){return chrome.runtime.getManifest?.().version||'1.3.0';}
+function version(){return chrome.runtime.getManifest?.().version||'1.3.1';}
 async function api(path,data,token){
  let r;
  try{r=await fetch(`${APP}/api/bridge${path}`,{method:data?'POST':'GET',signal:AbortSignal.timeout(['/status','/pair'].includes(path)?15000:360000),headers:{...(data?{'Content-Type':'application/json'}:{}),...(token?{Authorization:`Bearer ${token}`}:{})},...(data?{body:JSON.stringify(data)}:{})});}
@@ -48,7 +48,7 @@ async function perform(operation,args,sender){
   const saved=await chrome.storage.local.get('pair');if(!saved.pair)return {installed:true,version:version(),paired:false};
   await api('/status',null,saved.pair.token);
   const live=await livePair(saved.pair);
-  return {installed:true,version:version(),paired:true,label:live.identity.label,recoveredTab:live.recoveredTab,reconciliationSupported:true};
+  return {installed:true,version:version(),paired:true,label:live.identity.label,recoveredTab:live.recoveredTab,reconciliationSupported:true,paginationSupported:true};
  }
  if(operation==='pair'){
   if(!ownPopup)throw Error('Pair through the extension popup.');const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!photosTab(tab))throw Error('Open your Google Photos tab, then click this extension.');const identity=await google(tab.id,'identity');const result=await api('/pair',{code:String(args.code),...identity});await chrome.storage.local.set({pair:{token:result.token,account:identity.account,tabId:tab.id,label:identity.label}});return {label:identity.label};
@@ -58,7 +58,7 @@ async function perform(operation,args,sender){
  const call=(operation,args={})=>google(pair.tabId,operation,{...args,account:pair.account});
  if(operation==='import'){
   if(operationRunning)throw Error('Another bridge operation is in progress.');operationRunning=true;
-  try{const state=await api('/cursor',null,pair.token);if(!args?.restart&&state.exhausted)throw Error('All library pages have been imported. Rescan newest to refresh.');const data=await call('library',{cursor:args?.restart?null:state.cursor});await api('/import',data,pair.token);return {count:data.items.length,warning:data.metadataWarning};}finally{operationRunning=false;}
+  try{const state=await api('/cursor',null,pair.token);if(!args?.restart&&state.exhausted)throw Error('All library pages have been imported. Rescan newest to refresh.');const data=await call('library',{cursor:args?.restart?null:state.cursor});await api('/import',{...data,requestCursor:args?.restart?null:state.cursor,refreshLatest:!!args?.restart},pair.token);return {count:data.items.length,warning:data.metadataWarning};}finally{operationRunning=false;}
  }
  if(operation==='reconcile'){
   if(operationRunning)throw Error('Another bridge operation is in progress.');operationRunning=true;

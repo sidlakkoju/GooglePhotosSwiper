@@ -28,7 +28,7 @@ export async function photosOperation(operation,args={}) {
   }
   if(operation==='library') {
    const data=await rpc('lcxiM',[args.cursor||null,null,50,null,1,1]);
-   if(!Array.isArray(data)||!(data[0]==null||Array.isArray(data[0])))throw Error('Google library format changed.');
+   if(!Array.isArray(data)||!(data[0]==null||Array.isArray(data[0]))||!(data[1]==null||typeof data[1]==='string'&&data[1].length>0&&data[1].length<=4000))throw Error('Google library format changed.');
    const rawItems=data[0]||[];
    let details=new Map(),metadataWarning='';
    if(rawItems.length){try{

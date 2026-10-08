@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { timingSafeEqual,randomInt } from 'node:crypto';
 import { createStore,hash,secret,problem,text,key,mediaURL } from './lib/store.mjs';
 const publicDir=new URL('./public/',import.meta.url),types={html:'text/html',css:'text/css',js:'text/javascript',svg:'image/svg+xml'};
-const assets=new Set(['index.html','guide.html','app.js','viewer.js','model.js','bridge.js','connection.js','cache.js','styles.css','demo.svg']);
+const assets=new Set(['index.html','guide.html','app.js','viewer.js','model.js','bridge.js','connection.js','cache.js','import-review.js','styles.css','demo.svg']);
 export function createApp({dbPath=':memory:',loginCode=secret(),now=()=>Date.now(),mediaFetch=fetch}={}){
  const store=createStore(dbPath),{db}=store;let pairing=null,attempts={count:0,start:now()},pairAttempts={count:0,start:now()};
  const server=http.createServer(async(req,res)=>{
@@ -26,7 +26,7 @@ export function createApp({dbPath=':memory:',loginCode=secret(),now=()=>Date.now
     if(u.pathname==='/api/bridge/pair'&&req.method==='POST'){if(now()-pairAttempts.start>60000)pairAttempts={count:0,start:now()};if(++pairAttempts.count>20)throw problem(429,'Too many pairing attempts. Wait a minute.');const b=await body();if(!pairing||pairing.expires<now()||b.code!==pairing.code)throw problem(401,'Pairing code expired or incorrect. Generate a new one.');if(!key(b.account)||!text(b.label))throw problem(400,'Invalid Google account.');if(store.account()&&store.account()!==b.account)throw problem(409,'This workspace belongs to a different Google account. Pair that account instead.');const token=secret();db.prepare('DELETE FROM pairs').run();db.prepare('INSERT INTO pairs VALUES (?,?,?)').run(hash(token),b.account,text(b.label));store.setSetting('account',b.account);store.setSetting('accountLabel',text(b.label));pairing=null;return json(200,{token,account:b.account});}
     const token=/^Bearer ([a-zA-Z0-9_-]+)$/.exec(req.headers.authorization||'')?.[1],pair=token&&db.prepare('SELECT * FROM pairs WHERE hash=?').get(hash(token));if(!pair||pair.account!==store.account())throw problem(401,'Extension is not paired.');
     if(u.pathname==='/api/bridge/status'&&req.method==='GET')return json(200,{account:pair.account,label:pair.label});
-    if(u.pathname==='/api/bridge/import'&&req.method==='POST'){const b=await body(),count=store.importItems(b.items,pair.account);store.setSetting('cursor',text(b.nextPageId,4000));store.setSetting('exhausted',b.nextPageId?'false':'true');return json(200,{count});}
+    if(u.pathname==='/api/bridge/import'&&req.method==='POST'){const b=await body();return json(200,store.importPage(b.items,pair.account,b));}
     if(u.pathname==='/api/bridge/reconcile'&&req.method==='GET')return json(200,store.reconciliationSnapshot());
     if(u.pathname==='/api/bridge/reconcile'&&req.method==='POST'){const b=await body();return json(200,store.reconcile(b.results,{albumUnavailable:b.albumUnavailable??false,albumKey:b.albumKey}));}
     if(u.pathname==='/api/bridge/cursor'&&req.method==='GET')return json(200,{cursor:store.getSetting('cursor')||null,exhausted:store.getSetting('exhausted')==='true'});

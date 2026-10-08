@@ -66,3 +66,9 @@ Video playback retains up to three preview buffers in browser memory through an 
 Responsive UI verification in Chrome covered 320×568, 390×844, 430×932, and 844×390 layouts. Enlarged review controls use touch targets at least 44 px tall; mobile photo dragging and Undo were exercised with pointer gestures, and the removal queue was checked for horizontal overflow. This validates responsive layout and pointer behavior, not a physical iPhone or Safari session.
 
 Review lookahead warms and decodes the current and next three previews in the selected filter/order. Small videos (up to 32 MB each) in the current-plus-two lookahead also buffer ahead, one background video download at a time. Requests are shared with foreground playback, buffers are evicted as the review advances, and enlarged review skips the compact card’s 230 ms animation wait. Large videos still load on demand.
+
+## Loading unreviewed batches
+
+Load 50 more scans past overlapping/already-reviewed pages until it adds at least 50 new review items, reaches the end, or hits the 12-page safety bound. Google pages can overlap, so a batch may add more than 50 items. The completion message counts new review items separately from library rows checked, and cursor loops/end-of-library are explicit. Decisions, sent queue status, generated exclusions and saved crop protection are preserved.
+
+Refresh latest reads only the head page and does not rewind established older-library progress or clear its exhaustion flag. Bridge 1.3.1 supplies the import mode and expected cursor; stale concurrent imports are rejected before changing metadata or progress. Legacy bridges still support load-more scanning, but must be reloaded to use progress-preserving latest refresh.

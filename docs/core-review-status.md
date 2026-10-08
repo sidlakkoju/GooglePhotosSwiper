@@ -34,3 +34,15 @@ For isolated browser QA, run `node test/fixtures/core-review-browser.mjs`, then 
 Regular review videos now automatically buffer and start muted, with native controls and looping. The existing enlarge control remains available after playback starts. Pausing survives ordinary workspace refreshes; opening the queue, swiping away, or signing out stops the compact player. Opening the enlarged view pauses the compact player, preserves muted state, and resumes the compact player on closing when it was previously playing. Stale asynchronous loads cannot replace a newer card; Undoing an end-of-review video decision starts that restored video again.
 
 Synthetic browser checks verified autoplay without clicking Play, Space pause/resume, pause preservation through a connection refresh, compact/enlarged player exclusivity, resuming after closing enlarged view, stopping on queue navigation/decision, and autoplay after Undo. Live Chrome confirmed that all currently loaded unreviewed items were photos, so no personal decisions were changed for this follow-up test.
+
+## Pagination follow-up
+
+The supplied recording showed “50 items loaded” with the reviewed count unchanged at 315/315. That message counted raw page rows even when all rows were already reviewed, and a one-page read stopped without filling the deck. Separately, Refresh latest overwrote the older-library cursor with the head page's continuation.
+
+The import controller now skips reviewed/overlapping pages and counts newly reviewable IDs separately from rows checked. It stops after at least 50 new review items, explicit exhaustion, a cursor loop, or a bounded 12-page scan; the result explains each outcome. Hidden generated/crop-protected items do not count as new work. Decisions and sent queue markers are preserved.
+
+Bridge 1.3.1 tags latest refresh separately from older pagination. Metadata and cursor updates commit atomically; refresh preserves established progress, and stale concurrent or malformed cursor updates fail without changing data. Initial latest refresh can seed a fresh workspace. The existing bridge was reloaded once by the user, with no new permissions.
+
+47 regression tests pass, including seven pagination cases. An isolated browser reproduction skipped two reviewed 50-row pages before revealing 50 new swipeable items and reported “50 new items to review · 150 library items checked.” Live Chrome verified Bridge 1.3.1, a recent refresh yielding zero new review items, and an unchanged older-library cursor. No Google media were deleted, and no review decisions were reset.
+
+The final live Load more added 50 genuinely new items while retaining the previous 30, leaving 80 swipeable items and 315/395 reviewed. The new toast read “50 new items to review · 50 library items checked.” The current real video was playing automatically. User keep/remove decisions and the empty sent queue remained unchanged. Proof screenshots are saved locally in `test-results/pagination-fixed-20261007.png` and `test-results/pagination-synthetic-20261007.png`.
