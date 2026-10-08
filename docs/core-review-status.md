@@ -28,3 +28,9 @@ The Chrome localhost navigation security block required the user to open the tab
 Run `npm start`, open `http://localhost:3000/` in Chrome, and keep the signed-in Google Photos tab open. Setup and daily-use instructions are at `/guide.html`.
 
 For isolated browser QA, run `node test/fixtures/core-review-browser.mjs`, then open the test URL printed by that server. It uses synthetic media and an in-memory database and cannot send requests to Google.
+
+## Compact autoplay follow-up
+
+Regular review videos now automatically buffer and start muted, with native controls and looping. The existing enlarge control remains available after playback starts. Pausing survives ordinary workspace refreshes; opening the queue, swiping away, or signing out stops the compact player. Opening the enlarged view pauses the compact player, preserves muted state, and resumes the compact player on closing when it was previously playing. Stale asynchronous loads cannot replace a newer card; Undoing an end-of-review video decision starts that restored video again.
+
+Synthetic browser checks verified autoplay without clicking Play, Space pause/resume, pause preservation through a connection refresh, compact/enlarged player exclusivity, resuming after closing enlarged view, stopping on queue navigation/decision, and autoplay after Undo. Live Chrome confirmed that all currently loaded unreviewed items were photos, so no personal decisions were changed for this follow-up test.

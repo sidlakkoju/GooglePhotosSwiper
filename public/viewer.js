@@ -23,7 +23,7 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
     help.textContent=canReview?'← Remove · → Keep · Z Undo · F or Esc Close'+(item.type==='video'?' · Space Play/Pause':' · Drag zoomed photo to pan'):(item.type==='video'?'Space to play or pause · F or Esc to close':'Scroll or pinch to zoom · Drag to pan · F or Esc to close');paint();
     try{
       const url=await (item.type==='video'?loadVideo(item):loadPreview(item));if(token!==request||!dialog.open)return;if(!url)throw Error('Preview unavailable.');
-      if(item.type==='video'){video.src=url;video.currentTime=playback.time||0;video.hidden=false;status.hidden=true;if(playback.playing)video.play().catch(()=>{});}
+      if(item.type==='video'){video.muted=playback.muted??video.muted;video.src=url;video.currentTime=playback.time||0;video.hidden=false;status.hidden=true;if(playback.playing)video.play().catch(()=>{});}
       else{image.src=url;await image.decode();if(token!==request||!dialog.open)return;ready=true;image.hidden=false;status.hidden=true;fit();}
     }catch(error){if(token===request&&dialog.open)status.textContent=error.message;}
   }
