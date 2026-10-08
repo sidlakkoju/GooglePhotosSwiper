@@ -19,8 +19,8 @@ export function removalQueue(items,decisions){return items.filter(i=>decisions[i
 export function storageTotals(items,decisions,persisted){
  const amount=i=>i.takesUpSpace===false?0:i.spaceTaken??i.size;
  const total=list=>list.reduce((out,i)=>{const value=amount(i);if(Number.isFinite(value)&&value>=0)out.bytes+=value;else out.unknown++;return out;},{bytes:0,unknown:0});
- // Locally changed active decisions are immediate; confirmed Trash lives in SQLite.
- const active=total(items.filter(i=>decisions[i.id]==='remove'&&!i.cropPending));
+ // The selected counter uses exactly the same membership as the visible queue.
+ const selected=total(removalQueue(items,decisions));
  const deleted=persisted?.deleted||{bytes:0,unknown:0};
- return {selected:{bytes:active.bytes+deleted.bytes,unknown:active.unknown+deleted.unknown},deleted};
+ return {selected,deleted};
 }

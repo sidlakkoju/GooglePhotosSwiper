@@ -8,12 +8,12 @@ import {pending,removalQueue,albumCandidates,storageTotals} from '../public/mode
 const media=(mediaKey,size=1000,extra={})=>({mediaKey,name:mediaKey+'.jpg',type:'photo',thumbUrl:'https://lh3.googleusercontent.com/test',size,...extra});
 const decisions=s=>Object.fromEntries(s.listItems().map(i=>[i.id,i.decision]));
 function setup(){const s=createStore();s.setSetting('account','test');return s;}
-test('queue clears only on full verification; decisions, counters and failures survive',()=>{
+test('queue clears only on full verification; decisions persist and queue storage clears with it',()=>{
  const s=setup();try{s.importItems([media('a'),media('b',2000),media('next')],'test');s.decide('test:a','remove',0);s.decide('test:b','remove',0);
  const j=s.createJob(['test:a','test:b']);s.progressJob(j.id,{status:'running',albumKey:'album',confirmed:['a']});s.progressJob(j.id,{status:'failed',error:'interrupted'});
  assert.equal(removalQueue(s.listItems(),decisions(s)).length,2);assert.equal(s.storageSummary().selected.bytes,3000);
  s.retryJob(j.id);s.progressJob(j.id,{status:'completed',confirmed:['a','b']});assert.equal(removalQueue(s.listItems(),decisions(s)).length,0);
- assert.deepEqual(pending(s.listItems(),decisions(s)).map(i=>i.mediaKey),['next']);assert.equal(s.storageSummary().selected.bytes,3000);
+ assert.deepEqual(pending(s.listItems(),decisions(s)).map(i=>i.mediaKey),['next']);assert.equal(s.storageSummary().selected.bytes,0);
  assert.equal(s.storageSummary().deleted.bytes,0);assert.equal(s.listItems()[0].decision,'remove');
  const a=s.listItems()[0];s.reconcile([{id:a.id,revision:a.revision,state:'active',inAlbum:false}]);assert.equal(removalQueue(s.listItems(),decisions(s)).length,0);
  assert.deepEqual(albumCandidates(s.listItems(),decisions(s)),[]);
@@ -22,11 +22,11 @@ test('queue clears only on full verification; decisions, counters and failures s
 test('queue clearance survives restart, reimport and a missing album',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'core-review-'));let s;try{const path=join(dir,'db.sqlite');s=createStore(path);s.setSetting('account','test');s.importItems([media('a')],'test');s.decide('test:a','remove',0);const j=s.createJob(['test:a']);s.progressJob(j.id,{status:'completed',albumKey:'album',confirmed:['a']});s.close();s=createStore(path);s.importItems([media('a')],'test');assert.equal(removalQueue(s.listItems(),decisions(s)).length,0);assert.equal(s.listItems()[0].decision,'remove');const a=s.listItems()[0];s.reconcile([{id:a.id,revision:a.revision,state:'unknown',inAlbum:null}],{albumUnavailable:true,albumKey:'album'});assert.equal(removalQueue(s.listItems(),decisions(s)).length,0);}finally{s?.close();await rm(dir,{recursive:true,force:true});}
 });
-test('storage totals follow swipe/undo immediately, respect quota metadata and retain confirmed Trash',()=>{
+test('queue storage follows swipe/undo, excludes sent and trashed items, and retains a separate Trash estimate',()=>{
  const s=setup();try{s.importItems([media('a',1000,{spaceTaken:600}),media('free',2000,{takesUpSpace:false}),media('unknown',null),media('later',3000)],'test');
  for(const id of ['a','free','unknown'])s.decide('test:'+id,'remove',0);const a=s.listItems()[0];s.reconcile([{id:a.id,revision:a.revision,state:'in_trash',inAlbum:false}]);
- assert.deepEqual(s.storageSummary().selected,{bytes:600,unknown:1});assert.deepEqual(s.storageSummary().deleted,{bytes:600,unknown:0});
- const items=s.listItems(),d=decisions(s);d['test:later']='remove';assert.deepEqual(storageTotals(items,d,s.storageSummary()).selected,{bytes:3600,unknown:1});delete d['test:later'];assert.deepEqual(storageTotals(items,d,s.storageSummary()).selected,{bytes:600,unknown:1});
+ assert.deepEqual(s.storageSummary().selected,{bytes:0,unknown:1});assert.deepEqual(s.storageSummary().deleted,{bytes:600,unknown:0});
+ const items=s.listItems(),d=decisions(s);d['test:later']='remove';assert.deepEqual(storageTotals(items,d,s.storageSummary()).selected,{bytes:3000,unknown:1});delete d['test:later'];assert.deepEqual(storageTotals(items,d,s.storageSummary()).selected,{bytes:0,unknown:1});
  }finally{s.close();}
 });
 test('saved pending crop originals stay quarantined; crop data and generated exclusions remain intact',()=>{
@@ -37,4 +37,11 @@ test('saved pending crop originals stay quarantined; crop data and generated exc
 
 test('legacy completed batches migrate out of the queue, including previously trashed originals',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'legacy-queue-'));let s;try{const path=join(dir,'db.sqlite');s=createStore(path);s.setSetting('account','test');s.importItems([media('sent'),media('partial')],'test');for(const i of s.listItems())s.decide(i.id,'remove',0);const j=s.createJob(['test:sent']);s.progressJob(j.id,{status:'completed',albumKey:'album',confirmed:['sent']});const item=s.listItems().find(i=>i.mediaKey==='sent');s.reconcile([{id:item.id,revision:item.revision,state:'in_trash',inAlbum:false}]);s.db.prepare('UPDATE items SET queue_sent=0').run();s.db.prepare("DELETE FROM settings WHERE key='coreQueueMigration'").run();s.close();s=createStore(path);s.importItems([media('sent')],'test');assert.deepEqual(removalQueue(s.listItems(),decisions(s)).map(i=>i.mediaKey),['partial']);assert.equal(s.listItems().find(i=>i.mediaKey==='sent').decision,'remove');}finally{s?.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('empty removal queue has zero savings even when sent and deleted history is large',()=>{
+ const items=[{id:'sent',queueSent:true,size:600000000},{id:'protected',cropPending:true,size:40000000},{id:'kept',size:100000000}];
+ const decisions={sent:'remove',protected:'remove',kept:'keep'};
+ const totals=storageTotals(items,decisions,{deleted:{bytes:388000000,unknown:0}});
+ assert.deepEqual(removalQueue(items,decisions),[]);assert.deepEqual(totals.selected,{bytes:0,unknown:0});assert.equal(totals.deleted.bytes,388000000);
 });
