@@ -15,10 +15,14 @@ export async function loadReviewBatch({initial,fetchPage,readWorkspace,progress=
  return {workspace,pages,scanned,added,exhausted:!!workspace.exhausted,stalled,limited:!restart&&!workspace.exhausted&&!stalled&&added<target&&pages===maxPages,warnings:[...warnings]};
 }
 export function importMessage(result,restart=false){
- let message=restart?`${result.scanned} recent items refreshed · ${result.added} new items to review`:`${result.added} new item${result.added===1?'':'s'} to review · ${result.scanned} library items checked`;
+ let message;
+ if(result.stalled&&result.added===0)message='No new photos or videos were loaded. Reload your Google Photos tab.';
+ else{
+ message=restart?`${result.scanned} recent items refreshed · ${result.added} new items to review`:`${result.added} new item${result.added===1?'':'s'} to review · ${result.scanned} library items checked`;
  if(result.exhausted)message+=' · End of library';
- if(result.stalled)message+=' · Google repeated a page; reload Google Photos before retrying';
+ if(result.stalled)message+='. Reload your Google Photos tab.';
  if(result.limited)message+=' · Scan limit reached; Load more continues from here';
- if(result.warnings.length)message+='. '+result.warnings.join(' ');
+ }
+ if(result.warnings.length)message+=(message.endsWith('.')?' ':'. ')+result.warnings.join(' ');
  return message;
 }
