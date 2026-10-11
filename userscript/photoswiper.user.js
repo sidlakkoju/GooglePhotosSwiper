@@ -402,8 +402,9 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
     if(!value.locked&&Math.hypot(value.dx,value.dy)<10&&value.video){if(value.video.paused)value.video.play().catch(()=>{});else value.video.pause();}
    }
  };
- window.addEventListener?.('pointerup',finishGesture);
- window.addEventListener?.('pointercancel',event=>{if(gesture&&event.pointerId===gesture.id)reset();});
+ window.addEventListener?.('pointermove',update,true);
+ window.addEventListener?.('pointerup',finishGesture,true);
+ window.addEventListener?.('pointercancel',event=>{if(gesture&&event.pointerId===gesture.id)reset();},true);
  for(const target of targets){
   target.addEventListener('pointerdown',event=>{
    if(gesture||dismissing||!canSwipe()||event.isPrimary===false||event.button!==0)return;

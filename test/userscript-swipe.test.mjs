@@ -2,14 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSwipeFeedback} from '../lib/userscript-swipe.mjs';
 function setup(reduced=false,width=300){
- const handlers={},card={style:{},getBoundingClientRect:()=>({width})},under={style:{}},keep={style:{}},remove={style:{}},decisions=[],frames=new Map();
+ const handlers={},windowHandlers={},card={style:{},getBoundingClientRect:()=>({width})},under={style:{}},keep={style:{}},remove={style:{}},decisions=[],frames=new Map();
  let nextFrame=0,allowed=true;
  const target={addEventListener:(name,handler)=>{handlers[name]=handler;},setPointerCapture(){},hasPointerCapture:()=>true,releasePointerCapture(){}};
- const window={matchMedia:()=>({matches:reduced}),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id)};
+ const window={addEventListener:(name,handler,capture)=>{assert.equal(capture,true);windowHandlers[name]=handler;},matchMedia:()=>({matches:reduced}),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id)};
  const feedback=createSwipeFeedback({window,targets:[target],card,under,keep,remove,canSwipe:()=>allowed,onDecide:value=>decisions.push(value)});
  const send=(type,x,y=0,id=1,timeStamp=undefined,eventTarget={tagName:'IMG'})=>handlers[type]?.({pointerId:id,clientX:x,clientY:y,button:0,isPrimary:true,timeStamp,target:eventTarget});
  const paint=()=>{for(const [id,fn] of frames){frames.delete(id);fn();}};
- return {send,paint,card,under,keep,remove,decisions,frames,feedback,block:()=>{allowed=false;}};
+ const sendWindow=(type,x,y=0,id=1,timeStamp=undefined)=>windowHandlers[type]?.({pointerId:id,clientX:x,clientY:y,timeStamp});
+ return {send,sendWindow,paint,card,under,keep,remove,decisions,frames,feedback,block:()=>{allowed=false;}};
 }
 for(const direction of [-1,1])test(`drag feedback follows direction ${direction} and saturates at the commit threshold`,()=>{
  const s=setup();s.send('pointerdown',0);s.send('pointermove',direction*49.5,5);
@@ -108,4 +109,23 @@ test('outgoing card animation survives resetting the live card and removes its c
  s.send('pointerdown',0);s.send('pointerup',-150);assert.deepEqual(s.decisions,['keep','remove']);
  finish();await s.feedback.finished;
  assert.equal(removed,true);
+});
+
+test('capture loss finishes outside the swipe target before overlay propagation stops',()=>{
+ const s=setup();
+ s.send('pointerdown',0,0,1,0,{tagName:'VIDEO'});
+ s.send('lostpointercapture',0);
+ s.sendWindow('pointermove',120,0,1,100);
+ s.paint();assert.equal(s.keep.style.opacity,'1');
+ s.sendWindow('pointerup',120,0,1,110);
+ s.send('pointerup',120,0,1,110);
+ assert.deepEqual(s.decisions,['keep']);
+});
+test('window cancellation after capture loss resets the gesture for another swipe',()=>{
+ const s=setup();
+ s.send('pointerdown',0);s.send('lostpointercapture',0);
+ s.sendWindow('pointermove',120);s.sendWindow('pointercancel',120);s.paint();
+ assert.deepEqual(s.decisions,[]);assert.equal(s.card.style.transform,'');
+ s.send('pointerdown',0);s.sendWindow('pointerup',-120);
+ assert.deepEqual(s.decisions,['remove']);
 });
