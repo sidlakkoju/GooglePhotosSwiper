@@ -1,6 +1,6 @@
 # Photos Swipe — experimental video cropping
 
-This branch, `codex/video-cropping`, preserves the video segment cropping implementation before it was removed from the core desktop app. **Use [main](https://github.com/sidlakkoju/GooglePhotos/tree/main) for the current swipe-review experience.** Later playback, pagination, queue and storage-counter fixes live on main and have not been merged here.
+This branch, `codex/video-cropping`, preserves the video segment cropping implementation before it was removed from the core desktop app. **Use [main](https://github.com/sidlakkoju/GooglePhotosSwiper/tree/main) for the current swipe-review experience.** Later playback, pagination, queue and storage-counter fixes live on main and have not been merged here.
 
 ## Feature and limits
 
@@ -37,3 +37,7 @@ Google cookies and page tokens remain in Chrome. Private source/export files, ac
 These documents record the experiment's development and verification history. Read the decisions and latest status before resuming work; earlier planning defaults are superseded by the confirmed decisions. Generated replacement IDs, job state and recovery files remain in the original private local workspace, not GitHub.
 
 Photos API payloads are adapted from Google Photos Toolkit; [third-party attribution](extension/THIRD_PARTY_NOTICES.md) and its [MIT notice](extension/LICENSE-GPTK) are retained.
+
+## Publication validation (October 10, 2026)
+
+The isolated branch test run completed with 92 passing tests and 2 skipped tests that require an optional stored-source media fixture. The synthetic native export test passed. This validates local behavior and mocked provider responses; it does not resolve the live Google download blocker or validate the optional OAuth provider with a real grant.
