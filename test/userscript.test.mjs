@@ -1015,6 +1015,32 @@ test('lease recovery saves pending decisions and resumes input through visibilit
   await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
  }
 });
+test('a delayed save failure preserves the active lease failure status',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]),current=await mounted.read();
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;let finish,started,failLease=false,holdSave=true;
+ const saving=new Promise(resolve=>{started=resolve;});
+ database.transaction=function(name,...args){
+  if(name==='leases'&&failLease)throw Error('Synthetic lease failure');
+  if(name==='accounts'&&holdSave){
+   holdSave=false;
+   const tx={objectStore:()=>({get(){const request={result:structuredClone(current)};finish=()=>request.onsuccess();started();return request;},put(){throw Error('Synthetic delayed save failure');}}),abort(){queueMicrotask(()=>tx.onabort());}};
+   return tx;
+  }
+  return transaction.call(this,name,...args);
+ };
+ mounted.nodes.get('keep').onclick();await saving;
+ failLease=true;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(mounted.nodes.get('status').textContent,'Synthetic lease failure');
+ finish();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(mounted.nodes.get('status').textContent,'Synthetic lease failure');
+ assert.equal((await mounted.read()).items[0].decision,null);
+ mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
+ failLease=false;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ await mounted.click('keep');assert.equal((await mounted.read()).items[1].decision,'keep');
+ await mounted.nodes.get('close').onclick();
+});
 test('a failed video RPC does not reject the next visible video waiting for it',async()=>{
  let fail,started;const pending=new Promise(resolve=>{started=resolve;}),requests=[];
  const mounted=await mountedReview([item('first',{type:'video'}),item('second',{type:'video'})],{fetch:async(url,options)=>{
