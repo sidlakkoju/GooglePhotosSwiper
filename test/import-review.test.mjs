@@ -4,7 +4,7 @@ import {loadReviewBatch,importMessage} from '../public/import-review.js';
 import {createStore} from '../lib/store.mjs';
 const media=(mediaKey,extra={})=>({mediaKey,name:mediaKey+'.jpg',type:'photo',thumbUrl:'https://lh3.googleusercontent.com/test',...extra});
 const reviewed=Array.from({length:50},(_,n)=>({id:'old'+n,decision:n%2?'keep':'remove',queueSent:true}));
-async function run(initial,pages,options={}){let current=initial,calls=0;const flags=[];const result=await loadReviewBatch({initial,fetchPage:async restart=>{flags.push(restart);current=pages[calls++];return {count:current.count??50};},readWorkspace:async()=>current,...options});return {result,calls,flags};}
+async function run(initial,pages,options={}){let current=initial,calls=0;const flags=[];const result=await loadReviewBatch({initial,fetchPage:async restart=>{flags.push(restart);current=pages[calls++];return {count:current.count??50,warning:current.warning};},readWorkspace:async()=>current,...options});return {result,calls,flags};}
 test('load skips already-reviewed overlapping pages and reports new review items rather than raw page size',async()=>{
  const fresh=Array.from({length:50},(_,n)=>({id:'new'+n,decision:null}));
  const {result,calls}=await run({items:reviewed,cursor:'old-cursor'},[{items:reviewed,cursor:'page2'},{items:reviewed,cursor:'page3'},{items:[...reviewed,...fresh],cursor:'page4'}]);
@@ -21,6 +21,17 @@ test('an empty repeated page in a fresh workspace gives one user-facing action',
  const {result,calls}=await run({items:[],cursor:null},[{items:[],cursor:null,count:0}]);
  assert.equal(calls,1);assert.equal(result.stalled,true);assert.equal(result.scanned,0);assert.equal(result.added,0);
  assert.equal(importMessage(result),'No new photos or videos were loaded. Reload your Google Photos tab.');
+});
+test('stalled batches preserve page warnings with a single sentence separator',async()=>{
+ const warning='Extra file sizes could not be read. Photos can still be reviewed.';
+ for(const added of [0,10]){
+  const fresh=Array.from({length:added},(_,n)=>({id:'new'+n,decision:null}));
+  const {result}=await run({items:reviewed,cursor:'start'},[{items:[...reviewed,...fresh],cursor:'second',count:50,warning},{items:[...reviewed,...fresh],cursor:'second',count:0}]);
+  assert.equal(result.stalled,true);assert.equal(result.added,added);assert.deepEqual(result.warnings,[warning]);
+  const message=added===0?'No new photos or videos were loaded. Reload your Google Photos tab.':'10 new items to review · 50 library items checked. Reload your Google Photos tab.';
+  assert.equal(importMessage(result),message+' '+warning);
+  assert.equal(importMessage({...result,warnings:[]}),message);
+ }
 });
 test('bounded scans preserve continuation and latest refresh intentionally reads only the head',async()=>{
  let f=await run({items:reviewed,cursor:'start'},[{items:reviewed,cursor:'second'},{items:reviewed,cursor:'third'}],{maxPages:2});assert.equal(f.result.limited,true);assert.match(importMessage(f.result),/Scan limit reached/);assert.equal(f.result.workspace.cursor,'third');
