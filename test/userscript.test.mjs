@@ -883,7 +883,7 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
  assert.deepEqual(await mounted.read(),before);assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('card').classList.contains('expanded'),false);
  mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
  await new Promise(resolve=>setImmediate(resolve));assert.equal(panel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
- assert.equal(calls.at(-1).options.method,'DELETE');assert.equal(calls.at(-1).options.body,JSON.stringify({id:'pair-id'}));
+ assert.equal(calls.at(-2).options.method,'DELETE');assert.equal(calls.at(-2).options.body,JSON.stringify({id:'pair-id'}));
 });
 test('review preloads match card sizing, respect compact viewports and refresh on resize',async()=>{
  for(const compact of [false,true]){
