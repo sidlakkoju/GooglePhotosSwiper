@@ -887,6 +887,10 @@ test('an unresolved fly animation never blocks the next decision',async()=>{
 });
 test('mounted under-card shares the media origin and image gestures reach the media container',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
+ const card=mounted.nodes.get('card'),under=mounted.nodes.get('next-card'),hint=mounted.nodes.get('swipe');
+ const top=card.childNodes.find(node=>node.class==='top-card');
+ assert.deepEqual(card.childNodes.slice(0,3),[under,top,hint]);
+ assert.equal(top.childNodes[0],mounted.nodes.get('media'));
  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE');
  const css=styles.map(node=>node.textContent||node.childNodes.map(child=>child.textContent||'').join('')).join('');
  assert.match(css,/\.under-card\{position:absolute;inset:0 0 auto;/);

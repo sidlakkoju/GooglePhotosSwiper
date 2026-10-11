@@ -342,7 +342,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
  };
  const reset=()=>{
   release();animation?.cancel();animation=null;dismissing=false;finished=Promise.resolve();
-  card.style.transform='';card.style.willChange='';
+  card.style.transform='';card.style.willChange='';card.style.visibility='';
   keep.style.opacity='0';remove.style.opacity='0';under.style.transform='scale(.94)';
  };
  const animate=transform=>{
@@ -365,6 +365,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
    for(const element of outgoing.querySelectorAll?.('[id]')||[])element.removeAttribute('id');
    outgoing.style.position='absolute';outgoing.style.inset='0';outgoing.style.pointerEvents='none';outgoing.style.zIndex='3';
    card.parentNode.append(outgoing);
+   card.style.visibility='hidden';
    const flight=outgoing.animate?.([{transform:card.style.transform||'none'},{transform:destination}],{duration:180,easing:'ease-out'});
    outgoing.style.transform=destination;
    finished=flight?flight.finished.catch(()=>{}).then(()=>outgoing.remove()):Promise.resolve(outgoing.remove());

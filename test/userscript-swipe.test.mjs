@@ -36,9 +36,11 @@ test('reset cancels queued paint and reduced motion retains stamps without tilt'
 });
 
 test('a locked diagonal drag never advertises or commits a decision',()=>{
- const s=setup();s.send('pointerdown',0);s.send('pointermove',120,90);s.paint();
- assert.equal(s.keep.style.opacity,'0');assert.equal(s.under.style.transform,'scale(0.94)');
- s.send('pointerup',120,90);assert.deepEqual(s.decisions,[]);
+ for(const [dx,dy] of [[70,50],[120,90]]){
+  const s=setup();s.send('pointerdown',0);s.send('pointermove',30);s.send('pointermove',dx,dy);s.paint();
+  assert.equal(s.keep.style.opacity,'0');assert.equal(s.under.style.transform,'scale(0.94)');
+  s.send('pointerup',dx,dy);assert.deepEqual(s.decisions,[]);
+ }
 });
 for(const width of [200,600])test(`commit distance follows a ${width}px card`,()=>{
  const s=setup(false,width);s.send('pointerdown',0);s.send('pointermove',width*.3);s.paint();
@@ -97,10 +99,11 @@ test('velocity averaging rejects millisecond jitter and retains a fling across r
 test('outgoing card animation survives resetting the live card and removes its clone',async()=>{
  const s=setup();let finish,removed=false,outgoing;
  s.card.parentNode={append(node){outgoing=node;}};
- s.card.cloneNode=()=>({style:{},setAttribute(){},animate(){return {finished:new Promise(resolve=>{finish=resolve;})};},remove(){removed=true;}});
+ s.card.cloneNode=()=>({style:{...s.card.style},setAttribute(){},animate(){return {finished:new Promise(resolve=>{finish=resolve;})};},remove(){removed=true;}});
  s.send('pointerdown',0);s.send('pointerup',150);
  assert.match(outgoing.style.transform,/450px/);assert.equal(outgoing.inert,true);
- s.feedback.reset();assert.equal(s.card.style.transform,'');assert.equal(removed,false);
+ assert.equal(s.card.style.visibility,'hidden');assert.equal(outgoing.style.visibility,'');
+ s.feedback.reset();assert.equal(s.card.style.transform,'');assert.equal(s.card.style.visibility,'');assert.equal(removed,false);
  finish();await new Promise(resolve=>setTimeout(resolve,0));
  s.send('pointerdown',0);s.send('pointerup',-150);assert.deepEqual(s.decisions,['keep','remove']);
  finish();await s.feedback.finished;
