@@ -38,6 +38,15 @@ test('rollback and timeout fall back to verified cache',async()=>{
  const {env,scripts}=environment({...signed(),code:'bad'},'timeout');
  assert.equal(await startLoader(env,key),false);assert.equal(scripts.length,0);
 });
+
+test('verified releases receive their signed version in the private execution context',async()=>{
+ for(const version of ['2.0.0','2.1.0-rc.1']){
+  const {env,scripts}=environment(null,signed(version,'window.releaseVersion=photosSwipeReleaseVersion;window.privateStore=GM;'));
+  assert.equal(await startLoader(env,key),true);
+  assert.equal(env.window.releaseVersion,version);assert.equal(env.window.privateStore,env.GM);assert.equal(scripts.length,0);
+ }
+});
+
 test('valid newer and equal releases are cached and injected once',async()=>{
  for(const version of ['1.2.3','1.2.4']){
   const {env,scripts,writes}=environment(signed(),signed(version));
@@ -62,7 +71,7 @@ test('full app skips when the shared app marker is set',async()=>{
 test('loader metadata declares separate install URL and required grants',async()=>{
  const code=await readFile(new URL('../userscript/photoswiper-loader.user.js',import.meta.url),'utf8');
  for(const line of ['@match https://photos.google.com/*','@inject-into content','@grant GM.xmlHttpRequest','@grant GM.getValue','@grant GM.setValue','@grant GM.deleteValue','@grant unsafeWindow','@grant GM_deleteValue','@grant GM_xmlhttpRequest','@grant GM_getValue','@grant GM_setValue','@connect photoswiper-sync.sidlakkoju.workers.dev'])assert.ok(code.includes(line));
- for(const field of ['downloadURL','updateURL'])assert.ok(code.includes('@'+field+' https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js'));
+ for(const field of ['downloadURL','updateURL'])assert.deepEqual([...code.slice(0,code.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),['https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js']);
 });
 
 test('loader watchdog falls back when the GM request never calls back',async()=>{

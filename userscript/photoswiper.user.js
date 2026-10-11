@@ -721,6 +721,11 @@ function mountPhotosSwipe(environment) {
  const h1Element6=document.createElement('h1');
  headerElement5.append(h1Element6);
  h1Element6.append(document.createTextNode("Photos Swipe"));
+ const versionElement=document.createElement('span');
+ versionElement.setAttribute('id','running-version');
+ versionElement.style.cssText='font-size:12px;font-weight:normal;color:#52695b';
+ versionElement.textContent=`v${environment.version}`;
+ h1Element6.append(document.createTextNode(' '),versionElement);
  const closeElement=document.createElement('button');
  closeElement.setAttribute("id","close");
  headerElement5.append(closeElement);
@@ -1199,7 +1204,7 @@ function mountPhotosSwipe(environment) {
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.19":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
