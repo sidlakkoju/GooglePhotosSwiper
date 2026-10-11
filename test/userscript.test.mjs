@@ -994,6 +994,7 @@ test('accepted bridge operations outlive the injection deadline while missing in
  let now=0,nextId=0;const scheduled=new Map();
  const timers={setTimeout(callback,delay){const id=++nextId;scheduled.set(id,{callback,due:now+delay});return id;},clearTimeout(id){scheduled.delete(id);}};
  const flush=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmediate(resolve));};
+ const waitForRequest=async count=>{const deadline=Date.now()+5000;while(requests.length<count){assert.ok(Date.now()<deadline,'Google RPC did not start');await new Promise(resolve=>setTimeout(resolve,1));}};
  const advance=async duration=>{now+=duration;for(const [id,entry] of [...scheduled])if(entry.due<=now){scheduled.delete(id);entry.callback();}await flush();};
  const mounted=bundleEnvironment(),requests=[];
  const bridge=isolatedPageBridge(mounted,timers,async(url,options)=>{
@@ -1004,7 +1005,7 @@ test('accepted bridge operations outlive the injection deadline while missing in
  });
  const call=createPagePhotosBridge({window:bridge.contentWindow,document:mounted.environment.document,crypto:webcrypto,...timers});
  let settled=false;const result=call('library').then(value=>{settled=true;return value;});await flush();
- await advance(20000);assert.deepEqual(requests,['lcxiM','EWgK9e']);
+ await waitForRequest(1);await advance(20000);await waitForRequest(2);assert.deepEqual(requests,['lcxiM','EWgK9e']);
  await advance(15000);assert.equal(settled,false);
  await advance(5000);assert.equal((await result).ok,true);assert.equal(scheduled.size,0);
  let receiver,request;const missingWindow={addEventListener(type,listener){receiver=listener;},postMessage(data){request=data;}};
