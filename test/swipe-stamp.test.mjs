@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
+import {loadUndoHistory,validUndoHistory} from '../public/undo-history.js';
 import {removalQueue} from '../public/model.js';
 
 const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 function review({delayed=false}={}){
- const elements=new Map(),items=[{id:'first'},{id:'next'},{id:'third'}],decisions={},history=[];
+ const elements=new Map(),items=[{id:'first',revision:0},{id:'next',revision:0},{id:'third',revision:0}],decisions={},history=[];
  const $=id=>{
   if(!elements.has(id)){
    const classes=new Set();
@@ -16,11 +17,11 @@ function review({delayed=false}={}){
  };
  const timers=[],toastTimers=new Map(),writes=[];
  let timerId=0;
- const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActions:Promise.resolve(),authenticated:true,mode:'fake',workspace:{},active:()=>items.find(item=>!decisions[item.id]),pending:()=>items.filter(item=>!decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);if(decision)decisions[item.id]=decision;else delete decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
+ const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
  context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
- for(const name of ['render','enqueueReviewAction','choose','undo','applyDecision','applyUndo']){
+ for(const name of ['render','enqueueReviewAction','choose','undo','applyDecision','applyUndo','refreshWorkspace']){
   const line=source.split('\n').find(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));
   vm.runInContext(line,context);
  }
@@ -109,7 +110,7 @@ test('rapid keyboard swipe and undo inputs survive pending writes and card anima
 test('queued review actions do not carry into a changed workspace',async()=>{
  const {context,decisions,writes}=review();
  const result=context.choose('remove');
- context.generation++;
+ await context.refreshWorkspace(false,{items:context.items,jobs:[]});
  await result;
  assert.deepEqual(writes,[]);
  assert.deepEqual(decisions,{});
@@ -175,5 +176,67 @@ for(const guard of ['busy','animating','hidden','no active item']){
   assert.equal($('toast').textContent,'Last swipe undone');
   assert.equal($('toast').classList.contains('show'),true);
   assert.equal(toastTimers.size,1);
+ });
+}
+
+function keyboard(context){
+ let keydown;
+ context.document={querySelector:()=>null,addEventListener:(type,handler)=>{keydown=handler;}};
+ const line=source.split('\n').find(line=>line.includes("document.addEventListener('keydown'"));
+ vm.runInContext(line.slice(line.indexOf("document.addEventListener('keydown'")),context);
+ return (key,repeat=false)=>keydown({key,repeat,target:{tagName:'BODY',closest:()=>null},preventDefault(){}});
+}
+
+for(const key of ['ArrowLeft','ArrowRight','z']){
+ test(`held ${key} ignores repeats during and after an action`,async()=>{
+  const {context,writes}=review();
+  if(key==='z'){
+   await context.choose('remove');
+   await context.choose('keep');
+  }
+  const initialWrites=writes.length,press=keyboard(context),save=context.updateDecision;
+  let release;
+  context.updateDecision=async(item,decision)=>{await new Promise(resolve=>{release=resolve;});return await save(item,decision);};
+  press(key);
+  await new Promise(resolve=>setImmediate(resolve));
+  for(let i=0;i<5;i++)press(key,true);
+  release();
+  await context.reviewActions;
+  press(key,true);
+  await context.reviewActions;
+  assert.equal(writes.length,initialWrites+1);
+ });
+}
+
+for(const action of ['choose','undo']){
+ test(`failed ${action} cancels queued shortcuts and allows fresh input`,async()=>{
+  const {context,writes}=review();
+  await context.choose('keep');
+  const press=keyboard(context),save=context.updateDecision;
+  let reject,reads=0;
+  context.mode='google';
+  context.api=async path=>{
+   assert.equal(path,'/workspace');
+   reads++;
+   return {items:[{id:'first',decision:'keep',revision:1},{id:'next',revision:0},{id:'third',revision:0}],jobs:[]};
+  };
+  context.updateDecision=()=>new Promise((resolve,fail)=>{reject=fail;});
+  press(action==='choose'?'ArrowLeft':'z');
+  await new Promise(resolve=>setImmediate(resolve));
+  press('z');
+  press('ArrowLeft');
+  reject(Error('Save failed'));
+  await context.reviewActions;
+  assert.equal(reads,1);
+  assert.deepEqual(writes,[['first','keep']]);
+  assert.equal(context.decisions.first,'keep');
+  assert.equal(context.decisions.next,undefined);
+  assert.equal(context.history.length,1);
+  assert.equal(context.animating,false);
+  context.updateDecision=save;
+  press('ArrowRight');
+  await context.reviewActions;
+  assert.deepEqual(writes,[['first','keep'],['next','keep']]);
+  assert.equal(context.decisions.next,'keep');
  });
 }
