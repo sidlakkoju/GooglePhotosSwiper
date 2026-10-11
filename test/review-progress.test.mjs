@@ -20,7 +20,8 @@ test('review progress starts empty and follows decisions and undo',async()=>{
  for(const name of ['resetCardGesture','renderStorage','renderCard','renderQueue','renderOperations','renderReconciliation','renderControls','prefetchReview'])context[name]=()=>{};
  const renderSource=app.match(/^function render\(\)\{.*\}$/m)?.[0];
  assert.ok(renderSource);
- runInNewContext(renderSource+';render();',context);
+ const guideSource=app.slice(app.indexOf('function renderGuide('),app.indexOf("$('toast').onclick="));
+ runInNewContext(guideSource+renderSource+';render();',context);
  const check=(reviewed,total)=>{
   context.render();
   assert.equal($('progress-text').textContent,`${reviewed} of ${total} reviewed`);

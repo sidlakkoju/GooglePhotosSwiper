@@ -13,7 +13,7 @@ const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 
 test('mobile navigation follows review counts and the selected view',()=>{
  const elements=new Map([...html.matchAll(/id="([^"]+)"/g)].map(([,id])=>[id,{hidden:false,textContent:'',style:{},dataset:{},attributes:{},classes:new Set(),querySelector:()=>null,setAttribute(name,value){this.attributes[name]=value;},removeAttribute(name){delete this.attributes[name];},classList:{toggle(name,on){elements.get(id).classes[on?'add':'delete'](name);}}}]));
- const context={$:id=>elements.get(id),items:[{id:'a'},{id:'b'},{id:'c'}],decisions:{a:'keep',b:'remove'},workspace:{},summarize,removalQueue,active:()=>null,pending:()=>[],arrangeCollection(){},renderStorage(){},resetCardGesture(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){}};
+ const context={$:id=>elements.get(id),items:[{id:'a'},{id:'b'},{id:'c'}],decisions:{a:'keep',b:'remove'},workspace:{},summarize,removalQueue,active:()=>null,pending:()=>[],arrangeCollection(){},renderGuide(){},renderStorage(){},resetCardGesture(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){}};
  runInNewContext(app.match(/^function render\(\).*$/m)[0]+';render();',context);
  assert.equal(elements.get('mobile-remaining').textContent,1);
  assert.equal(elements.get('mobile-queue-count').textContent,1);

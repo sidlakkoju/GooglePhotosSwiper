@@ -32,7 +32,7 @@ test('send confirmation names the exact album, location and account, and Cancel 
 });
 test('guide is visible on first run, dismisses persistently and can be reopened',()=>{
  const elements={'review-guide':element(),'dismiss-guide':element()},saved=new Map();const context={$:id=>elements[id],localStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)}};
- const setup=app.slice(app.indexOf("try{$('review-guide').open="),app.indexOf("$('toast').onclick="));vm.runInNewContext(setup,context);assert.equal(elements['review-guide'].open,true);elements['dismiss-guide'].onclick();assert.equal(elements['review-guide'].open,false);vm.runInNewContext(setup,context);assert.equal(elements['review-guide'].open,false);
+ const setup=app.slice(app.indexOf("try{$('review-guide').open="),app.indexOf("$('toast').onclick="));vm.runInNewContext(setup,context);assert.equal(elements['review-guide'].open,true);elements['review-guide'].open=false;elements['review-guide'].ontoggle();assert.equal(saved.get('photos-swipe-guide-dismissed'),'true');vm.runInNewContext(setup,context);assert.equal(elements['review-guide'].open,false);elements['review-guide'].open=true;elements['review-guide'].ontoggle();assert.equal(elements['review-guide'].open,true);elements['dismiss-guide'].onclick();assert.equal(elements['review-guide'].open,false);vm.runInNewContext(setup,context);assert.equal(elements['review-guide'].open,false);
  context.localStorage={getItem(){throw Error('Storage unavailable');},setItem(){throw Error('Storage unavailable');}};vm.runInNewContext(setup,context);elements['review-guide'].open=true;elements['dismiss-guide'].onclick();assert.equal(elements['review-guide'].open,false);
  assert.match(html,/<details id="review-guide"[^>]*open>/);assert.match(html,/Swipes and album updates never delete photos/);assert.match(html,/<summary>Quick guide<\/summary>/);
  const queueStart=html.indexOf('<section id="queue-view"');assert.ok(html.indexOf('id="album-link"')<queueStart);
@@ -40,4 +40,15 @@ test('guide is visible on first run, dismisses persistently and can be reopened'
 });
 test('connected status explains the Chrome connection and required Photos tab',()=>{
  const status=describeConnection({installed:true,paired:true,label:'Synthetic account'});assert.match(status.summary,/Google Photos connected via Chrome extension/);assert.match(status.summary,/Keep the Photos tab open/);
+});
+
+test('guide first step follows loading, review and library exhaustion',()=>{
+ const step=element(),context={$:()=>step,items:[],decisions:{},workspace:{},pending:(items,decisions)=>items.filter(item=>!decisions[item.id])};
+ vm.createContext(context);vm.runInContext(app.slice(app.indexOf('function renderGuide('),app.indexOf("$('toast').onclick=")),context);
+ context.renderGuide();assert.match(step.innerHTML,/Load a batch/);
+ context.items=[{id:'synthetic-photo'}];context.renderGuide();assert.match(step.innerHTML,/Your items are ready/);assert.doesNotMatch(step.innerHTML,/Load 50 more/);
+ context.decisions={'synthetic-photo':'keep'};context.renderGuide();assert.match(step.innerHTML,/All loaded items are reviewed/);assert.match(step.innerHTML,/Load 50 more/);
+ context.workspace.exhausted=true;context.renderGuide();assert.match(step.innerHTML,/Refresh latest/);assert.doesNotMatch(step.innerHTML,/Load 50 more/);
+ context.decisions={};context.renderGuide();assert.match(step.innerHTML,/Your items are ready/);
+ assert.match(app,/function render\(\)\{renderGuide\(\);/);assert.match(html,/id="guide-first-step"/);
 });
