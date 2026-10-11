@@ -249,14 +249,14 @@ test('item revisions prevent stale undo after another tab changes or sends the s
  assert.throws(()=>decideReview(completed,'a',null,'remove',3),/changed/);assert.equal(completed.items[0].queueSent,true);
 });
 
-function bundleEnvironment() {
+function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
  const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:820,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
  const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
- const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
+ const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
@@ -323,11 +323,10 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
  const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone for a.');
 });
-async function mountedReview(items,windowOverrides={}) {
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+async function mountedReview(items,windowOverrides={},fault={}) {
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(fault);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
- Object.assign(mounted.environment.window,windowOverrides);
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
  Object.assign(mounted.environment.window,windowOverrides);
@@ -987,7 +986,7 @@ test('mounted ten rapid arrow inputs finish the old flight and persist ten order
 
 
 test('failed decisions discard the rest of a burst and accept fresh input',async()=>{
- const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{indexedDB:fakeIndexedDB(fault)});
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
  fault.failSave=true;
  pressReviewKey(mounted,'ArrowLeft');pressReviewKey(mounted,'ArrowRight');pressReviewKey(mounted,'ArrowLeft');
  await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
@@ -1010,7 +1009,7 @@ test('decision and Undo key repeats do not enqueue actions',async()=>{
 });
 
 test('finished and interrupted fly-offs retain their pose until a slow save renders the next card',async()=>{
- const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{indexedDB:fakeIndexedDB(fault)}),animations=controlledCardAnimations(mounted);
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault),animations=controlledCardAnimations(mounted);
  let release;fault.holdSave=new Promise(resolve=>{release=resolve;});
  pressReviewKey(mounted,'ArrowLeft');
  await waitForReview(()=>animations.length===1);
