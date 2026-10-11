@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.1
+// @version 1.2.2
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -641,15 +641,25 @@ function mountPhotosSwipe(environment) {
   target.addEventListener('pointercancel',()=>{swipeStart=null;});
  }
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
+ function handleVideoSpace(event){
+  if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
+  if(['INPUT','SELECT','TEXTAREA'].includes(root.activeElement?.tagName)||root.activeElement?.isContentEditable)return false;
+  const video=$('media').querySelector('video');if(!video)return false;
+  event.preventDefault();event.stopImmediatePropagation();
+  if(event.type==='keydown'&&!event.repeat){if(video.paused)video.play().catch(()=>{});else video.pause();}
+  return true;
+ }
+ window.addEventListener('keyup',handleVideoSpace,true);
  window.addEventListener('keydown',event=>{
-  if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey)return;
+  if(handleVideoSpace(event))return;
+  if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing)return;
   if(event.key==='Tab'){
    const focusable=[...root.querySelectorAll('button:not(:disabled),select,input,a[href],summary,video[controls]')].filter(element=>element.getClientRects().length);
    const index=focusable.indexOf(root.activeElement),next=event.shiftKey?(index-1+focusable.length)%focusable.length:(index+1)%focusable.length;
    event.preventDefault();event.stopImmediatePropagation();focusable[next]?.focus();return;
   }
-  if(['INPUT','SELECT','TEXTAREA'].includes(root.activeElement?.tagName))return;
-  const actions={ArrowLeft:()=>decide('remove'),ArrowRight:()=>decide('keep'),z:undo,Z:undo,f:toggleEnlarge,F:toggleEnlarge,Escape:close,' ':()=>{const video=$('media').querySelector('video');if(video){if(video.paused)video.play().catch(()=>{});else video.pause();}}};
+  if(['INPUT','SELECT','TEXTAREA'].includes(root.activeElement?.tagName)||root.activeElement?.isContentEditable)return;
+  const actions={ArrowLeft:()=>decide('remove'),ArrowRight:()=>decide('keep'),z:undo,Z:undo,f:toggleEnlarge,F:toggleEnlarge,Escape:close};
   if(actions[event.key]){event.preventDefault();event.stopImmediatePropagation();actions[event.key]();}
  },true);
 }

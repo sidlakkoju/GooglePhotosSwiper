@@ -251,7 +251,7 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{toggle(){},contains(){return false;}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(){return null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
@@ -697,4 +697,44 @@ test('mounted photo and video captions show file size with explicit unknown meta
    assert.equal(mounted.nodes.get('caption').textContent,`Candidate inspection · ${name} · Unknown date · ${label}`);
   }
  }
+});
+
+test('enlarged video owns Space down and up without scrolling, closing or replacing media',async()=>{
+ const requests=[];
+ const mounted=await mountedReview([item('video',{type:'video'})],async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);
+  assert.equal(entry[0],'VrseUb');
+  return {ok:true,text:async()=>envelope(entry[0],[['video'],'https://lh3.googleusercontent.com/synthetic-video'])};
+ });
+ await new Promise(resolve=>setTimeout(resolve,0));
+ const {nodes,root}=mounted,video=nodes.get('media').querySelector('video');
+ const dispatch=(type,key,extra={})=>{
+  const event={type,key,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;},...extra};
+  mounted.environment.window.listeners[type](event);
+  if(key===' '&&!event.prevented){if(type==='keydown')nodes.get('overlay').scrollTop=100;else root.activeElement?.onclick?.();}
+  return event;
+ };
+ assert.equal(root.activeElement,nodes.get('close'));assert.equal(video.paused,false);
+ dispatch('keydown','F');assert.equal(nodes.get('card').classList.contains('expanded'),true);
+ for(const focused of [nodes.get('close'),nodes.get('enlarge'),video]){
+  focused.focus();nodes.get('overlay').scrollTop=0;
+  const before=video.playCalls;
+  for(const extra of [{},{repeat:true},{repeat:true}]){
+   const event=dispatch('keydown',' ',extra);assert.equal(event.prevented,true);assert.equal(event.stopped,true);
+  }
+  assert.equal(video.paused,true);assert.equal(video.playCalls,before);
+  const released=dispatch('keyup',' ');assert.equal(released.prevented,true);assert.equal(released.stopped,true);
+  assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('overlay').scrollTop,0);
+  assert.equal(nodes.get('media').querySelector('video'),video);assert.ok(video.src);
+  dispatch('keydown',' ');dispatch('keyup',' ');assert.equal(video.paused,false);assert.equal(video.playCalls,before+1);
+ }
+ assert.deepEqual(requests,['VrseUb']);assert.equal((await mounted.read()).items[0].decision,null);
+ dispatch('keydown','f');assert.equal(nodes.get('card').classList.contains('expanded'),false);
+ for(const extra of [{ctrlKey:true},{altKey:true},{metaKey:true},{isComposing:true}])assert.equal(dispatch('keydown',' ',extra).prevented,false);
+ for(const target of [nodes.get('sync-token'),nodes.get('filter'),{tagName:'TEXTAREA'},{tagName:'DIV',isContentEditable:true}]){
+  root.activeElement=target;
+  assert.equal(dispatch('keydown',' ').prevented,false);assert.equal(dispatch('keyup',' ').prevented,false);
+ }
+ root.activeElement=video;nodes.get('overlay').hidden=true;
+ assert.equal(dispatch('keydown',' ').prevented,false);assert.equal(dispatch('keyup',' ').prevented,false);
 });
