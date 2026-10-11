@@ -1,3 +1,4 @@
+import {sampleSwipe,releaseSwipe,animateSwipe,throwSwipe} from './swipe.js';
 export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   const stage=dialog.querySelector('.viewer-stage'), image=stage.querySelector('img'), video=stage.querySelector('video');
   const status=dialog.querySelector('[data-status]'), title=dialog.querySelector('[data-title]'), zoomLabel=dialog.querySelector('[data-zoom]');
@@ -12,9 +13,9 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   function fit(){if(!ready)return;const ratio=Math.min((stage.clientWidth-24)/image.naturalWidth,(stage.clientHeight-24)/image.naturalHeight);width=image.naturalWidth*ratio;height=image.naturalHeight*ratio;image.style.width=`${width}px`;image.style.height=`${height}px`;scale=1;x=y=0;paint();}
   function zoom(value,anchorX=0,anchorY=0){if(!ready)return;const next=Math.min(6,Math.max(1,value));x=anchorX-(anchorX-x)*next/scale;y=anchorY-(anchorY-y)*next/scale;scale=next;paint();}
   function metrics(){const points=[...pointers.values()];if(points.length<2)return points[0]?{...points[0],distance:null}:null;return {x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2,distance:Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y)};}
-  function clearSwipe(){swipe=null;stamp.hidden=true;swipeZone.textContent='Swipe left or right';stage.classList.remove('review-dragging');}
+  function clearSwipe(){swipe=null;stage.style.transform='';stamp.hidden=true;swipeZone.textContent='Swipe left or right';stage.classList.remove('review-dragging');}
   function controls(){actions.hidden=!canReview;removeButton.disabled=keepButton.disabled=working||!current||review.canDecide?.()===false;undoButton.disabled=working||!review.canUndo?.();}
-  function clearMedia(){ready=false;video.pause();video.removeAttribute('src');video.load();video.hidden=true;image.removeAttribute('src');image.hidden=true;pointers.clear();gesture=null;clearSwipe();stage.classList.remove('panning');}
+  function clearMedia(){for(const animation of stage.getAnimations?.()||[])animation.cancel();ready=false;video.pause();video.removeAttribute('src');video.load();video.hidden=true;image.removeAttribute('src');image.hidden=true;pointers.clear();gesture=null;clearSwipe();stage.classList.remove('panning');}
   async function show(item,playback={}){
     const token=++request;clearMedia();current=item;scale=1;x=y=0;controls();
     if(!item){paint();for(const control of [zoomIn,zoomOut,fitButton,zoomLabel])control.hidden=true;title.textContent='Review complete';status.hidden=false;status.textContent='No more items in this review. Undo or close to load more.';help.textContent='Z to undo · F or Esc to close';return;}
@@ -27,8 +28,8 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
       else{image.src=url;await image.decode();if(token!==request||!dialog.open)return;ready=true;image.hidden=false;status.hidden=true;fit();}
     }catch(error){if(token===request&&dialog.open)status.textContent=error.message;}
   }
-  async function decide(decision){if(!canReview||working||!current||review.canDecide?.()===false)return;working=true;controls();const token=request;try{const next=await review.decide(decision,current.id);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
-  async function undo(){if(!canReview||working||!review.canUndo?.())return;working=true;controls();const token=request;try{const next=await review.undo();if(dialog.open&&token===request)await show(next);}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
+  async function decide(decision,swipeResult=null){if(!canReview||working||!current||review.canDecide?.()===false)return;for(const animation of stage.getAnimations?.()||[])animation.cancel();working=true;controls();const visibility=stage.style.visibility;if(swipeResult&&throwSwipe(stage,swipeResult.dx,swipeResult.duration))stage.style.visibility='hidden';const token=request;try{const next=await review.decide(decision,current.id);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{if(swipeResult)stage.style.visibility=visibility;working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
+  async function undo(){if(!canReview||working||!review.canUndo?.())return;for(const animation of stage.getAnimations?.()||[])animation.cancel();working=true;controls();const token=request;try{const next=await review.undo();if(dialog.open&&token===request)await show(next);}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
   removeButton.onclick=()=>decide('remove');keepButton.onclick=()=>decide('keep');undoButton.onclick=undo;
   zoomIn.onclick=()=>zoom(scale*1.25);zoomOut.onclick=()=>zoom(scale/1.25);fitButton.onclick=fit;
   dialog.querySelector('[data-close]').onclick=()=>dialog.close();dialog.tabIndex=-1;
@@ -38,17 +39,17 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   function down(e){
     if(working||e.button!==0||e.target.closest('button,video'))return;
     const onZone=e.currentTarget===swipeZone;
-    if(canReview&&current&&review.canDecide?.()!==false&&((ready&&scale===1&&pointers.size===0)||onZone)&&!swipe){swipe={id:e.pointerId,x:e.clientX,y:e.clientY,dx:0,dy:0,target:e.currentTarget};e.currentTarget.setPointerCapture(e.pointerId);return;}
+    if(canReview&&current&&review.canDecide?.()!==false&&((ready&&scale===1&&pointers.size===0)||onZone)&&!swipe){for(const animation of stage.getAnimations?.()||[])animation.cancel();swipe={id:e.pointerId,x:e.clientX,y:e.clientY,dx:0,dy:0,samples:sampleSwipe([],e),target:e.currentTarget};e.currentTarget.setPointerCapture(e.pointerId);return;}
     if(!ready||onZone)return;
     if(swipe){const r=stage.getBoundingClientRect();pointers.set(swipe.id,{x:swipe.x+swipe.dx-r.left-r.width/2,y:swipe.y+swipe.dy-r.top-r.height/2});clearSwipe();}
     pointers.set(e.pointerId,localPoint(e));stage.setPointerCapture(e.pointerId);gesture=metrics();stage.classList.add('panning');
   }
   function move(e){
-    if(swipe?.id===e.pointerId){swipe.dx=e.clientX-swipe.x;swipe.dy=e.clientY-swipe.y;const horizontal=Math.abs(swipe.dx)>Math.abs(swipe.dy)*1.4;stamp.hidden=!horizontal||Math.abs(swipe.dx)<20;if(!stamp.hidden){stamp.textContent=swipe.dx>0?'KEEP':'REMOVE';stamp.dataset.direction=swipe.dx>0?'keep':'remove';swipeZone.textContent=swipe.dx>0?'Release to keep':'Release to queue removal';}return;}
+    if(swipe?.id===e.pointerId){sampleSwipe(swipe.samples,e);swipe.dx=e.clientX-swipe.x;stage.style.transform=`translateX(${swipe.dx}px)`;swipe.dy=e.clientY-swipe.y;const horizontal=Math.abs(swipe.dx)>Math.abs(swipe.dy)*1.4;stamp.hidden=!horizontal||Math.abs(swipe.dx)<20;if(!stamp.hidden){stamp.textContent=swipe.dx>0?'KEEP':'REMOVE';stamp.dataset.direction=swipe.dx>0?'keep':'remove';swipeZone.textContent=swipe.dx>0?'Release to keep':'Release to queue removal';}return;}
     if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,localPoint(e));const next=metrics();if(gesture&&next){if(next.distance&&gesture.distance)zoom(scale*next.distance/gesture.distance,gesture.x,gesture.y);x+=next.x-gesture.x;y+=next.y-gesture.y;paint();}gesture=next;
   }
   function release(e,cancel=false){
-    if(swipe?.id===e.pointerId){const {dx,dy}=swipe;clearSwipe();if(!cancel&&Math.abs(dx)>=90&&Math.abs(dx)>Math.abs(dy)*1.4)decide(dx>0?'keep':'remove');return;}
+    if(swipe?.id===e.pointerId){const result=releaseSwipe(swipe.samples,e,swipe.x,stage.getBoundingClientRect().width,cancel),dy=e.clientY-swipe.y,commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.4&&!working&&review.canDecide?.()!==false;if(commit)decide(result.dx>0?'keep':'remove',result);else animateSwipe(stage,result.dx,false);clearSwipe();return;}
     pointers.delete(e.pointerId);gesture=metrics();if(!pointers.size)stage.classList.remove('panning');
   }
   for(const target of [stage,swipeZone]){target.addEventListener('pointerdown',down);target.addEventListener('pointermove',move);target.addEventListener('pointerup',e=>release(e));target.addEventListener('pointercancel',e=>release(e,true));target.addEventListener('lostpointercapture',e=>release(e,true));}
