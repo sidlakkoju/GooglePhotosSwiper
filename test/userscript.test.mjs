@@ -873,3 +873,25 @@ test('release metadata names the author and install guide explains Chrome script
  mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
  assert.equal(under.hidden,true);
  });
+
+test('mounted swipe keeps the old card dismissed until animation finishes',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const waitFor=async predicate=>{for(let count=0;count<100;count++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,1));}assert.fail('Mounted swipe did not settle');};
+ const media=mounted.nodes.get('media'),top=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card');
+ let finish;
+ top.animate=()=>({finished:new Promise(resolve=>{finish=resolve;}),cancel(){}});
+ media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});
+ media.listeners.pointerup({pointerId:1,clientX:150,clientY:0});
+ await waitFor(async()=> (await mounted.read()).items[0].decision==='keep','Decision did not save');
+ assert.match(top.style.transform,/translate3d/);assert.equal(media.querySelector('img').alt,'a');assert.equal(mounted.nodes.get('keep').disabled,true);
+ finish();await waitFor(()=>mounted.nodes.get('keep').disabled===false,'Animation did not release UI');
+ assert.equal(media.querySelector('img').alt,'b');assert.equal(top.style.transform,'');
+});
+test('mounted under-card shares the media origin and image gestures reach the media container',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE');
+ const css=styles.map(node=>node.textContent||node.childNodes.map(child=>child.textContent||'').join('')).join('');
+ assert.match(css,/\.under-card\{position:absolute;inset:0 0 auto;/);
+ assert.match(css,/\.media img\{pointer-events:none;/);
+ mounted.nodes.get('media').ondblclick();assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
+});
