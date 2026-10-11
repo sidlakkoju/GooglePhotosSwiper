@@ -23,9 +23,10 @@ test('QR renderer includes a four-module white quiet zone',()=>{const elements=d
 const prePairingMainBytes=83032;
 const photoURLRefreshGrowthBytes=3194;
 const themeGrowthBytes=3078;
+const loaderPairingOnboardingGrowthBytes=701;
 const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
 const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
-const prePairingCurrentBytes=prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+isolationBytes;
+const prePairingCurrentBytes=prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+isolationBytes;
 const pairingGrowthBudgetBytes=15*1024;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
 test('pairing bundle stays within the 15 KB growth budget without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
@@ -102,7 +103,7 @@ test('busy viewer controls leave pairing Cancel enabled',()=>{
 test('hash changes in an already mounted Photos tab open consent for the latest code',async()=>{
  const elements=dom(),listeners={},calls=[],location={hash:'',pathname:'/',search:''};let saved;
  elements.document.createElement=((create)=>tag=>{const node=create(tag);node.remove=()=>{elements.parent.children=elements.parent.children.filter(child=>child!==node);};return node;})(elements.document.createElement);
- const context={receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div')};
+ const context={receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div'),onboardPair:{onclick(){}}};
  vm.runInNewContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(" $('launcher').onclick=open;")),context);
  assert.equal(elements.parent.children.length,0);
  for(const code of ['abcdefghijklmnopqrstuv','zyxwvutsrqponmlkjihgfe']){
@@ -131,4 +132,14 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  const dismissal={$:()=>context.local,run:fn=>fn(),pairingPromise:Promise.resolve({settings:async()=>({}),saveSettings:async value=>saved=value}),settingsPanel:{},onboarding:card,message(){},idleMessage:()=>''};
  vm.runInNewContext(ui.split('\n').find(line=>line.includes("$('sync-local').onclick=")),dismissal);await context.local.onclick();
  assert.equal(saved.onboardingDismissed,true);assert.equal(card.hidden,true);
+});
+
+test('settings and onboarding pairing buttons share receiver activation',()=>{
+ const elements=dom();let received=0;
+ const onboardPair={onclick:()=>received++};
+ const context={document:elements.document,settingsPanel:elements.parent,onboardPair,receivePairing:()=>{}};
+ vm.runInNewContext(ui.split('\n').find(line=>line.includes(' const pairThis=')),context);
+ const button=elements.parent.children[0];
+ assert.equal(button.textContent,'Pair this device');assert.equal(button.onclick,onboardPair.onclick);
+ button.onclick();assert.equal(received,1);
 });
