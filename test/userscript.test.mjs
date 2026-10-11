@@ -251,7 +251,7 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
@@ -862,3 +862,14 @@ test('release metadata names the author and install guide explains Chrome script
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });
+
+ test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
+ const mounted=await mountedReview([item('a'),item('b'),item('c')]);
+ const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');
+ assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');
+ await mounted.click('keep');
+ assert.equal(mounted.nodes.get('media').querySelector('img'),preview);
+ assert.equal(under.querySelector('img').dataset.key,'c');
+ mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
+ assert.equal(under.hidden,true);
+ });
