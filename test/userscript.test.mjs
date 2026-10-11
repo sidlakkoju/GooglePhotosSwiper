@@ -221,10 +221,10 @@ function fakeIndexedDB(fault={}) {
   objectStoreNames:{contains:name=>stores.has(name)},
   createObjectStore:name=>stores.set(name,new Map()),close(){},
   transaction(name){
-   const staged=new Map(stores.get(name));let aborted=false;
+   const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -251,7 +251,7 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
- const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='card'?280:820,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
 
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
@@ -328,12 +328,14 @@ async function mountedReview(items,windowOverrides={},fault={}) {
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(fault);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
+ if(windowOverrides?.indexedDB)mounted.environment.window.indexedDB=windowOverrides.indexedDB;
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
  Object.assign(mounted.environment.window,windowOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
- return {...mounted,click,read:()=>db.read(account)};
+ const settle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
+ const click=async id=>{mounted.nodes.get(id).onclick();await settle();};
+ return {...mounted,click,settle,read:()=>db.read(account)};
 }
 test('mounted undo restores undecided after queue, keep instead, and two undos',async()=>{
  const mounted=await mountedReview([item('a')]);
@@ -536,14 +538,14 @@ test('swipes lock direction after slop and cancellation releases capture without
    assert.equal(captures,0);
   }else{
    const move=swipeEvent({clientX:scenario==='short'?40:150});media.listeners.pointermove(move);
-   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(mounted.nodes.get('card').style.transform,/translateX/);
+   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,/translate3d/);
    if(scenario==='other-pointer'){
     media.listeners.pointercancel(swipeEvent({pointerId:2}));assert.equal(captured,true);
    }
    if(scenario!=='short')media.listeners.pointercancel(swipeEvent());
   }
   media.listeners.pointerup(swipeEvent({clientX:scenario==='short'?40:150}));
-  assert.equal(mounted.nodes.get('card').style.transform,'');assert.equal(captured,false);
+  assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'');assert.equal(captured,false);
   assert.equal(releases,scenario==='vertical'?0:1);
   assert.equal((await mounted.read()).items[0].decision,null);
  }
@@ -551,11 +553,11 @@ test('swipes lock direction after slop and cancellation releases capture without
 test('touch drag, spring-back and outgoing copy share the card transform',async()=>{
  for(const surface of ['media','swipe'])for(const release of ['short','cancel','keep','remove']){
   const mounted=await mountedReview([item('synthetic-video',{type:'video'})]);
-  const card=mounted.nodes.get('card'),target=mounted.nodes.get(surface),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  const card=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card'),target=mounted.nodes.get(surface),media=mounted.nodes.get('media'),video=media.querySelector('video');
   const animations=[],copies=[],dx=release==='short'?20:release==='remove'?-120:120;
-  const committing=release==='keep'||release==='remove',pose=`translateX(${dx}px)${committing?` rotate(${dx/20}deg)`:''}`;
-  card.animate=(frames,options)=>{animations.push({frames,options});};
-  card.ownerDocument={body:{append(copy){copies.push(copy);}}};
+  const committing=release==='keep'||release==='remove',pose=`translate3d(${dx}px,0px,0) rotate(${dx/300*15}deg) scale(1.02)`;
+  card.animate=(frames,options)=>{animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}};};
+  card.parentNode={append(copy){copies.push(copy);}};
   card.cloneNode=deep=>{
    assert.equal(deep,true);
    assert.equal(card.style.transform,pose);
@@ -571,7 +573,7 @@ test('touch drag, spring-back and outgoing copy share the card transform',async(
   const move=swipeEvent({clientX:20+dx,timeStamp:200});
   target.listeners.pointermove(move);
   assert.equal(move.prevented,true);
-  assert.equal(card.style.transform,`translateX(${dx}px)`);
+  assert.equal(card.style.transform,pose);
   assert.equal(target.style.transform,undefined);
   target.listeners[release==='cancel'?'pointercancel':'pointerup'](swipeEvent({clientX:20+dx,timeStamp:400}));
   if(committing)await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
@@ -580,13 +582,13 @@ test('touch drag, spring-back and outgoing copy share the card transform',async(
   assert.equal(animations.length,1);
   assert.equal(animations[0].frames[0].transform,pose);
   if(release==='short'||release==='cancel'){
-   assert.equal(animations[0].frames[1].transform,'translateX(0px)');
+   assert.equal(animations[0].frames[1].transform,'none');
    assert.equal(copies.length,0);
    assert.equal((await mounted.read()).items[0].decision,null);
   }else{
    assert.equal(copies.length,1);
-   assert.equal(copies[0].style.transform,pose);
-   assert.match(animations[0].frames[1].transform,new RegExp(`translateX\\(${dx>0?'':'-'}[0-9]+px\\) rotate`));
+   assert.match(copies[0].style.transform,/translate3d/);
+   assert.match(animations[0].frames[1].transform,new RegExp(`translate3d\\(${dx>0?'':'-'}[0-9]+px,0,0\\) rotate`));
    await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
    assert.equal((await mounted.read()).items[0].decision,release);
   }
@@ -602,11 +604,11 @@ test('video capture transfer preserves the swipe until media capture ends',async
   media.listeners.pointerdown(swipeEvent({target:video,pointerType:'touch'}));
   media.listeners.pointermove(swipeEvent({target:video,clientX:120}));
   media.listeners.lostpointercapture(swipeEvent({target:video}));
-  assert.equal(captured,true);assert.equal(mounted.nodes.get('card').style.transform,'translateX(100px)');
+  assert.equal(captured,true);assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'translate3d(100px,0px,0) rotate(5deg) scale(1.02)');
   if(cancel){
    captured=false;
    media.listeners.lostpointercapture(swipeEvent({target:media}));
-   assert.equal(mounted.nodes.get('card').style.transform,'');
+   assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'');
   }
   media.listeners.pointerup(swipeEvent({target:media,clientX:120}));
   await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
@@ -1037,6 +1039,122 @@ test('release metadata names the author and install guide explains Chrome script
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });
 
+ test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
+ const mounted=await mountedReview([item('a'),item('b'),item('c')]);
+ const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');
+ assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');
+ await mounted.click('keep');
+ assert.equal(mounted.nodes.get('media').querySelector('img'),preview);
+ assert.equal(under.querySelector('img').dataset.key,'c');
+ mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
+ assert.equal(under.hidden,true);
+ });
+
+test('an unresolved fly animation never blocks the next decision',async()=>{
+ const mounted=await mountedReview([item('a'),item('b'),item('c')]);
+ const top=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card');
+ top.animate=()=>({finished:new Promise(()=>{}),cancel(){}});
+ mounted.nodes.get('keep').onclick();await mounted.settle();
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal(mounted.nodes.get('media').querySelector('img').alt,'b');
+ mounted.nodes.get('remove').onclick();await mounted.settle();
+ assert.equal((await mounted.read()).items[1].decision,'remove');
+});
+test('mounted under-card shares the media origin and image gestures reach the media container',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const card=mounted.nodes.get('card'),under=mounted.nodes.get('next-card'),hint=mounted.nodes.get('swipe');
+ const top=card.childNodes.find(node=>node.class==='top-card');
+ assert.deepEqual(card.childNodes.slice(0,3),[under,top,hint]);
+ assert.equal(top.childNodes[0],mounted.nodes.get('media'));
+ const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE');
+ const css=styles.map(node=>node.textContent||node.childNodes.map(child=>child.textContent||'').join('')).join('');
+ assert.match(css,/\.under-card\{position:absolute;inset:0 0 auto;/);
+ assert.match(css,/\.media img\{pointer-events:none;/);
+ mounted.nodes.get('media').listeners.dblclick({target:{tagName:'IMG'}});assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
+});
+
+test('empty and filtered decks cannot latch swipe dismissal',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const {nodes}=mounted,media=nodes.get('media');
+ const swipe=()=>{media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});media.listeners.pointerup({pointerId:1,clientX:150,clientY:0});};
+ nodes.get('filter').value='video';nodes.get('filter').onchange();swipe();
+ nodes.get('filter').value='all';nodes.get('filter').onchange();swipe();await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');swipe();
+ nodes.get('undo').onclick();await mounted.settle();swipe();await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+test('deck video buttons control playback and audio and enlarge restores native controls',async()=>{
+ const mounted=await mountedReview([item('v',{type:'video'})],async()=>({ok:true,text:async()=>envelope('VrseUb',[['v'],'https://lh3.googleusercontent.com/video'])}));
+ const media=mounted.nodes.get('media'),video=media.querySelector('video');
+ const buttons=media.childNodes.filter(node=>node.dataset.videoControl);
+ assert.equal(video.controls,false);assert.equal(buttons.length,2);
+ video.paused=false;buttons[0].onclick();assert.equal(video.paused,true);
+ buttons[0].onclick();assert.equal(video.paused,false);
+ buttons[1].onclick();assert.equal(video.muted,false);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);assert.ok(buttons.every(button=>button.hidden));
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);assert.ok(buttons.every(button=>!button.hidden));
+});
+test('overlay stops pointer touch and wheel propagation without cancelling browser defaults',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','touchstart','touchmove','touchend','touchcancel','wheel']){
+  let stopped=false;mounted.nodes.get('overlay').listeners[type]({stopPropagation(){stopped=true;},preventDefault(){assert.fail('Browser defaults must remain available');}});assert.equal(stopped,true);
+ }
+});
+
+for(const delayed of ['identity','save'])test(`swipes, arrow keys and buttons advance immediately during a delayed ${delayed}`,async()=>{
+ const fault={},indexedDB=fakeIndexedDB(fault);let release,holdIdentity=false;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holdIdentity)await gate;return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview(['a','b','c','d','e'].map(key=>item(key)),{indexedDB,crypto});
+ if(delayed==='identity')holdIdentity=true;
+ else fault.saveGate=gate;
+ const {nodes}=mounted,media=nodes.get('media'),top=nodes.get('card').childNodes.find(node=>node.class==='top-card');
+ const swipe=dx=>{media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});media.listeners.pointerup({pointerId:1,clientX:dx,clientY:0});};
+ const shown=name=>{assert.equal(media.querySelector('img').alt,name);assert.equal(top.style.visibility,'');assert.equal(nodes.get('keep').disabled,false);assert.equal(nodes.get('remove').disabled,false);};
+ try {
+  swipe(150);shown('b');
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(nodes.get('overlay')['aria-busy'],'true');
+  swipe(-150);shown('c');
+  mounted.environment.window.listeners.keydown({key:'ArrowRight',preventDefault(){},stopImmediatePropagation(){}});shown('d');
+  nodes.get('remove').onclick();shown('e');
+  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null,null,null,null]);
+ }finally{release();}
+ await mounted.settle();
+ const saved=await mounted.read();
+ assert.deepEqual(saved.items.map(row=>row.decision),['keep','remove','keep','remove',null]);
+ assert.deepEqual(saved.history.map(entry=>[entry.key,entry.decision,entry.revision]),[['a','keep',1],['b','remove',1],['c','keep',1],['d','remove',1]]);
+ shown('e');
+});
+
+test('a failed decision save restores every unsaved card without recording queued decisions',async()=>{
+ const fault={},mounted=await mountedReview(['a','b','c'].map(key=>item(key)),{indexedDB:fakeIndexedDB(fault)});
+ fault.failSave=true;
+ mounted.nodes.get('keep').onclick();mounted.nodes.get('remove').onclick();
+ await mounted.settle();
+ assert.equal(mounted.nodes.get('media').querySelector('img').alt,'a');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null,null]);
+ assert.match(mounted.nodes.get('status').textContent,/Fake storage failure/);
+ fault.failSave=false;
+ await mounted.click('remove');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove',null,null]);
+});
+
+test('a decision arriving as the save operation finishes remains queued for its own item',async()=>{
+ const fault={},mounted=await mountedReview(['a','b','c'].map(key=>item(key)),{indexedDB:fakeIndexedDB(fault)});
+ let release;fault.releaseGate=new Promise(resolve=>{release=resolve;});
+ try {
+  mounted.nodes.get('keep').onclick();
+  for(let count=0;count<100;count++){if((await mounted.read()).items[0].decision==='keep')break;await new Promise(resolve=>setTimeout(resolve,1));}
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
+  mounted.nodes.get('remove').onclick();
+  assert.equal(mounted.nodes.get('media').querySelector('img').alt,'c');
+ }finally{release();}
+ await mounted.settle();
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','remove',null]);
+});
+
 test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=>{
  const calls=[];
  const mounted=await mountedReview([item('photo')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({id:'pair-id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:Date.now()+60000})};}});
@@ -1061,9 +1179,9 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
 });
 test('userscript cancels the live snap-back before a filter renders another photo',async()=>{
  const mounted=await mountedReview([item('a'),item('b',{type:'video'})]);
- const card=mounted.nodes.get('card'),media=mounted.nodes.get('media');
+ const card=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card'),media=mounted.nodes.get('media');
  let running=false,cancelled=0;
- card.animate=()=>{running=true;};
+ card.animate=()=>{running=true;return {finished:Promise.resolve(),cancel(){running=false;cancelled++;}};};
  card.getAnimations=()=>running?[{cancel(){running=false;cancelled++;}}]:[];
  media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20,timeStamp:0});
  media.listeners.pointerup({pointerId:1,clientX:40,clientY:20,timeStamp:200});
@@ -1079,7 +1197,7 @@ test('review preloads match card sizing, respect compact viewports and refresh o
   const created=[],mounted=await mountedReview(Array.from({length:6},(_,index)=>item(`sized-${index}`))),document=mounted.environment.document;
   const create=document.createElement;
   document.createElement=tag=>{const node=create(tag);if(tag==='img')created.push(node);return node;};
-  mounted.environment.window.matchMedia=query=>{assert.equal(query,'(max-width:760px), (pointer:coarse)');return {matches:compact};};
+  mounted.environment.window.matchMedia=query=>({matches:query==='(max-width:760px), (pointer:coarse)'&&compact});
   const media=mounted.nodes.get('media');media.getBoundingClientRect=()=>({width:compact?360:900,height:compact?260:500});
   mounted.environment.window.listeners.resize();await new Promise(resolve=>setImmediate(resolve));
   assert.equal(created.length,compact?2:3);
@@ -1103,7 +1221,7 @@ test('ahead video completion does not write leases during an active sync',async(
  }});
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
- await db.save(account,{...emptyReview(),items:[item('first'),item('next'),item('ahead',{type:'video'})]});
+ await db.save(account,{...await db.read(account),items:[item('first'),item('next'),item('ahead',{type:'video'})]});
  await mounted.nodes.get('launcher').onclick();
  mounted.environment.AbortSignal=AbortSignal;
  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
@@ -1115,7 +1233,7 @@ test('ahead video completion does not write leases during an active sync',async(
  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
-test('resize and enlarge preserve the displayed media while a decision awaits sync',async()=>{
+test('resize and enlarge preserve the next media node while a decision awaits sync',async()=>{
  for(const type of ['photo','video']){
   let holdSync=false;
   const sync=Promise.withResolvers(),started=Promise.withResolvers();
@@ -1128,26 +1246,29 @@ test('resize and enlarge preserve the displayed media while a decision awaits sy
   mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
   await mounted.click('sync-save');
   holdSync=true;
-  const media=mounted.nodes.get('media'),node=media.childNodes[0],source=node.src,poster=node.poster;
+  const media=mounted.nodes.get('media');
   const deciding=mounted.click('keep');await started.promise;
+  const node=media.childNodes[0];
   assert.equal((await mounted.read()).items[0].decision,'keep');
   media.getBoundingClientRect=()=>({width:900,height:500});
   try{
   mounted.environment.window.listeners.resize();
   mounted.environment.window.listeners.keydown({key:'f',preventDefault(){},stopImmediatePropagation(){}});
-  assert.equal(media.childNodes[0],node);assert.equal(node.src,source);assert.equal(node.poster,poster);
+  assert.equal(media.childNodes[0],node);assert.match(node.src,/next=w900-h500/);
   }finally{sync.resolve();await deciding;}
-  assert.notEqual(media.childNodes[0],node);assert.match(media.childNodes[0].src,/next=w900-h500/);
+  assert.equal(media.childNodes[0],node);assert.match(media.childNodes[0].src,/next=w900-h500/);
  }
 });
 
 function controlledCardAnimations(mounted){
  const animations=[];
- mounted.nodes.get('card').animate=(frames,options)=>{
+ const animate=(frames,options)=>{
   let resolve;
   const animation={frames,options,finished:new Promise(done=>{resolve=done;}),finish(){this.finishedInstantly=true;resolve();},cancel(){this.cancelled=true;resolve();}};
   animations.push(animation);return animation;
  };
+ mounted.nodes.get('card').animate=animate;
+ mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').animate=animate;
  return animations;
 }
 async function waitForReview(predicate){
@@ -1160,47 +1281,36 @@ for(const [key,button,decision,side] of [['ArrowLeft','remove','remove',-1],['Ar
  test(`mounted ${key} and ${button} share the fly-off and Undo returns from that side`,async()=>{
   const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
   pressReviewKey(mounted,key);
-  await waitForReview(()=>animations.length===1);
-  assert.equal(animations[0].options.duration,250);
-  assert.match(animations[0].frames[1].transform,new RegExp(`translateX\\(${side*120}vw\\)`));
-  animations[0].finish();
-  await waitForReview(async()=>!mounted.nodes.get('overlay')['aria-busy'].includes('true'));
+  await mounted.settle();
+  assert.match(animations[0].frames[1].transform,new RegExp(`translate3d\\(${side*450}px`));
   mounted.nodes.get(button).onclick();
-  await waitForReview(()=>animations.length===2);
-  assert.deepEqual(animations[1].frames,animations[0].frames);
   mounted.nodes.get('undo').onclick();
-  assert.equal(animations[1].finishedInstantly,true);
   await waitForReview(()=>animations.length===3);
-  assert.deepEqual(structuredClone(animations[2].frames),structuredClone([animations[1].frames[1],animations[1].frames[0]]));
+  assert.match(animations[2].frames[0].transform,new RegExp(`translateX\\(${side*120}vw\\)`));
   assert.equal(animations[2].options.duration,250);
   assert.equal((await mounted.read()).items[1].decision,null);
   animations[2].finish();
-  await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+  await mounted.settle();
   assert.equal((await mounted.read()).items[0].decision,decision);
  });
 }
 
-test('mounted ten rapid arrow inputs finish the old flight and persist ten ordered decisions',async()=>{
+test('mounted ten rapid arrow inputs advance and persist ten ordered decisions',async()=>{
  const mounted=await mountedReview(Array.from({length:11},(_,index)=>item(String(index)))),animations=controlledCardAnimations(mounted);
- pressReviewKey(mounted,'ArrowLeft');
- await waitForReview(()=>animations.length===1);
- for(let index=1;index<10;index++)pressReviewKey(mounted,index%2?'ArrowRight':'ArrowLeft');
- assert.equal(animations[0].finishedInstantly,true);
- await waitForReview(()=>animations.length===10);
- animations[9].finish();
- await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ for(let index=0;index<10;index++)pressReviewKey(mounted,index%2?'ArrowRight':'ArrowLeft');
+ await mounted.settle();
  const state=await mounted.read();
+ assert.equal(animations.length,10);
  assert.equal(state.history.length,10);
  assert.deepEqual(state.items.slice(0,10).map(row=>row.decision),Array.from({length:10},(_,index)=>index%2?'keep':'remove'));
  assert.equal(state.items[10].decision,null);
 });
 
-
 test('failed decisions discard the rest of a burst and accept fresh input',async()=>{
  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
  fault.failSave=true;
  pressReviewKey(mounted,'ArrowLeft');pressReviewKey(mounted,'ArrowRight');pressReviewKey(mounted,'ArrowLeft');
- await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ await mounted.settle();
  assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');
  assert.equal((await mounted.read()).history.length,0);
  fault.failSave=false;
@@ -1211,48 +1321,41 @@ test('failed decisions discard the rest of a burst and accept fresh input',async
 test('decision and Undo key repeats do not enqueue actions',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
  pressReviewKey(mounted,'ArrowRight');
- await waitForReview(()=>animations.length===1);
  for(const key of ['ArrowLeft','ArrowRight','z','Z'])mounted.environment.window.listeners.keydown({key,repeat:true,preventDefault(){},stopImmediatePropagation(){}});
- animations[0].finish();
- await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ await mounted.settle();
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
  assert.equal(animations.length,1);
 });
 
-test('finished and interrupted fly-offs retain their pose until a slow save renders the next card',async()=>{
+test('a slow save preserves the next card and accepts another swipe',async()=>{
  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault),animations=controlledCardAnimations(mounted);
  let release;fault.holdSave=new Promise(resolve=>{release=resolve;});
- pressReviewKey(mounted,'ArrowLeft');
- await waitForReview(()=>animations.length===1);
- animations[0].finish();
- await new Promise(resolve=>setTimeout(resolve,10));
- assert.equal(animations[0].cancelled,undefined);
- assert.match(mounted.nodes.get('caption').textContent,/^a /);
- assert.equal(mounted.nodes.get('keep').disabled,false);
- mounted.nodes.get('card').offsetWidth=300;
- const swipe=mounted.nodes.get('swipe');
- swipe.listeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,target:swipe});
- swipe.listeners.pointerup({pointerId:1,clientX:120,clientY:0});
- assert.equal(animations[0].cancelled,undefined);
- fault.holdSave=null;release();
- await waitForReview(()=>animations.length===2);
- assert.equal(animations[0].cancelled,true);
- animations[1].finish();
- await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ try{
+  pressReviewKey(mounted,'ArrowLeft');
+  animations[0].finish();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  assert.match(mounted.nodes.get('caption').textContent,/^b /);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+  const swipe=mounted.nodes.get('swipe');
+  swipe.listeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,target:swipe});
+  swipe.listeners.pointerup({pointerId:1,clientX:120,clientY:0});
+  assert.match(mounted.nodes.get('caption').textContent,/^c /);
+ }finally{fault.holdSave=null;release();}
+ await mounted.settle();
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove','keep',null]);
 });
 
-test('an animation that never settles releases the review task at its deadline',async()=>{
+test('an Undo animation that never settles releases the review task at its deadline',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
+ await mounted.click('keep');
  let cancelled=false;
  mounted.nodes.get('card').animate=()=>({finished:new Promise(()=>{}),finish(){},cancel(){cancelled=true;}});
- pressReviewKey(mounted,'ArrowRight');
+ pressReviewKey(mounted,'z');
  await new Promise(resolve=>setTimeout(resolve,400));
  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'false');
  assert.equal(cancelled,true);
- assert.equal((await mounted.read()).items[0].decision,'keep');
+ assert.equal((await mounted.read()).items[0].decision,null);
 });
-
 
 test('revoked userscript shows recovery, keeps local swipes and clears credentials',async()=>{
  const mounted=await mountedReview([item('synthetic')]);
@@ -1316,4 +1419,20 @@ test('device actions are disabled before configuration and after revoking this d
  for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
  assert.equal(mounted.nodes.get('devices-list').childNodes.length,0);
  assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
+});
+
+
+test('mixed decisions and Undo retain input order across a delayed save',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
+ let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
+ try{
+  pressReviewKey(mounted,'ArrowRight');
+  pressReviewKey(mounted,'z');
+  pressReviewKey(mounted,'ArrowLeft');
+  pressReviewKey(mounted,'ArrowRight');
+ }finally{fault.saveGate=null;release();}
+ await mounted.settle();
+ const state=await mounted.read();
+ assert.deepEqual(state.items.map(row=>row.decision),['remove','keep',null]);
+ assert.deepEqual(state.history.map(entry=>[entry.key,entry.decision]),[['a','remove'],['b','keep']]);
 });
