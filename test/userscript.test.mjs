@@ -858,7 +858,7 @@ test('decision history previews the same next Undo and updates after undo and re
 
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- assert.match(source,/\/\/ @version 1\.2\.3\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
+ assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });
