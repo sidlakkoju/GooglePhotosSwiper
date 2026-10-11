@@ -30,6 +30,8 @@ Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** ch
 
 To move reviewed candidates to Trash, select **Enable Move to Trash**, check the exact count on the button, and explicitly confirm the count. This includes queued and previously sent removal candidates. Each batch is verified in Trash before local state advances. Keep and swipes never move media to Trash. You can also use Google Photos to move items manually. **Check deleted items** only reads Trash and item state. Unknown results preserve existing local state. The userscript has no permanent deletion operation. Queue and confirmed-Trash estimates use quota bytes when known, count known free items as zero, and flag unknown sizes.
 
+Trash reconciliation confirms exact media identifiers directly. A dedup-key match with a different Trash identifier requires checking the library item's own state, so an older trashed copy cannot hide an active copy from review. Check deleted items also restores previously misclassified items when their individual state is confirmed active; unknown results retain their saved state.
+
 ## Local state and compatibility
 
 Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Tokens and Google cookies are never stored by this script. No data is sent to the existing local app. State does not sync between devices, Safari profiles, userscript managers or the desktop app. Clearing website data removes it. Avoid private browsing if you need durable progress.
