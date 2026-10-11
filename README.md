@@ -43,6 +43,7 @@ Videos autoplay muted and loop in the regular view. Use the volume control for s
 ## Removal queue and storage estimates
 
 - **Queue · estimated savings** counts only the current removal queue. It changes with swipes, Keep instead and Undo. An empty queue shows **0 KB**.
+- **Sent to album · awaiting Trash** counts fully verified sent items that have not been confirmed in Trash. They stay reviewed and are no longer queued, even if an album later becomes unavailable.
 - **In Trash · estimated savings** counts removal candidates confirmed in Google Photos Trash through **Check deleted items**.
 
 Known quota bytes take precedence over file size. Known non-quota media count as zero, and unknown sizes are marked. These are estimates, not a reading of Google's account storage meter.

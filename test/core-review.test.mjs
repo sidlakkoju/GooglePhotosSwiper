@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createStore} from '../lib/store.mjs';
-import {pending,removalQueue,albumCandidates,storageTotals} from '../public/model.js';
+import {pending,summarize,removalQueue,albumCandidates,storageTotals} from '../public/model.js';
 const media=(mediaKey,size=1000,extra={})=>({mediaKey,name:mediaKey+'.jpg',type:'photo',thumbUrl:'https://lh3.googleusercontent.com/test',size,...extra});
 const decisions=s=>Object.fromEntries(s.listItems().map(i=>[i.id,i.decision]));
 function setup(){const s=createStore();s.setSetting('account','test');return s;}
@@ -44,4 +44,30 @@ test('empty removal queue has zero savings even when sent and deleted history is
  const decisions={sent:'remove',protected:'remove',kept:'keep'};
  const totals=storageTotals(items,decisions,{deleted:{bytes:388000000,unknown:0}});
  assert.deepEqual(removalQueue(items,decisions),[]);assert.deepEqual(totals.selected,{bytes:0,unknown:0});assert.equal(totals.deleted.bytes,388000000);
+});
+
+
+test('sent album items remain counted between verified sending and confirmed Trash',()=>{
+ const s=setup();try{
+  s.importItems([media('a'),media('b'),media('sent')],'test');
+  s.decide('test:a','keep',0);s.decide('test:b','keep',0);s.decide('test:sent','remove',0);
+  const counts=()=>{const items=s.listItems(),d=decisions(s),stats=summarize(items,d);return {reviewed:stats.reviewed,kept:stats.kept.length,queued:removalQueue(items,d).length,sent:stats.sent.length};};
+  assert.deepEqual(counts(),{reviewed:3,kept:2,queued:1,sent:0});
+  const job=s.createJob(['test:sent']);
+  s.progressJob(job.id,{status:'running',albumKey:'album',confirmed:['sent']});
+  assert.deepEqual(counts(),{reviewed:3,kept:2,queued:1,sent:0});
+  s.progressJob(job.id,{status:'completed',confirmed:['sent']});
+  assert.deepEqual(counts(),{reviewed:3,kept:2,queued:0,sent:1});
+  assert.equal(s.storageSummary().selected.bytes,0);assert.equal(s.storageSummary().deleted.bytes,0);
+  s.importItems([media('sent')],'test');
+  let item=s.listItems().find(i=>i.mediaKey==='sent');
+  s.reconcile([{id:item.id,revision:item.revision,state:'unknown',inAlbum:null}],{albumUnavailable:true,albumKey:'album'});
+  assert.equal(counts().sent,1);
+  s.reconcile([{id:item.id,revision:item.revision,state:'active',inAlbum:false}]);
+  assert.equal(counts().sent,1);
+  item=s.listItems().find(i=>i.mediaKey==='sent');
+  s.reconcile([{id:item.id,revision:item.revision,state:'in_trash',inAlbum:false}]);
+  assert.deepEqual(counts(),{reviewed:2,kept:2,queued:0,sent:0});
+  assert.equal(s.storageSummary().deleted.bytes,1000);
+ }finally{s.close();}
 });
