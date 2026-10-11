@@ -35,7 +35,7 @@ Load a batch, then keep or queue each photo/video using buttons, dragging or arr
 
 Send the queue to a review album, wait for full membership verification, and open the album in Google Photos. Select the intended items and choose **More options → Move to trash**. The app itself never performs deletion. Use **Check deleted items** afterwards to reconcile confirmed Trash items.
 
-Sending a fully verified batch clears the working queue and its queue storage estimate, but retains review decisions and the album link. Failed/partial updates stay available for retry. Undo history belongs to the current app tab and resets on page reload; stored decisions persist.
+Sending a fully verified batch clears the working queue and its queue storage estimate, but retains review decisions and the album link. Failed/partial updates stay available for retry. Undo history belongs to the current app tab and resets on page reload or a successful album send; stored decisions persist. After sending, a new swipe enables Undo again. Failed sends retain Undo history.
 
 ## Troubleshooting
 
