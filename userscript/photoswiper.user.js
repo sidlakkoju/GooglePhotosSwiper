@@ -172,7 +172,7 @@ function createPhotosAPI(environment) {
 }
 
 const emptyReview = () => ({revision:0,history:[],items:[],cursor:null,started:false,exhausted:false,albumKey:null,job:null});
-const reviewDeck = state => state.items.filter(item=>!item.decision&&item.state!=='in_trash');
+const reviewDeck = state => state.items.filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash');
 const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.queueSent&&item.state!=='in_trash');
 const reviewTrashCandidates = state => state.items.filter(item=>item.decision==='remove'&&item.state!=='in_trash');
 function reviewStorage(items) {
@@ -186,7 +186,7 @@ function mergeReviewPage(state,page,requestCursor,refresh=false) {
  if(!refresh&&state.cursor!==requestCursor)throw Error('Library progress changed. Retry Load more.');
  if(page.nextPageId&&page.nextPageId===requestCursor)throw Error('Google repeated a page. Reload before retrying.');
  const items=new Map(state.items.map(item=>[item.mediaKey,item]));
- for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
+ for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',needsPreview:false,revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
  const progress=!refresh||!state.started?{cursor:page.nextPageId,exhausted:!page.nextPageId,started:true}:{};
  return {...state,...progress,items:[...items.values()]};
 }
@@ -255,7 +255,8 @@ async function reconcileReviewTrash(state,call) {
   else if(item.state==='in_trash'||item.dedupKey&&trash.dedupKeys.has(item.dedupKey)){const result=await call('itemState',{mediaKey:item.mediaKey});if(['active','in_trash'].includes(result.state))next=result.state;}
   items.push({...item,state:next,revision:(item.revision||0)+(next!==item.state?1:0)});
  }
- return {...state,items};
+ const newlyTrashed=items.filter(item=>item.state==='in_trash'&&state.items.find(previous=>previous.mediaKey===item.mediaKey)?.state!=='in_trash');
+ return {...state,items,lifetimeFreed:(state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes)+reviewStorage(newlyTrashed).bytes};
 }
 async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},target=50,maxPages=12}) {
  let state=await read();
@@ -321,7 +322,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   if(!response.ok)throw Error(`Sync HTTP ${response.status}`);
   return response.json();
  }
- async function sync(scope,state,save) {
+ async function sync(scope,state,save,rebuild=async value=>value) {
   if(blocked||!settings.url||!settings.token)return state;
   status('Syncing\u2026');
   try {
@@ -340,12 +341,19 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
     const entry=history.findLast(entry=>entry.key===item.mediaKey&&entry.decision===value);
     return {...item,decision:value,revision:!dirty&&entry&&(value!==item.decision||!item.revision)?entry.revision:item.revision};
    });
-   let next={...state,history,items,syncDecisions:decisions};
+   let next={...state,history,items,syncDecisions:decisions,lifetimeFreed:Math.max(state.lifetimeFreed||0,remote.progress.lifetimeFreed||0,reviewStorage(items.filter(item=>item.state==='in_trash')).bytes)};
+   if(!state.started&&!state.items.length&&!state.history.length&&!dirty&&Object.keys(pending).length===0&&(remote.progress.started||Object.keys(decisions).length)){
+    const restored=remote.progress.items?.map(item=>({...item}))||Object.keys(decisions).map(mediaKey=>({mediaKey,revision:history.findLast(entry=>entry.key===mediaKey)?.revision||0,state:'active'}));
+    for(const mediaKey of Object.keys(decisions))if(!restored.some(item=>item.mediaKey===mediaKey))restored.push({mediaKey,revision:history.findLast(entry=>entry.key===mediaKey)?.revision||0,state:'active'});
+    next=await rebuild({...next,started:!!remote.progress.started,items:restored.map(item=>({...item,name:item.mediaKey,type:item.type||'photo',decision:decisions[item.mediaKey]??null,needsPreview:true})),lifetimeFreed:remote.progress.lifetimeFreed||0});
+   }
+   const progress=reviewSyncProgress(next,decisions);
+   const progressDirty=dirty||JSON.stringify(progress)!==JSON.stringify(state.syncCheckpoint)&&state.items.length>0;
    if(dirty){
     await request(scope,'api/undo','PUT',{history});
-    await request(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
    }
-   next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress});
+   if(progressDirty)await request(scope,'api/progress','PUT',progress);
+   next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress,syncCheckpoint:progress});
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return state;}
  }
@@ -371,6 +379,22 @@ function validateSyncSettings(url,token) {
  const parsed=new URL(url);
  if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash||parsed.pathname!=='/'||token.length>4096||!token||/[\r\n]/.test(token))throw Error('Enter an HTTPS Worker origin and sync token.');
  return {url:parsed.origin,token};
+}
+
+function reviewSyncProgress(state,decisions=state.syncDecisions||{}) {
+ const fields=['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent'];
+ return {started:!!state.started,reviewed:Object.keys(decisions).length,items:state.items.map(item=>Object.fromEntries(fields.filter(field=>item[field]!==undefined).map(field=>[field,item[field]]))),lifetimeFreed:state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes};
+}
+async function rebuildSyncedReview(state,call) {
+ const items=new Map(state.items.map(item=>[item.mediaKey,item])),seen=new Set();let cursor=null,exhausted=false;
+ for(let count=0;count<12;count++){
+  const page=await call('library',{cursor});
+  for(const item of page.items){const old=items.get(item.mediaKey),storage=Object.fromEntries(['size','spaceTaken','takesUpSpace'].map(field=>[field,item[field]??old?.[field]]));items.set(item.mediaKey,{...old,...item,...storage,decision:state.syncDecisions[item.mediaKey]??null,state:old?.state||'active',revision:old?.revision||0,needsPreview:false});}
+  if(page.nextPageId&&(page.nextPageId===cursor||seen.has(page.nextPageId)))throw Error('Google repeated a library page during sync recovery.');
+  cursor=page.nextPageId;exhausted=!cursor;seen.add(cursor);
+  if(exhausted||[...items.values()].filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash').length>=50)break;
+ }
+ return {...state,items:[...items.values()],started:true,cursor,exhausted};
 }
 
 async function createPairingStore({GM,database,crypto}) {
@@ -909,7 +933,7 @@ function mountPhotosSwipe(environment) {
  pairAgain.onclick=()=>{settingsPanel.open=true;pairingPanel.open=true;$('pair-code').focus();};dismissUnpaired.onclick=()=>{unpairedBanner.hidden=true;};pairedNotice.onclick=()=>{settingsPanel.open=true;devicesPanel.open=true;return run(showDevices);};
  pairSubmit.onclick=()=>run(async()=>{const url=validateSyncSettings($('sync-url').value.trim(),'pairing').url,code=$('pair-code').value.trim(),name=$('pair-name').value.trim();if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');const result=await syncClient.pair(url,code,name,window.navigator?.platform||'Browser');const settings={url,token:result.token,onboardingDismissed:true};await (await pairingPromise).saveSettings(settings);$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;unpairedBanner.hidden=true;pairingPanel.open=false;await synchronize();await showDevices();});
  const pendingDecisions=[];let savingDecisions=false;
- const synchronize=async()=>{state=await syncClient.sync(identity.account,state,async next=>{if(leaseError)throw leaseError;await db.lease(identity.account,owner);return db.save(identity.account,next);});};
+ const synchronize=async()=>{state=await syncClient.sync(identity.account,state,async next=>{if(leaseError)throw leaseError;await db.lease(identity.account,owner);return db.save(identity.account,next);},next=>rebuildSyncedReview(next,call));};
  const readyMessage=()=>syncEnabled?`Ready. Decisions are saved locally with sync enabled. ${syncSummary}`:'Ready. Decisions are saved locally on this browser.';
  const idleMessage=()=>state.job?'A saved album operation is ready to retry.':readyMessage();
  const message=value=>{$('status').textContent=value;};
@@ -1004,7 +1028,7 @@ function mountPhotosSwipe(environment) {
   if(next&&underCard.querySelector('img')?.dataset?.key!==next.mediaKey){try{const preview=document.createElement('img');preview.dataset.key=next.mediaKey;preview.alt='';preview.draggable=false;preview.src=mediaURL(next.thumbUrl,false,previewSize());underCard.replaceChildren(preview);}catch{underCard.replaceChildren();}}
   if(!next)underCard.replaceChildren();underCard.hidden=!next;
   preloadReview(item);
-  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
+  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total) \u00b7 Lifetime freed: ${bytes(state.lifetimeFreed??reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes)}`;
   const entries=[...(state.history||[])].reverse(),nextUndo=entries.find(entry=>canUndoReview(state,entry));
   const decisionLabel=value=>value==='remove'?'Queue':value==='keep'?'Keep':'Unreviewed';
   const historyLabel=entry=>`${state.items.find(item=>item.mediaKey===entry.key)?.name||entry.key} \u00b7 ${decisionLabel(entry.previous)} \u2192 ${decisionLabel(entry.decision)}`;
@@ -1024,7 +1048,7 @@ function mountPhotosSwipe(environment) {
   trashList.replaceChildren();
   for(const candidate of candidates){
    const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');
-   image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
+   if(candidate.thumbUrl)image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
    label.textContent=`${candidate.name} \u00b7 ${candidate.type} \u00b7 ${candidate.date?new Date(candidate.date).toLocaleDateString():'Unknown date'} \u00b7 ${candidate.queueSent?'Sent to review album':'Queued'} \u00b7 ID: ${candidate.mediaKey}`;
    label.style.cssText='white-space:normal;overflow-wrap:anywhere';
    button.append(image,label);button.setAttribute('aria-label',`Inspect ${label.textContent}`);
@@ -1032,7 +1056,7 @@ function mountPhotosSwipe(environment) {
   }
   $('queue-title').textContent=`Removal queue (${queue.length})`;
   $('queue').replaceChildren();
-  for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
+  for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');if(item.thumbUrl)image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
   $('remove').textContent=inspected?'Back to review':'\u00d7 Queue';$('keep').textContent=inspected?'Keep instead':'\u2713 Keep';
   $('send').textContent=state.job?'Retry saved album operation':'Send to review album';
   $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/album/${encodeURIComponent(state.albumKey)}`;

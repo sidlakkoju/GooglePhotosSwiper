@@ -409,19 +409,19 @@ test('Trash completion status resets on reload and cached-page restore while est
  };
  const mounted=await mountedReview([item('previous',{decision:'remove',state:'in_trash',spaceTaken:55000}),...candidates],{fetch,confirm:()=>true});
  const ready='Ready. Decisions are saved locally on this browser.';
- assert.match(mounted.nodes.get('stats').textContent,/In Trash: 55 KB \(running total\)$/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 55 KB \(running total\)/);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  await mounted.click('move-trash');
  assert.equal(mounted.nodes.get('status').textContent,'Verified 5 items in Trash.');
- assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  await mounted.environment.window.listeners.pageshow({persisted:true});
  assert.equal(mounted.nodes.get('status').textContent,ready);
- assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
  assert.equal(reloaded.nodes.get('status').textContent,ready);
- assert.match(reloaded.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
+ assert.match(reloaded.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  assert.equal(reloaded.nodes.get('move-trash').textContent,'Move 0 items to Trash');
 });
 test('mounted Trash and deleted-item checks retain all 45 undecided items despite six older dedup matches',async()=>{
@@ -665,7 +665,7 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
  const stats=mounted.nodes.get('stats').textContent;
- assert.equal(stats,'0 to review · 2/2 reviewed · Queue: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total)');
+ assert.equal(stats,'0 to review · 2/2 reviewed · Queue: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total) · Lifetime freed: 112 KB');
  assert.equal(stats.match(/estimated savings/g).length,1);
 });
 test('mounted Keep names the decided item after advancing and during candidate inspection',async()=>{
@@ -841,7 +841,7 @@ test('main and visible sync status report successful sync, failures and disablin
  const db=await openReviewDatabase(reopened.environment.window.indexedDB);
  await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  vm.runInNewContext(source,reopened.environment);await reopened.nodes.get('launcher').onclick();
- assert.equal(requests,1);assert.match(reopened.nodes.get('status').textContent,/sync enabled.*Synced/);
+ assert.equal(requests,2);assert.match(reopened.nodes.get('status').textContent,/sync enabled.*Synced/);
  assert.match(reopened.nodes.get('sync-status').textContent,/^Synced/);
  assert.equal(reopened.nodes.get('sync-settings').open,false);
  fail=true;await reopened.nodes.get('launcher').onclick();
@@ -1516,4 +1516,65 @@ test('decision history caps visible rows while retaining all Undo entries',async
  assert.equal(rows[100].textContent,'Showing the latest 100 of 105 decisions.');
  assert.match(rows[0].textContent,/synthetic-104-/);
  assert.equal((await mounted.read()).history.length,105);
+});
+
+
+test('paired wiped database rebuilds synced batch, Undo and storage totals before rendering cards',async()=>{
+ const fault={},mounted=bundleEnvironment(fault),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ mounted.environment.AbortSignal=AbortSignal;
+ const credentials={url:'https://sync.example',token:'synthetic-token',deviceId:'synthetic-device'};
+ mounted.environment.GM={getValue:async()=>credentials,setValue:async()=>{},deleteValue:async()=>{}};
+ const items=Array.from({length:64},(_,index)=>({mediaKey:`QA-DUMMY-${index}`,type:'photo',size:index===9?112000:1000,state:index===9?'in_trash':'active',revision:index<10?1:0}));
+ const decisions=items.slice(0,10).map((item,index)=>({id:item.mediaKey,decision:index===9?'remove':'keep'}));
+ const history=decisions.slice(0,5).map(entry=>({key:entry.id,previous:null,decision:entry.decision,revision:1}));
+ const remote={decisions,history,progress:{started:true,reviewed:10,items,lifetimeFreed:224000}};
+ let finishState,finishLibrary,stateStarted,libraryStarted,finishSave;
+ const stateGate=new Promise(resolve=>{finishState=resolve;}),libraryGate=new Promise(resolve=>{finishLibrary=resolve;});
+ const fetchingState=new Promise(resolve=>{stateStarted=resolve;}),fetchingLibrary=new Promise(resolve=>{libraryStarted=resolve;});
+ fault.saveGate=new Promise(resolve=>{finishSave=resolve;});
+ const requests=[];
+ mounted.environment.window.fetch=async(url,options)=>{
+  requests.push([new URL(url).pathname,options.method]);
+  if(new URL(url).origin==='https://sync.example'){
+   if(options.method==='GET'){stateStarted();await stateGate;}
+   return {ok:true,json:async()=>remote};
+  }
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='lcxiM'){libraryStarted();await libraryGate;}
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='lcxiM'?[items.filter(item=>item.state!=='in_trash').map(item=>[item.mediaKey,['https://lh3.googleusercontent.com/synthetic'],1720000000000,'synthetic-dedup',0,{396644657:[item.mediaKey]}]),null]:[])};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ const opening=mounted.nodes.get('launcher').onclick();
+ try{
+  await fetchingState;assert.equal(mounted.nodes.get('media').childNodes.length,0);assert.equal(mounted.nodes.get('keep').disabled,true);
+  finishState();await fetchingLibrary;assert.equal(mounted.nodes.get('media').childNodes.length,0);
+  finishLibrary();await new Promise(resolve=>setTimeout(resolve,20));assert.equal(mounted.nodes.get('media').childNodes.length,0);assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
+ }finally{finishState();finishLibrary();fault.saveGate=null;finishSave();}
+ await opening;
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB),restored=await db.read(account);
+ assert.equal(restored.started,true);assert.equal(restored.items.length,64);assert.equal(restored.items.filter(item=>item.decision).length,10);
+ assert.deepEqual(restored.history,history);assert.equal(canUndoReview(restored,history.at(-1)),true);assert.equal(restored.lifetimeFreed,224000);
+ assert.match(mounted.nodes.get('stats').textContent,/54 to review · 10\/64 reviewed.*In Trash: 112 KB.*Lifetime freed: 224 KB/);
+ assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: QA-DUMMY-4/);
+ assert.match(mounted.nodes.get('caption').textContent,/^QA-DUMMY-10/);
+ assert.equal(mounted.nodes.get('media').querySelector('img').src.includes('synthetic'),true);
+ assert.equal(requests.filter(([path])=>path==='/api/state').length,1);
+});
+
+test('paired wiped database falls back without cards or a blocking error when state fetch fails',async()=>{
+ const mounted=bundleEnvironment();mounted.environment.AbortSignal=AbortSignal;
+ const credentials={url:'https://sync.example',token:'synthetic-token',deviceId:'synthetic-device'};
+ mounted.environment.GM={getValue:async()=>credentials,setValue:async()=>{},deleteValue:async()=>{}};
+ let syncRequests=0;
+ mounted.environment.window.fetch=async(url,options)=>{
+  if(new URL(url).origin==='https://sync.example'){syncRequests++;throw Error('Synthetic offline');}
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='lcxiM'?[[['QA-FRESH',['https://lh3.googleusercontent.com/synthetic'],1720000000000,'synthetic-dedup',0,{396644657:['QA-FRESH']}]],null]:[])};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);await mounted.nodes.get('launcher').onclick();
+ assert.equal(syncRequests,1);assert.equal(mounted.nodes.get('media').querySelector('img'),null);
+ assert.match(mounted.nodes.get('sync-status').textContent,/Synthetic offline.*saved locally/);
+ assert.match(mounted.nodes.get('stats').textContent,/0\/0 reviewed/);assert.equal(mounted.nodes.get('load').disabled,false);
+ await mounted.nodes.get('load').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^QA-FRESH/);assert.equal(mounted.nodes.get('keep').disabled,false);
 });

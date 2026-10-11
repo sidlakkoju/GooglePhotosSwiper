@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage} from '../lib/userscript-core.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
-import {createSyncClient,markSyncChanges,validateSyncSettings} from '../lib/userscript-sync.mjs';
+import {createSyncClient,markSyncChanges,validateSyncSettings,reviewSyncProgress,rebuildSyncedReview} from '../lib/userscript-sync.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
@@ -355,4 +355,39 @@ test('device management rejects missing credentials without making requests',asy
   for(const action of [()=>client.devices(),()=>client.rename('caller','Browser'),()=>client.revoke('caller'),()=>client.revokeOthers()])await assert.rejects(action,/Configure sync to manage paired devices/);
  }
  assert.equal(requests,0);
+});
+
+
+test('progress checkpoints persist only recovery metadata and reject private or malformed fields',async()=>{
+ const e=env(),state={started:true,lifetimeFreed:224000,items:[{mediaKey:'QA-TRASH',type:'photo',size:112000,spaceTaken:112000,takesUpSpace:true,state:'in_trash',revision:2,queueSent:true,thumbUrl:'https://example.test/private',dedupKey:'private',name:'private',location:[1,2]}]};
+ const progress=reviewSyncProgress(state,{'QA-TRASH':'remove'});
+ assert.equal((await call(e,'progress','PUT',progress)).status,200);
+ assert.deepEqual((await (await call(e,'state')).json()).progress,progress);
+ for(const field of ['thumbUrl','dedupKey','name','location'])assert.equal(JSON.stringify(progress).includes(field),false);
+ for(const change of [{thumbUrl:'https://example.test/private'},{revision:-1},{size:-1},{state:'unknown'},{queueSent:'yes'},{mediaKey:'invalid/id'}]){
+  assert.equal((await call(e,'progress','PUT',{...progress,items:[{...progress.items[0],...change}]})).status,400);
+ }
+ for(const lifetimeFreed of [-1,'112000',null])assert.equal((await call(e,'progress','PUT',{...progress,lifetimeFreed})).status,400);
+});
+
+test('legacy state recovery restores reviewed IDs and Undo revisions before the first library card',async()=>{
+ const statuses=[],client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>new Response(JSON.stringify({decisions:[{id:'QA-KEEP',decision:'keep'}],history:[{key:'QA-KEEP',previous:null,decision:'keep',revision:3}],progress:{started:true,reviewed:1}}))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let rebuilt=false,saved=false;
+ const state=await client.sync('qa',{started:false,items:[],history:[],revision:0},async value=>{assert.equal(rebuilt,true);saved=true;return value;},async value=>{
+  const result=await rebuildSyncedReview(value,async()=>({items:[{mediaKey:'QA-KEEP',thumbUrl:'https://example.test/synthetic'},{mediaKey:'QA-FRESH',thumbUrl:'https://example.test/synthetic'}],nextPageId:null}));
+  rebuilt=true;return result;
+ });
+ assert.equal(saved,true);assert.equal(state.started,true);assert.equal(state.items[0].decision,'keep');assert.equal(canUndoReview(state,state.history[0]),true);
+ assert.deepEqual(state.items.filter(item=>!item.decision).map(item=>item.mediaKey),['QA-FRESH']);assert.match(statuses.at(-1),/^Synced/);
+});
+
+test('recovery read failures preserve empty local state and allow a later retry',async()=>{
+ const statuses=[],client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>new Response(JSON.stringify({decisions:[{id:'QA-KEEP',decision:'keep'}],history:[],progress:{started:true,reviewed:1}}))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ const empty={started:false,items:[],history:[],revision:0};let saves=0;
+ const save=async value=>{saves++;return value;};
+ assert.equal(await client.sync('qa',empty,save,()=>{throw Error('Synthetic preview failure');}),empty);
+ assert.equal(saves,0);assert.match(statuses.at(-1),/Synthetic preview failure.*saved locally/);
+ const restored=await client.sync('qa',empty,save);assert.equal(saves,1);assert.equal(restored.items[0].decision,'keep');
 });
