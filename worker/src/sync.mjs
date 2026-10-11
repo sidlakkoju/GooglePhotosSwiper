@@ -41,7 +41,12 @@ export async function syncRequest(request,env={}) {
   const read=async()=>{
    const rows=await db.prepare('SELECT id, decision FROM decisions WHERE scope = ?').bind(scope).all();
    const record=await db.prepare('SELECT progress, history FROM review_state WHERE scope = ?').bind(scope).first();
-   return {decisions:rows.results,progress:record?JSON.parse(record.progress):{},history:record?JSON.parse(record.history):[]};
+   const progress=record?JSON.parse(record.progress):{};
+   if(Object.hasOwn(progress,'items')){
+    const items=await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all();
+    progress.items=items.results.map(item=>JSON.parse(item.data));
+   }
+   return {decisions:rows.results,progress,history:record?JSON.parse(record.history):[]};
   };
   if(route==='/api/state'&&method==='GET'){
    const state=await read();
@@ -61,14 +66,10 @@ export async function syncRequest(request,env={}) {
    await db.prepare("INSERT OR IGNORE INTO review_state (scope, progress, history) VALUES (?, '{}', '[]')").bind(scope).run();
    if(route==='/api/progress'){
     if(!value||Object.keys(value).some(key=>!['started','reviewed','items','lifetimeFreed'].includes(key))||typeof value.started!=='boolean'||!Number.isSafeInteger(value.reviewed)||value.reviewed<0||Object.hasOwn(value,'items')&&!progressItemsValid(value.items)||Object.hasOwn(value,'lifetimeFreed')&&(!Number.isSafeInteger(value.lifetimeFreed)||value.lifetimeFreed<0))throw Error('Invalid progress');
-    const incoming=JSON.stringify(value),items=JSON.stringify(Object.fromEntries((value.items||[]).map(item=>[item.mediaKey,item])));
-    await db.prepare(`UPDATE review_state SET progress =
-     CASE WHEN json_type(?, '$.items') IS NULL THEN json_patch(progress, ?)
-     ELSE json_set(json_patch(progress, ?), '$.items', json((
-      SELECT json_group_array(json(value)) FROM json_each(json_patch(
-       (SELECT json_group_object(json_extract(value, '$.mediaKey'), json(value)) FROM json_each(review_state.progress, '$.items')), ?
-      ))
-     ))) END WHERE scope = ?`).bind(incoming,incoming,incoming,items,scope).run();
+    const incoming=JSON.stringify({...value,...(Object.hasOwn(value,'items')?{items:[]}:{})});
+    const statements=(value.items||[]).map(item=>db.prepare('INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data').bind(scope,item.mediaKey,JSON.stringify(item)));
+    for(let index=0;index<statements.length;index+=100)await db.batch(statements.slice(index,index+100));
+    await db.prepare('UPDATE review_state SET progress = json_patch(progress, ?) WHERE scope = ?').bind(incoming,scope).run();
    }else if(method==='PUT'){
     if(!historyValid(value.history)||Object.keys(value).length!==1)throw Error('Invalid undo history');
     await db.prepare('UPDATE review_state SET history = ? WHERE scope = ?').bind(JSON.stringify(value.history),scope).run();

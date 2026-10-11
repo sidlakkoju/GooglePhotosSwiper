@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage} from '../lib/userscript-core.mjs';
+import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage,reviewQueue,reviewTrashCandidates,sendReviewAlbum} from '../lib/userscript-core.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
 import {createSyncClient,markSyncChanges,validateSyncSettings,reviewSyncProgress,rebuildSyncedReview} from '../lib/userscript-sync.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
- constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
+ constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql','0003_review_items.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
  prepare(sql){
   const statement=this.sqlite.prepare(sql);
   const bound=args=>({all:async()=>({results:statement.all(...args)}),first:async()=>statement.get(...args)||null,run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:Number(this.sqlite.prepare('SELECT changes() AS n').get().n)}})});
@@ -410,8 +410,9 @@ test('a partial device checkpoint preserves remote trash rows through a wiped-st
  assert.equal(progress.items.find(item=>item.mediaKey===trash.mediaKey).state,'active');
 });
 
-for(const [name,count,keyLength] of [['row limit',2101,10],['byte limit',1200,256]])test(`large checkpoints batch within the ${name} and restore all rows`,async()=>{
+for(const [name,count,keyLength] of [['row limit',2101,10],['byte limit',1200,256],['D1 storage limit',6500,256]])test(`large checkpoints batch within the ${name} and restore all rows`,async()=>{
  const e=env(),writes=[],statuses=[];
+ e.DB.sqlite.exec("CREATE TRIGGER progress_size_limit BEFORE UPDATE ON review_state WHEN length(CAST(NEW.progress AS BLOB)) + length(CAST(NEW.history AS BLOB)) > 2000000 BEGIN SELECT RAISE(ABORT, 'D1 row too large'); END");
  const client=createSyncClient({status:value=>statuses.push(value),fetch:async(url,options)=>{
   if(new URL(url).pathname==='/api/progress')writes.push(options.body);
   return syncRequest(new Request(url,options),e);
@@ -426,6 +427,9 @@ for(const [name,count,keyLength] of [['row limit',2101,10],['byte limit',1200,25
  assert.match(statuses.at(-1),/^Synced/);assert.ok(writes.length>1);
  for(const body of writes){assert.ok(new TextEncoder().encode(body).length<=262144);assert.ok(JSON.parse(body).items.length<=2000);}
  assert.equal(saved.syncCheckpoint.items.length,count);
+ assert.ok(Buffer.byteLength(e.DB.sqlite.prepare('SELECT progress FROM review_state').get().progress)<2000000);
+ assert.equal(e.DB.sqlite.prepare('SELECT COUNT(*) AS count FROM review_items').get().count,count);
+ if(name==='D1 storage limit')assert.ok(Buffer.byteLength(JSON.stringify(saved.syncCheckpoint))>2000000);
  const restored=await client.sync('default',{started:false,items:[],history:[]},async value=>value);
  assert.equal(restored.items.length,count);assert.deepEqual(restored.history,history);
  assert.equal(canUndoReview(restored,history[0]),true);
@@ -433,4 +437,40 @@ for(const [name,count,keyLength] of [['row limit',2101,10],['byte limit',1200,25
  const writeCount=writes.length;
  await client.sync('default',saved,async value=>value);
  assert.equal(writes.length,writeCount);
+});
+
+for(const checkpoint of [false,true])test(`unsighted restored removes stay out of album and Trash actions with ${checkpoint?'item':'legacy'} progress`,async()=>{
+ const remote={decisions:[{id:'seen',decision:'remove'},{id:'unseen',decision:'remove'}],history:[],progress:{started:true,reviewed:2,...(checkpoint?{items:[{mediaKey:'seen',state:'active'},{mediaKey:'unseen',state:'active'}]}:{})}};
+ const client=createSyncClient({fetch:async()=>new Response(JSON.stringify(remote))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let state=await client.sync('default',{started:false,items:[],history:[]},async value=>value,value=>rebuildSyncedReview(value,async()=>({items:[{mediaKey:'seen',dedupKey:'seen-trash'},...Array.from({length:50},(_,index)=>({mediaKey:`fresh-${index}`}))],nextPageId:'older'})));
+ assert.equal(state.exhausted,false);
+ assert.equal(state.items.find(item=>item.mediaKey==='unseen').needsPreview,true);
+ assert.deepEqual(reviewQueue(state).map(item=>item.mediaKey),['seen']);
+ assert.deepEqual(reviewTrashCandidates(state).map(item=>item.dedupKey),['seen-trash']);
+ const added=[];
+ await sendReviewAlbum({read:async()=>state,save:async value=>{assert.ok(!value.job?.mediaKeys.includes('unseen'));state=value;return value;},title:'Review',call:async(action,args)=>{
+  if(action==='findAlbum')return {albumKey:'album'};
+  if(action==='albumMembers')return {keys:added,dedupKeys:[]};
+  if(action==='addToAlbum'){added.push(...args.mediaKeys);return {};}
+  throw Error(`Unexpected action ${action}`);
+ }});
+ assert.deepEqual(added,['seen']);
+ assert.equal(state.job,null);
+ state=mergeReviewPage(state,{items:[{mediaKey:'unseen',dedupKey:'unseen-trash'}],nextPageId:null},'older');
+ assert.deepEqual(reviewQueue(state).map(item=>item.mediaKey),['unseen']);
+ assert.deepEqual(reviewTrashCandidates(state).map(item=>item.dedupKey),['seen-trash','unseen-trash']);
+});
+
+test('item storage migration preserves legacy checkpoints and keeps metadata-only scopes unchanged',async()=>{
+ const db=new DatabaseSync(':memory:');
+ db.exec(readFileSync(new URL('../worker/migrations/0001_init.sql',import.meta.url),'utf8'));
+ const items=[{mediaKey:'old',state:'in_trash',revision:2,queueSent:true},{mediaKey:'other',state:'active'}];
+ db.prepare('INSERT INTO review_state VALUES (?, ?, ?)').run('legacy',JSON.stringify({started:true,reviewed:2,items,lifetimeFreed:100}),'[]');
+ db.prepare('INSERT INTO review_state VALUES (?, ?, ?)').run('metadata',JSON.stringify({started:true,reviewed:1}),'[]');
+ db.exec(readFileSync(new URL('../worker/migrations/0003_review_items.sql',import.meta.url),'utf8'));
+ assert.deepEqual(db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').all('legacy').map(row=>JSON.parse(row.data)),items);
+ assert.deepEqual(JSON.parse(db.prepare('SELECT progress FROM review_state WHERE scope = ?').get('legacy').progress),{started:true,reviewed:2,items:[],lifetimeFreed:100});
+ assert.deepEqual(JSON.parse(db.prepare('SELECT progress FROM review_state WHERE scope = ?').get('metadata').progress),{started:true,reviewed:1});
+ db.close();
 });

@@ -173,8 +173,8 @@ function createPhotosAPI(environment) {
 
 const emptyReview = () => ({revision:0,history:[],items:[],cursor:null,started:false,exhausted:false,albumKey:null,job:null});
 const reviewDeck = state => state.items.filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash');
-const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.queueSent&&item.state!=='in_trash');
-const reviewTrashCandidates = state => state.items.filter(item=>item.decision==='remove'&&item.state!=='in_trash');
+const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.needsPreview&&!item.queueSent&&item.state!=='in_trash');
+const reviewTrashCandidates = state => state.items.filter(item=>item.decision==='remove'&&!item.needsPreview&&item.state!=='in_trash');
 function reviewStorage(items) {
  return items.reduce((total,item)=>{
   const bytes=item.takesUpSpace===false?0:item.spaceTaken??item.size;
