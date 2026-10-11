@@ -224,7 +224,7 @@ function fakeIndexedDB(fault={}) {
    const staged=new Map(stores.get(name));let aborted=false;
    const tx={objectStore:()=>({
     get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
+    put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -877,5 +877,55 @@ test('review preloads match card sizing, respect compact viewports and refresh o
   assert.ok(created.every(image=>new URL(image.src).searchParams.get('authuser')==='2'));
   await mounted.click('keep');assert.equal(new URL(media.querySelector('img').src).pathname.endsWith(expected),true);
   mounted.nodes.get('close').onclick();
+ }
+});
+
+
+test('ahead video completion does not write leases during an active sync',async()=>{
+ const response=Promise.withResolvers(),sync=Promise.withResolvers(),started=Promise.withResolvers(),fault={};
+ const indexedDB=fakeIndexedDB(fault);
+ const mounted=await mountedReview([item('first'),item('next'),item('ahead',{type:'video'})],{indexedDB,fetch:async(url,options)=>{
+  if(new URL(url).origin==='https://sync.example'){started.resolve();await sync.promise;return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};}
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  assert.equal(entry[0],'VrseUb');await response.promise;
+  return {ok:true,text:async()=>envelope(entry[0],[['ahead'],'https://lh3.googleusercontent.com/ahead-video'])};
+ }});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('first'),item('next'),item('ahead',{type:'video'})]});
+ await mounted.nodes.get('launcher').onclick();
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ mounted.nodes.get('sync-save').onclick();await started.promise;
+ const before=fault.leaseWrites;
+ response.resolve();await new Promise(resolve=>setImmediate(resolve));
+ try{assert.equal(fault.leaseWrites,before);}finally{sync.resolve();}
+ for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+});
+
+test('resize and enlarge preserve the displayed media while a decision awaits sync',async()=>{
+ for(const type of ['photo','video']){
+  let holdSync=false;
+  const sync=Promise.withResolvers(),started=Promise.withResolvers();
+  const mounted=await mountedReview([item('shown',{type,thumbUrl:'https://lh3.googleusercontent.com/shown'}),item('next',{thumbUrl:'https://lh3.googleusercontent.com/next'})],async url=>{
+   if(new URL(url).origin==='https://sync.example'){if(holdSync){started.resolve();await sync.promise;}return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};}
+   return {ok:true,text:async()=>envelope('VrseUb',[['shown'],'https://lh3.googleusercontent.com/shown-video'])};
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  mounted.environment.AbortSignal=AbortSignal;
+  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+  await mounted.click('sync-save');
+  holdSync=true;
+  const media=mounted.nodes.get('media'),node=media.childNodes[0],source=node.src,poster=node.poster;
+  const deciding=mounted.click('keep');await started.promise;
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+  media.getBoundingClientRect=()=>({width:900,height:500});
+  try{
+  mounted.environment.window.listeners.resize();
+  mounted.environment.window.listeners.keydown({key:'f',preventDefault(){},stopImmediatePropagation(){}});
+  assert.equal(media.childNodes[0],node);assert.equal(node.src,source);assert.equal(node.poster,poster);
+  }finally{sync.resolve();await deciding;}
+  assert.notEqual(media.childNodes[0],node);assert.match(media.childNodes[0].src,/next=w900-h500/);
  }
 });
