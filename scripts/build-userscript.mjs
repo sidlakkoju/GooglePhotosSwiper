@@ -4,7 +4,7 @@ const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.4
+// @version 1.2.7
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -16,7 +16,7 @@ const metadata=`// ==UserScript==
 // @license MIT
 // ==/UserScript==
 `;
-const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-qr','userscript-pairing','userscript-ui'];
+const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-qr','userscript-pairing','userscript-preload','userscript-ui'];
 const sources=await Promise.all(modules.map(name=>readFile(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8')));
 const sharedAPI=await readFile(new URL('../extension/photos-api.js',import.meta.url),'utf8');
 const bundled=[sharedAPI,...sources].map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n').replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`);

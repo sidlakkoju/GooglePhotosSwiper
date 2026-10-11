@@ -223,8 +223,8 @@ function fakeIndexedDB(fault={}) {
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -249,14 +249,14 @@ test('item revisions prevent stale undo after another tab changes or sends the s
  assert.throws(()=>decideReview(completed,'a',null,'remove',3),/changed/);assert.equal(completed.items[0].queueSent,true);
 });
 
-function bundleEnvironment() {
+function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
- const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:820,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
  const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
- const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
+ const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
@@ -315,7 +315,7 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('album').href,'https://photos.google.com/u/2/album/album');
- const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  mounted.nodes.get('keep').onclick();await idle();mounted.nodes.get('keep').onclick();await idle();
  const state=await db.read(account);await db.save(account,{...state,items:state.items.map(row=>row.mediaKey==='b'?{...row,state:'in_trash',revision:row.revision+1}:row)});
  fault.failSave=true;mounted.nodes.get('undo').onclick();await idle();
@@ -323,15 +323,15 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
  const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone for a.');
 });
-async function mountedReview(items,windowOverrides={}) {
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+async function mountedReview(items,windowOverrides={},fault={}) {
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(fault);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
  Object.assign(mounted.environment.window,windowOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  return {...mounted,click,read:()=>db.read(account)};
 }
 test('mounted undo restores undecided after queue, keep instead, and two undos',async()=>{
@@ -374,13 +374,13 @@ test('mounted undo survives a fresh script instance with the same IndexedDB',asy
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
  second.nodes.get('undo').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
  assert.equal(second.nodes.get('status').textContent,'Decision undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
@@ -394,7 +394,7 @@ test('mounted Trash is opt-in, confirms the exact count and verifies synthetic T
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
 });
 test('Trash completion status resets on reload and cached-page restore while estimates retain a running total',async()=>{
@@ -485,7 +485,7 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
  const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
- for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&mounted.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
 
@@ -884,4 +884,246 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
  mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
  await new Promise(resolve=>setImmediate(resolve));assert.equal(panel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
  assert.equal(calls.at(-1).options.method,'DELETE');assert.equal(calls.at(-1).options.body,JSON.stringify({id:'pair-id'}));
+});
+test('review preloads match card sizing, respect compact viewports and refresh on resize',async()=>{
+ for(const compact of [false,true]){
+  const created=[],mounted=await mountedReview(Array.from({length:6},(_,index)=>item(`sized-${index}`))),document=mounted.environment.document;
+  const create=document.createElement;
+  document.createElement=tag=>{const node=create(tag);if(tag==='img')created.push(node);return node;};
+  mounted.environment.window.matchMedia=query=>{assert.equal(query,'(max-width:760px), (pointer:coarse)');return {matches:compact};};
+  const media=mounted.nodes.get('media');media.getBoundingClientRect=()=>({width:compact?360:900,height:compact?260:500});
+  mounted.environment.window.listeners.resize();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(created.length,compact?2:3);
+  const expected=compact?'=w360-h260-k-no':'=w900-h500-k-no';
+  assert.ok([...created,media.querySelector('img')].every(image=>new URL(image.src).pathname.endsWith(expected)));
+  assert.ok(created.every(image=>new URL(image.src).searchParams.get('authuser')==='2'));
+  await mounted.click('keep');assert.equal(new URL(media.querySelector('img').src).pathname.endsWith(expected),true);
+  mounted.nodes.get('close').onclick();
+ }
+});
+
+
+test('ahead video completion does not write leases during an active sync',async()=>{
+ const response=Promise.withResolvers(),sync=Promise.withResolvers(),started=Promise.withResolvers(),fault={};
+ const indexedDB=fakeIndexedDB(fault);
+ const mounted=await mountedReview([item('first'),item('next'),item('ahead',{type:'video'})],{indexedDB,fetch:async(url,options)=>{
+  if(new URL(url).origin==='https://sync.example'){started.resolve();await sync.promise;return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};}
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  assert.equal(entry[0],'VrseUb');await response.promise;
+  return {ok:true,text:async()=>envelope(entry[0],[['ahead'],'https://lh3.googleusercontent.com/ahead-video'])};
+ }});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('first'),item('next'),item('ahead',{type:'video'})]});
+ await mounted.nodes.get('launcher').onclick();
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ mounted.nodes.get('sync-save').onclick();await started.promise;
+ const before=fault.leaseWrites;
+ response.resolve();await new Promise(resolve=>setImmediate(resolve));
+ try{assert.equal(fault.leaseWrites,before);}finally{sync.resolve();}
+ for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+});
+
+test('resize and enlarge preserve the displayed media while a decision awaits sync',async()=>{
+ for(const type of ['photo','video']){
+  let holdSync=false;
+  const sync=Promise.withResolvers(),started=Promise.withResolvers();
+  const mounted=await mountedReview([item('shown',{type,thumbUrl:'https://lh3.googleusercontent.com/shown'}),item('next',{thumbUrl:'https://lh3.googleusercontent.com/next'})],async url=>{
+   if(new URL(url).origin==='https://sync.example'){if(holdSync){started.resolve();await sync.promise;}return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};}
+   return {ok:true,text:async()=>envelope('VrseUb',[['shown'],'https://lh3.googleusercontent.com/shown-video'])};
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  mounted.environment.AbortSignal=AbortSignal;
+  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+  await mounted.click('sync-save');
+  holdSync=true;
+  const media=mounted.nodes.get('media'),node=media.childNodes[0],source=node.src,poster=node.poster;
+  const deciding=mounted.click('keep');await started.promise;
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+  media.getBoundingClientRect=()=>({width:900,height:500});
+  try{
+  mounted.environment.window.listeners.resize();
+  mounted.environment.window.listeners.keydown({key:'f',preventDefault(){},stopImmediatePropagation(){}});
+  assert.equal(media.childNodes[0],node);assert.equal(node.src,source);assert.equal(node.poster,poster);
+  }finally{sync.resolve();await deciding;}
+  assert.notEqual(media.childNodes[0],node);assert.match(media.childNodes[0].src,/next=w900-h500/);
+ }
+});
+
+function controlledCardAnimations(mounted){
+ const animations=[];
+ mounted.nodes.get('card').animate=(frames,options)=>{
+  let resolve;
+  const animation={frames,options,finished:new Promise(done=>{resolve=done;}),finish(){this.finishedInstantly=true;resolve();},cancel(){this.cancelled=true;resolve();}};
+  animations.push(animation);return animation;
+ };
+ return animations;
+}
+async function waitForReview(predicate){
+ for(let count=0;count<200;count++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,1));}
+ assert.fail('Synthetic review did not settle');
+}
+function pressReviewKey(mounted,key){mounted.environment.window.listeners.keydown({key,preventDefault(){},stopImmediatePropagation(){}});}
+
+for(const [key,button,decision,side] of [['ArrowLeft','remove','remove',-1],['ArrowRight','keep','keep',1]]){
+ test(`mounted ${key} and ${button} share the fly-off and Undo returns from that side`,async()=>{
+  const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
+  pressReviewKey(mounted,key);
+  await waitForReview(()=>animations.length===1);
+  assert.equal(animations[0].options.duration,250);
+  assert.match(animations[0].frames[1].transform,new RegExp(`translateX\\(${side*120}vw\\)`));
+  animations[0].finish();
+  await waitForReview(async()=>!mounted.nodes.get('overlay')['aria-busy'].includes('true'));
+  mounted.nodes.get(button).onclick();
+  await waitForReview(()=>animations.length===2);
+  assert.deepEqual(animations[1].frames,animations[0].frames);
+  mounted.nodes.get('undo').onclick();
+  assert.equal(animations[1].finishedInstantly,true);
+  await waitForReview(()=>animations.length===3);
+  assert.deepEqual(structuredClone(animations[2].frames),structuredClone([animations[1].frames[1],animations[1].frames[0]]));
+  assert.equal(animations[2].options.duration,250);
+  assert.equal((await mounted.read()).items[1].decision,null);
+  animations[2].finish();
+  await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+  assert.equal((await mounted.read()).items[0].decision,decision);
+ });
+}
+
+test('mounted ten rapid arrow inputs finish the old flight and persist ten ordered decisions',async()=>{
+ const mounted=await mountedReview(Array.from({length:11},(_,index)=>item(String(index)))),animations=controlledCardAnimations(mounted);
+ pressReviewKey(mounted,'ArrowLeft');
+ await waitForReview(()=>animations.length===1);
+ for(let index=1;index<10;index++)pressReviewKey(mounted,index%2?'ArrowRight':'ArrowLeft');
+ assert.equal(animations[0].finishedInstantly,true);
+ await waitForReview(()=>animations.length===10);
+ animations[9].finish();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ const state=await mounted.read();
+ assert.equal(state.history.length,10);
+ assert.deepEqual(state.items.slice(0,10).map(row=>row.decision),Array.from({length:10},(_,index)=>index%2?'keep':'remove'));
+ assert.equal(state.items[10].decision,null);
+});
+
+
+test('failed decisions discard the rest of a burst and accept fresh input',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
+ fault.failSave=true;
+ pressReviewKey(mounted,'ArrowLeft');pressReviewKey(mounted,'ArrowRight');pressReviewKey(mounted,'ArrowLeft');
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');
+ assert.equal((await mounted.read()).history.length,0);
+ fault.failSave=false;
+ await mounted.click('keep');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null,null]);
+});
+
+test('decision and Undo key repeats do not enqueue actions',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
+ pressReviewKey(mounted,'ArrowRight');
+ await waitForReview(()=>animations.length===1);
+ for(const key of ['ArrowLeft','ArrowRight','z','Z'])mounted.environment.window.listeners.keydown({key,repeat:true,preventDefault(){},stopImmediatePropagation(){}});
+ animations[0].finish();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
+ assert.equal(animations.length,1);
+});
+
+test('finished and interrupted fly-offs retain their pose until a slow save renders the next card',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault),animations=controlledCardAnimations(mounted);
+ let release;fault.holdSave=new Promise(resolve=>{release=resolve;});
+ pressReviewKey(mounted,'ArrowLeft');
+ await waitForReview(()=>animations.length===1);
+ animations[0].finish();
+ await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(animations[0].cancelled,undefined);
+ assert.match(mounted.nodes.get('caption').textContent,/^a /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ const swipe=mounted.nodes.get('swipe');
+ swipe.listeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,target:swipe});
+ swipe.listeners.pointerup({pointerId:1,clientX:100,clientY:0});
+ assert.equal(animations[0].cancelled,undefined);
+ fault.holdSave=null;release();
+ await waitForReview(()=>animations.length===2);
+ assert.equal(animations[0].cancelled,true);
+ animations[1].finish();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove','keep',null]);
+});
+
+test('an animation that never settles releases the review task at its deadline',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ let cancelled=false;
+ mounted.nodes.get('card').animate=()=>({finished:new Promise(()=>{}),finish(){},cancel(){cancelled=true;}});
+ pressReviewKey(mounted,'ArrowRight');
+ await new Promise(resolve=>setTimeout(resolve,400));
+ assert.equal(mounted.nodes.get('overlay')['aria-busy'],'false');
+ assert.equal(cancelled,true);
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+
+
+test('revoked userscript shows recovery, keeps local swipes and clears credentials',async()=>{
+ const mounted=await mountedReview([item('synthetic')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.AbortSignal=AbortSignal;
+ let requests=0;reopened.environment.window.fetch=async()=>{requests++;return new Response('{}',{status:401});};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);assert.equal((await db.settings()).token,'');
+ reopened.nodes.get('keep').onclick();await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
+ const saved=await mounted.read();assert.equal(saved.items[0].decision,'keep');assert.equal(saved.syncPending.synthetic,'keep');assert.equal(requests,1);
+ reopened.nodes.get('pair-again').onclick();assert.equal(reopened.nodes.get('enter-pairing-code').open,true);
+ reopened.nodes.get('dismiss-unpaired').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);
+});
+
+
+test('paired devices render names safely and inline rename and confirmed revoke refresh server state',async()=>{
+ const requests=[],prompts=[];let name='<synthetic>',active=true;
+ const mounted=await mountedReview([], {confirm:prompt=>{prompts.push(prompt);return true;},fetch:async(url,options)=>{
+  const path=new URL(url).pathname;requests.push([path,options.method]);
+  if(path==='/api/devices/qa'&&options.method==='PATCH')name=JSON.parse(options.body).name;
+  if(path==='/api/devices/qa'&&options.method==='DELETE')active=false;
+  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:active?[{id:'qa',name,platform:'Browser',created_at:1,last_seen_at:1,revoked_at:null,is_legacy:1}]:[]}:{decisions:[],history:[],progress:{}}};
+ }});
+ mounted.environment.AbortSignal=AbortSignal;mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';await mounted.click('sync-save');await mounted.click('refresh-devices');
+ const list=mounted.nodes.get('devices-list'),row=list.childNodes[0];assert.match(row.childNodes[0].textContent,/<synthetic>.*Legacy shared token/);
+ row.childNodes[1].onclick();row.childNodes[3].value='  QA phone  ';await row.childNodes[4].onclick();assert.equal(name,'QA phone');
+ await list.childNodes[0].childNodes[2].onclick();assert.equal(list.childNodes.length,0);assert.equal(prompts[0],'Revoke QA phone? It will stop syncing immediately.');
+ assert.ok(requests.some(([path,method])=>path==='/api/devices/qa'&&method==='PATCH'));
+});
+
+test('paired notice stays visible with settings closed and opens the device list',async()=>{
+ const requests=[];
+ const mounted=await mountedReview([], {fetch:async url=>{
+  const path=new URL(url).pathname;requests.push(path);
+  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:[]}:{decisions:[],history:[],progress:{},suggestRevokeLegacy:true}};
+ }});
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ await mounted.click('sync-save');
+ const notice=mounted.nodes.get('paired-notice'),settings=mounted.nodes.get('sync-settings');
+ assert.equal(settings.open,false);assert.equal(notice.hidden,false);
+ assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(notice));
+ await mounted.click('paired-notice');
+ assert.equal(settings.open,true);assert.equal(mounted.nodes.get('paired-devices').open,true);
+ assert.ok(requests.includes('/api/devices'));
+});
+
+test('device actions are disabled before configuration and after revoking this device',async()=>{
+ const requests=[];
+ const mounted=await mountedReview([], {confirm:()=>true,fetch:async(url,options)=>{
+  const path=new URL(url).pathname;requests.push([path,options.method]);
+  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:[{id:'caller',name:'This browser',platform:'Browser',created_at:1,last_seen_at:1,revoked_at:null}]}:{decisions:[],history:[],progress:{}}};
+ }});
+ for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
+ assert.equal(requests.length,0);
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';await mounted.click('sync-save');
+ for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,false);
+ await mounted.click('refresh-devices');await mounted.nodes.get('devices-list').childNodes[0].childNodes[2].onclick();
+ for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
+ assert.equal(mounted.nodes.get('devices-list').childNodes.length,0);
+ assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
 });
