@@ -484,9 +484,69 @@ test('Trash candidate list includes queued and sent items regardless of review f
 test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
- const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointermove({pointerId:1,clientX:120,clientY:25,preventDefault(){}});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
  for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
+});
+
+function swipeEvent(overrides={}) {
+ return {isPrimary:true,button:0,target:{tagName:'VIDEO'},pointerId:1,clientX:20,clientY:20,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...overrides};
+}
+test('swipes lock direction after slop and cancellation releases capture without deciding',async()=>{
+ for(const scenario of ['vertical','cancel','short','other-pointer']){
+  const mounted=await mountedReview([item('synthetic')]),media=mounted.nodes.get('media');
+  let captured=false,captures=0,releases=0;
+  media.setPointerCapture=id=>{assert.equal(id,1);captured=true;captures++;};
+  media.hasPointerCapture=()=>captured;
+  media.releasePointerCapture=()=>{captured=false;releases++;};
+  media.listeners.pointerdown(swipeEvent());assert.equal(captures,0);
+  const slop=swipeEvent({clientX:25,clientY:24});media.listeners.pointermove(slop);
+  assert.equal(captures,0);assert.equal(slop.prevented,undefined);
+  if(scenario==='vertical'){
+   const vertical=swipeEvent({clientX:24,clientY:35});media.listeners.pointermove(vertical);
+   assert.equal(vertical.prevented,undefined);
+   media.listeners.pointermove(swipeEvent({clientX:150,clientY:35}));
+   assert.equal(captures,0);
+  }else{
+   const move=swipeEvent({clientX:scenario==='short'?40:150});media.listeners.pointermove(move);
+   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(media.style.transform,/translateX/);
+   if(scenario==='other-pointer'){
+    media.listeners.pointercancel(swipeEvent({pointerId:2}));assert.equal(captured,true);
+   }
+   if(scenario!=='short')media.listeners.pointercancel(swipeEvent());
+  }
+  media.listeners.pointerup(swipeEvent({clientX:scenario==='short'?40:150}));
+  assert.equal(media.style.transform,'');assert.equal(captured,false);
+  assert.equal(releases,scenario==='vertical'?0:1);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+test('deck videos support tap playback and swiping with native controls only when enlarged',async()=>{
+ const mounted=await mountedReview([item('synthetic-video',{type:'video'}),item('next')],{fetch:async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])})});
+ const media=mounted.nodes.get('media'),video=media.querySelector('video');
+ for(let count=0;count<100&&!video.src;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.ok(video.src);assert.equal(video.controls,false);
+ assert.equal(video.paused,true);
+ media.listeners.click(swipeEvent());assert.equal(video.paused,false);
+ media.listeners.click(swipeEvent());assert.equal(video.paused,true);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);
+ media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
+ assert.equal((await mounted.read()).items[0].decision,null);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);
+ media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
+ const click=swipeEvent();media.listeners.click(click);assert.equal(click.prevented,true);assert.equal(click.stopped,true);
+ for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+test('overlay isolates pointer touch wheel and all key events while preserving native defaults',async()=>{
+ const mounted=await mountedReview([item('synthetic')]),overlay=mounted.nodes.get('overlay');
+ for(const type of ['pointerdown','pointermove','pointerup','pointercancel','touchstart','touchmove','touchend','touchcancel','wheel','keydown','keyup','keypress']){
+  const event=swipeEvent();overlay.listeners[type](event);assert.equal(event.stopped,true,type);assert.equal(event.prevented,undefined,type);
+ }
+ const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
+ const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+ assert.match(source,/\.card\{touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
 
 test('obsolete userscript artifact is absent',async()=>{await assert.rejects(access(new URL('../userscript/photos-swipe.user.js',import.meta.url)),{code:'ENOENT'});});
@@ -718,7 +778,8 @@ test('enlarged video owns Space down and up without scrolling, closing or replac
  const {nodes,root}=mounted,video=nodes.get('media').querySelector('video');
  assert.ok(video);assert.equal(video.paused,true);assert.equal(video.src,undefined);
  response.resolve();
- await waitFor(()=>video.src&&video.paused===false,'Mounted video did not start playing');
+ await waitFor(()=>video.src,'Mounted video source did not load');
+ assert.equal(video.paused,true);nodes.get('media').listeners.click(swipeEvent());
  const dispatch=(type,key,extra={})=>{
   const event={type,key,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;},...extra};
   mounted.environment.window.listeners[type](event);
