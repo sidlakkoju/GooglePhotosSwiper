@@ -470,6 +470,28 @@ test('a pinned viewer decision skips a replaced head even if its previous decisi
  assert.deepEqual(writes,[]);
 });
 
+for(const input of ['viewer','pointer'])test(`reload cancels a queued ${input} decision before replacing the pending head`,async()=>{
+ const {context,$,writes}=review();
+ const {callbacks}=viewerReview(context);
+ let decision;
+ if(input==='viewer')decision=assert.rejects(callbacks.decide('keep','first'),/could not be saved/);
+ else{
+  $('card').onpointerdown(pointer(200));
+  $('card').onpointerup(pointer(320));
+  decision=context.reviewActions;
+ }
+ const refresh=context.refreshWorkspace(false,{items:[{id:'next'},{id:'third'}],jobs:[]});
+ await Promise.all([decision,refresh]);
+ assert.equal(context.active().id,'next');
+ assert.deepEqual(writes,[]);
+ assert.equal(context.history.length,0);
+ assert.equal(context.workspaceLoadsPending,0);
+ assert.equal(context.reviewActionsPending,0);
+ assertReset($);
+ await callbacks.decide('remove','next');
+ assert.deepEqual(writes,[['next','remove']]);
+});
+
 test('reload failure releases viewer and pointer controls',async()=>{
  const {context,$,writes}=review();
  const {callbacks}=viewerReview(context);
