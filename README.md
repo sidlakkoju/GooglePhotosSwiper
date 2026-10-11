@@ -64,7 +64,7 @@ To delete, open the review album in Google Photos, select the items, then choose
 | `diagrams/` | Earlier design diagrams; architecture docs describe the current core app |
 | `.data/` | Private runtime database and credentials; excluded from Git |
 
-Read [architecture](docs/architecture.md), [development and testing](docs/development.md), and [privacy and local data](docs/privacy.md).
+Read the [project context](PROJECT_CONTEXT.md), [architecture](docs/architecture.md), [development and testing](docs/development.md), and [privacy and local data](docs/privacy.md).
 
 ## Branches and current scope
 
