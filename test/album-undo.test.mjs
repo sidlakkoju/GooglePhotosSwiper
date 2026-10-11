@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
-const functions=['renderControls','choose','undo','runJob'].map(name=>{
+const functions=['renderControls','enqueueReviewAction','choose','undo','applyDecision','applyUndo','runJob'].map(name=>{
  const line=source.split('\n').find(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));
  assert.ok(line,`${name} exists`);
  return line;
@@ -13,7 +13,7 @@ const functions=['renderControls','choose','undo','runJob'].map(name=>{
 function harness({fail=false}={}){
  const elements=new Map(),writes=[],messages=[];
  const context={
-  busy:false,animating:false,authenticated:true,bridgeConnected:true,reconciliationSupported:true,mode:'google',workspace:{},
+  busy:false,animating:false,generation:0,reviewActions:Promise.resolve(),authenticated:true,bridgeConnected:true,reconciliationSupported:true,mode:'google',workspace:{},
   items:[{id:'kept'},{id:'sent'},{id:'next'}],decisions:{kept:'keep',sent:'remove'},history:[{id:'kept',old:null},{id:'sent',old:null}],
   $:id=>{if(!elements.has(id))elements.set(id,{style:{},querySelector:()=>null});return elements.get(id);},
   active:()=>context.items.find(item=>!context.decisions[item.id]),albumCandidates:()=>[],
