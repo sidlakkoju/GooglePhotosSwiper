@@ -22,39 +22,20 @@ for(const [surface,throwSwipe] of [['deck',throwPublicSwipe],['userscript',throw
  assert.equal(frames[0].transform,transform);
 });
 
-for(const surface of ['userscript','viewer']){
- const source=await readFile(new URL(surface==='userscript'?'../lib/userscript-ui.mjs':'../public/viewer.js',import.meta.url),'utf8');
+for(const surface of ['viewer']){
+ const source=await readFile(new URL('../public/viewer.js',import.meta.url),'utf8');
  function fixture({busy=false,inspection=false,fail=false,delayTask=false}={}){
   const card={hidden:false,style:{visibility:'',transform:'translateX(120px) rotate(6deg)'}},throws=[],writes=[];
   let finish,startTask;
   const waiting=new Promise(resolve=>{finish=resolve;});
   const taskReady=new Promise(resolve=>{startTask=resolve;});
   const save=async()=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');};
-  const context=vm.createContext({identity:{account:'synthetic'},window:{setTimeout,clearTimeout,matchMedia:()=>globalThis.matchMedia?.()||{matches:false}},busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting,finish(){},cancel(){}};},run:async task=>{try{if(delayTask)await taskReady;await task();}catch{}finally{context.render();if(surface==='userscript')context.clearCardAnimation();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
-  const start=source.indexOf(surface==='userscript'?' let reviewActions=':'  async function decide(');
-  const end=source.indexOf(surface==='userscript'?' async function applyUndo(':'  async function undo(',start);
+  const context=vm.createContext({identity:{account:'synthetic'},window:{setTimeout,clearTimeout,matchMedia:()=>globalThis.matchMedia?.()||{matches:false}},busy,inspected:inspection?'first':null,current:{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting,finish(){},cancel(){}};},run:async task=>{try{if(delayTask)await taskReady;await task();}catch{}finally{context.render();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
+  const start=source.indexOf('  async function decide(');
+  const end=source.indexOf('  async function undo(',start);
   vm.runInContext(source.slice(start,end),context);
   return {context,card,throws,writes,finish,startTask};
  }
- if(surface==='userscript')for(const fail of [false,true])test(`userscript hands off a committed swipe before a delayed task and ${fail?'failed':'successful'} save`,async()=>{
-  const {context,card,throws,writes,finish,startTask}=fixture({delayTask:true,fail});
-  const result=context.decide('keep',{dx:120,duration:240});
-  card.style.transform='';
-  assert.equal(throws.length,1);
-  assert.equal(card.style.visibility,'hidden');
-  assert.deepEqual(writes,[]);
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(card.style.visibility,'hidden');
-  assert.deepEqual(writes,[]);
-  startTask();
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(throws.length,1);
-  assert.equal(card.style.visibility,'hidden');
-  assert.deepEqual(writes,['save']);
-  finish();
-  await result;
-  assert.equal(card.style.visibility,'');
- });
  test(`${surface} cancels a live spring before a button decision or outgoing measurement`,async()=>{
   for(const swipeResult of [null,{dx:120,duration:240}]){
    const {context,card,finish}=fixture();
@@ -89,7 +70,7 @@ for(const surface of ['userscript','viewer']){
   Object.assign(card,{ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect:()=>({left:0,top:0,width:300,height:400})});
   const matchMedia=globalThis.matchMedia;
   globalThis.matchMedia=()=>({matches:fallback==='reduced motion'});
-  context.throwSwipe=surface==='userscript'?throwUserscriptSwipe:throwPublicSwipe;
+  context.throwSwipe=throwPublicSwipe;
   context.render=()=>assert.equal(card.style.visibility,'');
   context.show=async()=>assert.equal(card.style.visibility,'');
   try{
@@ -122,18 +103,47 @@ for(const surface of ['userscript','viewer']){
   context.clearMedia();
   assert.equal(running,false);
  });
- if(surface==='userscript')test('leaving candidate inspection does not fly off or save a decision',()=>{
-  const {context,throws,writes}=fixture({inspection:true});
-  context.render=()=>{};
-  context.decide('remove',{dx:-120,duration:240});
-  assert.equal(context.inspected,null);
-  assert.equal(throws.length,0);
-  assert.equal(writes.length,0);
- });
+
 }
 
 test('deck card reset cannot transition the next photo from the release offset',async()=>{
  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
  const rule=css.match(/\.photo-card\{([^}]+)\}/)[1];
  assert.doesNotMatch(rule,/transition:[^;]*transform/);
+});
+
+const userscriptSource=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+function userscriptDecisionFixture({busy=false,inspection=false,fail=false,delayTask=false}={}){
+ const decisions=[],writes=[],pendingDecisions=[];
+ let finish,startTask;
+ const waiting=new Promise(resolve=>{finish=resolve;}),taskReady=new Promise(resolve=>{startTask=resolve;});
+ let result;
+ const context=vm.createContext({identity:{account:'synthetic'},$:()=>({hidden:false}),deferredReviewInputs:[],reviewingUndo:false,finishCardAnimation(){},busy,savingDecisions:false,inspected:inspection?'first':null,focused:null,pendingDecisions,state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({}),save:async next=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},run:task=>{context.busy=true;result=(async()=>{try{if(delayTask)await taskReady;await task();}catch{}finally{pendingDecisions.length=0;context.savingDecisions=false;context.busy=false;context.render();}})();}});
+ const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function applyUndo(',start);
+ vm.runInContext(userscriptSource.slice(start,end),context);
+ return {context,decisions,writes,finish,startTask,settle:()=>result};
+}
+for(const fail of [false,true])for(const delayTask of [false,true])test(`userscript advances before a ${delayTask?'delayed task and ':''}${fail?'failed':'successful'} save`,async()=>{
+ const fixture=userscriptDecisionFixture({fail,delayTask}),{context,decisions,writes,finish,startTask}=fixture;
+ let displayed='first';
+ context.render=()=>{displayed=context.pendingDecisions.length?'next':fail?'first':'next';};
+ context.decide('keep');
+ assert.deepEqual(decisions,['keep']);
+ assert.equal(displayed,'next');
+ assert.deepEqual(writes,delayTask?[]:['save']);
+ startTask();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(writes,['save']);
+ assert.equal(displayed,'next');
+ finish();await fixture.settle();
+ assert.equal(displayed,fail?'first':'next');
+});
+test('userscript does not fly off a gesture rejected by busy state',()=>{
+ const {context,decisions,writes}=userscriptDecisionFixture({busy:true});
+ context.decide('keep');
+ assert.equal(decisions.length,0);assert.equal(writes.length,0);
+});
+test('leaving userscript candidate inspection does not fly off or save a decision',()=>{
+ const {context,decisions,writes}=userscriptDecisionFixture({inspection:true});
+ context.decide('remove');
+ assert.equal(context.inspected,null);assert.equal(decisions.length,0);assert.equal(writes.length,0);
 });
