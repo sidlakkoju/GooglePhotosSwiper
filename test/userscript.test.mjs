@@ -131,11 +131,11 @@ test('Trash pagination and unknown reconciliation preserve local state and do no
  await assert.rejects(readReviewTrash(async()=>({items:[],nextPageId:'loop'})),/repeated/);
  await assert.rejects(reconcileReviewTrash({...state,job:{}},call),/Finish/);
 });
-test('built userscript metadata, page isolation, no privileged APIs and reproducible artifact',async()=>{
+test('built userscript metadata, page isolation, privileged pairing storage and reproducible artifact',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const url='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
- for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant none','@inject-into page',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
- assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/\bGM[_\.]|chrome\.|localhost|photos-swipe-request/);
+ for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant GM.getValue','@grant GM.setValue','@grant GM.deleteValue','@grant unsafeWindow','@inject-into content',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
+ assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/chrome\.|localhost|photos-swipe-request/);
  assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('const cardElement=')<source.indexOf('const statsElement='));
  const body=source.slice(source.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);assert.doesNotMatch(body,/^\s*\/\/|\/\*/m);
  new vm.Script(source);
@@ -236,6 +236,7 @@ function fakeIndexedDB(fault={}) {
    const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
     get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    delete:key=>staged.delete(key),
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
@@ -499,7 +500,7 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
  mounted.nodes.get('card').offsetWidth=300;
- const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
  await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
@@ -545,27 +546,14 @@ test('phone controls keep zoom together, order in a grid and Trash below the lib
  assert.match(css,/\.zoom-control,\.trash-toggle\{display:flex;align-items:center/);
  assert.match(css,/@media\(max-width:599px\)/);
  assert.match(css,/\.library-controls\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
- assert.match(css,/\.album-controls\{position:fixed;bottom:0/);
+ assert.match(css,/\.album-controls\{position:relative;/);
  assert.match(css,/\.trash-toggle\{min-height:44px/);
+ assert.match(css,/#history-list li\{overflow-wrap:anywhere\}/);
+ assert.doesNotMatch(css,/--album-controls-height/);
  assert.match(css,/\.trash-toggle\{[^}]*white-space:normal/);
  assert.match(css,/\.album-controls button\{[^}]*min-width:0;white-space:normal;overflow-wrap:anywhere/);
  assert.match(css,/\.album-controls a,\.album-explanation\{grid-column:1 \/ -1;min-width:0/);
  assert.ok(footer.childNodes.some(node=>node.class==='album-explanation'));
-});
-test('album control resizing reserves its height in the scrolling overlay',async()=>{
- let callback,footer;
- const mounted=await mountedReview([item('a')],{ResizeObserver:class{
-  constructor(handler){callback=handler;}
-  observe(element){footer=element;}
- }});
- const overlay=mounted.nodes.get('overlay'),values={};
- overlay.style.setProperty=(key,value)=>{values[key]=value;};
- footer.getBoundingClientRect=()=>({height:168});callback();
- assert.equal(values['--album-controls-height'],'168px');
- footer.getBoundingClientRect=()=>({height:0});callback();
- assert.equal(values['--album-controls-height'],'168px');
- footer.getBoundingClientRect=()=>({height:212});callback();
- assert.equal(values['--album-controls-height'],'212px');
 });
 test('mounted album send creates a readable title and saves the verified album',async()=>{
  const titles=[],requests=[];let added=false;
@@ -614,6 +602,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const bounds=element=>element.getBoundingClientRect();
    const controls=['load','refresh','filter','sort'].map(id=>root.getElementById(id)).filter(Boolean);
    const clear=()=>controls.every(control=>bounds(control).bottom<=bounds(footer).top);
+   const initialClear=clear();overlay.scrollTop=overlay.scrollHeight;
    const range=doc.createRange();range.selectNodeContents(label);
    const textFits=range.getBoundingClientRect().right<=bounds(label).right+1;
    const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
@@ -626,7 +615,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
    const checkFits=inside(check,footer)&&textInside(check);
    const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   results.push({width,height,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -636,7 +625,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
   for(const measurement of measurements){
-   assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
+   assert.equal(measurement.initialClear,true,JSON.stringify(measurement));assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
    assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
    for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
@@ -789,12 +778,35 @@ test('photo viewer consumes Space without scrolling, closing or recording decisi
  }
 });
 
+test('pairing settings failure after sign-in preserves the loaded review session',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const saved=await db.save(account,{...emptyReview(),items:[item('synthetic-photo')]});
+ let reads=0;
+ mounted.environment.GM={getValue:async()=>{if(++reads>1)throw Error('Synthetic pairing read failure');},setValue:async()=>{},deleteValue:async()=>{}};
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ assert.equal(reads,2);
+ assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);
+ assert.match(mounted.nodes.get('caption').textContent,/^synthetic-photo · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal(mounted.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>node.textContent==='Pairing storage unavailable: Synthetic pairing read failure'));
+ assert.deepEqual(await db.read(account),saved);
+ await mounted.nodes.get('keep').onclick();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal((await db.read(account)).items[0].decision,'keep');
+ assert.equal(mounted.nodes.get('status').textContent,'Kept synthetic-photo.');
+});
+
 test('first-use sync setup is above the card and local dismissal survives reopening',async()=>{
  const mounted=await mountedReview([item('a')]);
  const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
  assert.ok(content.childNodes.indexOf(settings)<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.equal(settings.open,true);
+ assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
  await mounted.click('sync-local');assert.equal(settings.open,false);
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
@@ -858,10 +870,13 @@ test('decision history previews the same next Undo and updates after undo and re
  assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/No decisions yet/);
  await mounted.click('remove');mounted.nodes.get('queue').childNodes[0].onclick();await mounted.click('keep');
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: a · Queue → Keep; restores Queue/);
- assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(mounted.nodes.get('undo-preview')));
+ assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.find(node=>node.class==='actions').childNodes.includes(mounted.nodes.get('undo-preview')));
  assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
  assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/Next Undo/);
  assert.match(mounted.nodes.get('history-list').childNodes[1].textContent,/Unavailable for Undo/);
+ const retainedRow=mounted.nodes.get('history-list').childNodes[0];
+ mounted.nodes.get('filter').onchange();
+ assert.equal(mounted.nodes.get('history-list').childNodes[0],retainedRow);
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
@@ -876,6 +891,217 @@ test('release metadata names the author and install guide explains Chrome script
  assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
+});
+
+test('GM pairing migrates once, removes page credentials and survives page storage replacement',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ let db=await openReviewDatabase(fakeIndexedDB());
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-device-token',deviceName:'Test phone',onboardingDismissed:true,unrelated:'discard'});
+ const values=new Map(),writes=[];
+ const GM={getValue:async key=>values.get(key),setValue:async(key,value)=>{writes.push(value);values.set(key,structuredClone(value));},deleteValue:async key=>values.delete(key)};
+ const store=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ const first=await store.settings();assert.equal(store.durable,true);assert.ok(first.deviceId);assert.equal(first.deviceName,'Test phone');
+ assert.deepEqual(await db.settings(),{onboardingDismissed:true});assert.equal(writes.length,1);assert.equal(writes[0].unrelated,undefined);
+ await store.settings();assert.equal(writes.length,1);
+ db=await openReviewDatabase(fakeIndexedDB());
+ const reinstalled=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ assert.equal((await reinstalled.settings()).token,first.token);assert.equal((await reinstalled.settings()).deviceId,first.deviceId);
+ await db.saveSettings({url:'https://old.example',token:'stale'});assert.equal((await store.settings()).token,first.token);assert.deepEqual(await db.settings(),{});
+ await store.saveSettings({url:'https://sync.example',token:'replacement-token',deviceName:'New phone',onboardingDismissed:true,items:['excluded']});
+ const replacement=await store.settings();assert.equal(replacement.token,'replacement-token');assert.ok(replacement.deviceId);assert.equal(writes.at(-1).items,undefined);assert.equal(writes.at(-1).onboardingDismissed,undefined);assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+ await store.saveSettings({...replacement,token:'',unpaired:true,onboardingDismissed:true});
+ assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);assert.equal((await store.settings()).unpaired,true);assert.deepEqual(await db.settings(),{url:replacement.url,deviceId:replacement.deviceId,deviceName:replacement.deviceName,onboardingDismissed:true,unpaired:true});
+ assert.equal((await store.settings()).url,replacement.url);assert.equal((await store.settings()).deviceId,replacement.deviceId);assert.equal((await store.settings()).deviceName,replacement.deviceName);
+ await store.saveSettings({...await store.settings(),onboardingDismissed:true});assert.equal((await store.settings()).url,replacement.url);
+ await store.saveSettings({url:'https://sync.example',token:'synthetic-repaired-token',onboardingDismissed:true});
+ assert.equal((await store.settings()).unpaired,undefined);assert.equal((await store.settings()).token,'synthetic-repaired-token');
+ await store.saveSettings({url:'',token:''});assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);
+});
+
+test('GM failures preserve migration credentials and undefined GM uses local fallback',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(fakeIndexedDB()),credentials={url:'https://sync.example',token:'synthetic-token'};
+ await db.saveSettings(credentials);
+ const broken=await createPairingStore({GM:{getValue:async()=>undefined,setValue:async()=>{throw Error('Synthetic GM failure');},deleteValue:async()=>{}},database:async()=>db,crypto:webcrypto});
+ await assert.rejects(broken.settings(),/Synthetic GM failure/);assert.deepEqual(await db.settings(),credentials);
+ for(const GM of [undefined,{}]){
+  const fallback=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});assert.equal(fallback.durable,false);
+  assert.deepEqual(await fallback.settings(),credentials);await fallback.saveSettings({...credentials,deviceId:'local-device'});assert.equal((await db.settings()).deviceId,'local-device');await db.saveSettings(credentials);
+ }
+});
+
+test('privileged bundle keeps sync fetch and saved credentials away from the page',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment(),pageWindow=mounted.environment.window;
+ mounted.environment.window={...pageWindow,WIZ_global_data:undefined};
+ mounted.environment.unsafeWindow=pageWindow;
+ mounted.environment.AbortSignal=AbortSignal;
+ let pairing={url:'https://sync.example',token:'synthetic-private-token',deviceId:'device'};
+ mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ let calls=0;
+ mounted.environment.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer synthetic-private-token');return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ assert.equal(calls,1);assert.equal(mounted.nodes.get('sync-token').value,'');assert.match(mounted.nodes.get('sync-status').textContent,/Synced/);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.deepEqual(await (await openReviewDatabase(pageWindow.indexedDB)).settings(),{});
+ assert.ok(!JSON.stringify(Object.entries(pageWindow).filter(([key])=>key!=='top')).includes('synthetic-private-token'));
+});
+
+test('content-only manager bridges Google operations without passing pairing credentials',async()=>{
+ const {createPagePhotosBridge}=await import('../lib/userscript-bridge.mjs');
+ const pageListeners=[],contentListeners=[],messages=[],requests=[];
+ const pageWindow={WIZ_global_data:{...tokens},addEventListener:(type,listener)=>pageListeners.push(listener)};
+ const contentWindow={addEventListener:(type,listener)=>contentListeners.push(listener)};
+ const send=(listeners,source,data)=>{messages.push(structuredClone(data));queueMicrotask(()=>listeners.forEach(listener=>listener({source,data:structuredClone(data)})));};
+ pageWindow.postMessage=data=>send(contentListeners,contentWindow,data);
+ contentWindow.postMessage=data=>send(pageListeners,pageWindow,data);
+ const pageContext={window:pageWindow,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,TextEncoder,Uint8Array,URL,URLSearchParams,fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);
+  return {ok:true,text:async()=>envelope(entry[0],['lcxiM','zy0IHe'].includes(entry[0])?[[],null]:[['synthetic-album']])};
+ }};
+ const document={querySelector:()=>({nonce:'synthetic-nonce'}),createElement:()=>({setAttribute(key,value){this[key]=value;},remove(){this.removed=true;}}),documentElement:{append(script){assert.equal(script.nonce,'synthetic-nonce');vm.runInNewContext(script.textContent,pageContext);}}};
+ const call=createPagePhotosBridge({window:contentWindow,document,crypto:webcrypto,setTimeout,clearTimeout});
+ assert.equal((await call('identity')).data.label,tokens.oPEP7c);
+ assert.equal((await call('library')).ok,true);assert.equal((await call('trashPage')).ok,true);
+ assert.equal((await call('createAlbum',{title:'Photos Swipe · Review · QA-DUMMY'})).ok,true);
+ assert.deepEqual(requests,['lcxiM','zy0IHe','OXvT9d']);
+ assert.ok(messages.every(message=>!JSON.stringify(message).includes('synthetic-private-token')));
+ assert.equal((await call('unsupported')).ok,false);
+});
+
+test('sync saves reuse tokens for equivalent origins and retain typed tokens after storage failure',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment();mounted.environment.AbortSignal=AbortSignal;
+ let pairing={url:'https://sync.example',token:'saved-token',deviceId:'device'},fail=false,requests=0;
+ mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{if(fail)throw Error('Pairing write failed');pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ mounted.environment.fetch=async()=>{requests++;return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ const save=async()=>{mounted.nodes.get('sync-save').onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(!mounted.nodes.get('keep').disabled)return;}throw Error('UI stayed busy');};
+ for(const url of ['https://sync.example/','https://sync.example:443','https://SYNC.EXAMPLE']){
+  mounted.nodes.get('sync-url').value=url;await save();assert.equal(pairing.url,'https://sync.example');assert.equal(pairing.token,'saved-token');assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
+ }
+ assert.equal(requests,4);
+ mounted.nodes.get('sync-url').value='https://other.example';await save();assert.equal(pairing.url,'https://sync.example');assert.equal(requests,4);
+ mounted.nodes.get('sync-url').value='https://sync.example/path';await save();assert.equal(requests,4);
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='replacement-token';fail=true;await save();
+ assert.equal(mounted.nodes.get('sync-token').value,'replacement-token');assert.match(mounted.nodes.get('status').textContent,/Pairing write failed/);assert.equal(pairing.token,'saved-token');
+ fail=false;await save();assert.equal(pairing.token,'replacement-token');assert.equal(mounted.nodes.get('sync-token').value,'');
+});
+
+function isolatedPageBridge(mounted,timers={setTimeout,clearTimeout},fetchOverride) {
+ const pageWindow=mounted.environment.window,pageListeners=[],contentListeners=[],messages=[];
+ const contentWindow=new Proxy(pageWindow,{get(target,key){if(key==='top')return contentWindow;if(key==='WIZ_global_data')return undefined;if(key==='addEventListener')return (type,listener)=>{if(type==='message')contentListeners.push(listener);};if(key==='postMessage')return data=>{messages.push(structuredClone(data));queueMicrotask(()=>pageListeners.forEach(listener=>listener({source:pageWindow,data:structuredClone(data)})));};return Reflect.get(target,key);}});
+ pageWindow.addEventListener=(type,listener)=>{if(type==='message')pageListeners.push(listener);};
+ pageWindow.postMessage=data=>{messages.push(structuredClone(data));queueMicrotask(()=>contentListeners.forEach(listener=>listener({source:contentWindow,data:structuredClone(data)})));};
+ const context={window:pageWindow,location:page,crypto:webcrypto,AbortController,...timers,TextEncoder,Uint8Array,URL,URLSearchParams,fetch:fetchOverride||pageWindow.fetch};
+ const document=mounted.environment.document,append=document.documentElement.append,createElement=document.createElement;
+ document.querySelector=()=>null;document.createElement=tag=>{const element=createElement(tag);element.remove=()=>{};return element;};
+ document.documentElement={append(element){if(element.tagName==='SCRIPT')vm.runInNewContext(element.textContent,context);else append(element);}};
+ return {pageWindow,contentWindow,messages};
+}
+
+test('bundle bridges hidden page data with or without unsafeWindow and migrates page storage',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ for(const hasUnsafeWindow of [true,false]){
+  const mounted=bundleEnvironment(),bridge=isolatedPageBridge(mounted);
+  const db=await openReviewDatabase(bridge.pageWindow.indexedDB);
+  await db.saveSettings({url:'https://sync.example',token:'legacy-private-token'});
+  mounted.environment.window={...bridge.contentWindow,indexedDB:fakeIndexedDB()};
+  mounted.environment.window.top=mounted.environment.window;
+  if(hasUnsafeWindow)mounted.environment.unsafeWindow=bridge.contentWindow;
+  else mounted.environment.window=bridge.contentWindow;
+  let pairing;
+  mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+  mounted.environment.AbortSignal=AbortSignal;mounted.environment.fetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
+  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+  assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);assert.equal(pairing.token,'legacy-private-token');assert.deepEqual(await db.settings(),{});
+  assert.ok(bridge.messages.some(message=>message.kind==='photos-call'));
+  assert.ok(bridge.messages.every(message=>!JSON.stringify(message).includes('legacy-private-token')));
+  assert.ok(!Object.values(bridge.pageWindow).includes('legacy-private-token'));
+ }
+});
+
+test('accepted bridge operations outlive the injection deadline while missing injection times out',async()=>{
+ const {createPagePhotosBridge}=await import('../lib/userscript-bridge.mjs');
+ let now=0,nextId=0;const scheduled=new Map();
+ const timers={setTimeout(callback,delay){const id=++nextId;scheduled.set(id,{callback,due:now+delay});return id;},clearTimeout(id){scheduled.delete(id);}};
+ const flush=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmediate(resolve));};
+ const waitForRequest=async count=>{const deadline=Date.now()+5000;while(requests.length<count){assert.ok(Date.now()<deadline,'Google RPC did not start');await new Promise(resolve=>setTimeout(resolve,1));}};
+ const advance=async duration=>{now+=duration;for(const [id,entry] of [...scheduled])if(entry.due<=now){scheduled.delete(id);entry.callback();}await flush();};
+ const mounted=bundleEnvironment(),requests=[];
+ const bridge=isolatedPageBridge(mounted,timers,async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
+  await new Promise(resolve=>timers.setTimeout(resolve,20000));
+  const row=['photo',['https://lh3.googleusercontent.com/fake'],1720000000000,'stable',0,{}];
+  return {ok:true,text:async()=>envelope(id,id==='lcxiM'?[[row],null]:[[null,[]]])};
+ });
+ const call=createPagePhotosBridge({window:bridge.contentWindow,document:mounted.environment.document,crypto:webcrypto,...timers});
+ let settled=false;const result=call('library').then(value=>{settled=true;return value;});await flush();
+ await waitForRequest(1);await advance(20000);await waitForRequest(2);assert.deepEqual(requests,['lcxiM','EWgK9e']);
+ await advance(15000);assert.equal(settled,false);
+ await advance(5000);assert.equal((await result).ok,true);assert.equal(scheduled.size,0);
+ let receiver,request;const missingWindow={addEventListener(type,listener){receiver=listener;},postMessage(data){request=data;}};
+ const missing=createPagePhotosBridge({window:missingWindow,document:{querySelector(){},createElement:()=>({remove(){}}),documentElement:{append(){}}},crypto:webcrypto,...timers});
+ const unavailable=missing('identity');receiver({source:{},data:{...request,kind:'photos-accepted'}});await advance(35000);assert.match((await unavailable).error,/bridge unavailable/);assert.equal(scheduled.size,0);
+ const lostResult=missing('identity');receiver({source:missingWindow,data:{...request,kind:'photos-accepted'}});assert.equal(scheduled.size,1);await advance(35000);assert.match((await lostResult).error,/bridge unavailable/);assert.equal(scheduled.size,0);
+ receiver({source:missingWindow,data:{...request,kind:'photos-result',result:{ok:true}}});assert.equal(scheduled.size,0);
+});
+
+test('incomplete GM values migrate complete legacy pairing and preserve partial legacy credentials',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ for(const initial of [undefined,null,{}, {url:'https://sync.example'}, {token:'partial'}]){
+  const db=await openReviewDatabase(fakeIndexedDB());
+  let value=initial,writes=0;
+  const GM={getValue:async()=>value,setValue:async(key,next)=>{value=next;writes++;},deleteValue:async()=>{}};
+  const store=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+  const partial={token:'legacy-token',deviceName:'Phone'};
+  await db.saveSettings(partial);await store.settings();assert.deepEqual(await db.settings(),partial);assert.equal(writes,0);
+  await db.saveSettings({...partial,url:'https://sync.example',onboardingDismissed:true});
+  const migrated=await store.settings();assert.equal(migrated.token,'legacy-token');assert.ok(migrated.deviceId);assert.equal(writes,1);
+  assert.deepEqual(await db.settings(),{onboardingDismissed:true});await store.settings();assert.equal(writes,1);
+ }
+});
+
+test('failed GM migration preserves legacy pairing until a durable write succeeds',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(fakeIndexedDB());
+ const legacy={url:'https://sync.example',token:'legacy-token',deviceId:'device',deviceName:'Phone',onboardingDismissed:true};
+ await db.saveSettings(legacy);
+ let value=null,fail=true;
+ const GM={getValue:async()=>value,setValue:async(key,next)=>{if(fail)throw Error('Storage unavailable');value=next;},deleteValue:async()=>{}};
+ const store=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ await assert.rejects(store.settings(),/Storage unavailable/);
+ assert.deepEqual(await db.settings(),legacy);
+ fail=false;
+ assert.equal((await store.settings()).token,legacy.token);
+ assert.equal(value.token,legacy.token);
+ assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+});
+
+test('signed-in privileged bundle uses page AbortSignals for library, album and Trash requests',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment(),pageWindow=mounted.environment.window,requests=[];
+ const pageSignals=new WeakSet();
+ class PageAbortController extends AbortController {constructor(){super();pageSignals.add(this.signal);}}
+ class ContentAbortController {constructor(){throw Error('Content AbortController used for page fetch');}}
+ pageWindow.AbortController=PageAbortController;
+ pageWindow.fetch=async(url,options)=>{
+  assert.ok(pageSignals.has(options.signal));
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
+  return {ok:true,text:async()=>envelope(id,id==='OXvT9d'?[['album']]:[[],null])};
+ };
+ mounted.environment.unsafeWindow=pageWindow;
+ mounted.environment.window={...pageWindow,AbortController:ContentAbortController};
+ const instrumented=source.replace('mountPhotosSwipe(environment);','globalThis.pageAPI=createPhotosAPI(environment);mountPhotosSwipe(environment);');
+ vm.runInNewContext(instrumented,mounted.environment);
+ for(const [name,args] of [['library',{}],['createAlbum',{title:'Photos Swipe · Review'}],['trashPage',{}]]){
+  const result=await mounted.environment.pageAPI(name,args);assert.equal(result.ok,true,result.error);
+ }
+ assert.deepEqual(requests,['lcxiM','OXvT9d','zy0IHe']);
 });
 
  test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
@@ -1038,7 +1264,7 @@ test('userscript cancels the live snap-back before a filter renders another phot
  let running=false,cancelled=0;
  card.animate=()=>{running=true;return {finished:Promise.resolve(),cancel(){running=false;cancelled++;}};};
  card.getAnimations=()=>running?[{cancel(){running=false;cancelled++;}}]:[];
- media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20,timeStamp:0});
+ media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20,timeStamp:0});
  media.listeners.pointerup({pointerId:1,clientX:40,clientY:20,timeStamp:200});
  assert.equal(running,true);
  mounted.nodes.get('filter').value='video';
@@ -1084,7 +1310,7 @@ test('ahead video completion does not write leases during an active sync',async(
  const before=fault.leaseWrites;
  response.resolve();await new Promise(resolve=>setImmediate(resolve));
  try{assert.equal(fault.leaseWrites,before);}finally{sync.resolve();}
- for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
@@ -1332,6 +1558,24 @@ test('late expired preview responses cannot replace a newly selected card',async
  assert.match(mounted.nodes.get('caption').textContent,/^next/);
 });
 
+test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const first=bundleEnvironment(),indexedDB=first.environment.window.indexedDB;
+ let pairing={url:'https://sync.example',token:'synthetic-revoked-token',deviceId:'synthetic-device',deviceName:'Synthetic phone'},reject=true;
+ const GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ const mount=async()=>{
+  const mounted=bundleEnvironment();mounted.environment.window.indexedDB=indexedDB;mounted.environment.GM=GM;mounted.environment.AbortSignal=AbortSignal;
+  mounted.environment.window.fetch=async()=>reject?new Response('{}',{status:401}):new Response(JSON.stringify({decisions:[],history:[],progress:{}}));
+  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();return mounted;
+ };
+ const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);revoked.nodes.get('close').onclick();
+ const reopened=await mount();assert.equal(reopened.nodes.get('sync-url').value,'https://sync.example');assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);
+ reject=false;reopened.nodes.get('sync-token').value='synthetic-new-token';reopened.nodes.get('sync-save').onclick();await waitForReview(()=>reopened.nodes.get('overlay')['aria-busy']==='false');
+ assert.equal(pairing.token,'synthetic-new-token');assert.equal(pairing.deviceId,'synthetic-device');assert.equal(pairing.deviceName,'Synthetic phone');assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);assert.match(reopened.nodes.get('sync-status').textContent,/Synced/);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.equal((await (await openReviewDatabase(indexedDB)).settings()).unpaired,undefined);
+ reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
+});
+
 test('mixed decisions and Undo retain input order across a delayed save',async()=>{
  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
  let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
@@ -1345,4 +1589,14 @@ test('mixed decisions and Undo retain input order across a delayed save',async()
  const state=await mounted.read();
  assert.deepEqual(state.items.map(row=>row.decision),['remove','keep',null]);
  assert.deepEqual(state.history.map(entry=>[entry.key,entry.decision]),[['a','remove'],['b','keep']]);
+});
+
+test('decision history caps visible rows while retaining all Undo entries',async()=>{
+ const mounted=await mountedReview(Array.from({length:105},(_,index)=>item(`synthetic-${index}-${'x'.repeat(160)}`)));
+ for(let index=0;index<105;index++)await mounted.click('keep');
+ const rows=mounted.nodes.get('history-list').childNodes;
+ assert.equal(rows.length,101);
+ assert.equal(rows[100].textContent,'Showing the latest 100 of 105 decisions.');
+ assert.match(rows[0].textContent,/synthetic-104-/);
+ assert.equal((await mounted.read()).history.length,105);
 });
