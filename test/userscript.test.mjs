@@ -255,7 +255,7 @@ function bundleEnvironment() {
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
+ const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,AbortSignal,setInterval,clearInterval};
  return result;
@@ -890,4 +890,68 @@ test('sync pushes ten rapid decisions in one request while further input stays a
  mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^batch-11 · /);
  mounted.nodes.get('undo').onclick();assert.match(mounted.nodes.get('caption').textContent,/^batch-10 · /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
+});
+
+test('Keep instead reports saved album job locks without changing the candidate',async()=>{
+ const mounted=await mountedReview([item('queued',{decision:'remove'})]);
+ await mounted.nodes.get('close').onclick();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const saved=await db.read(account);await db.save(account,{...saved,job:{albumKey:'album',mediaKeys:['queued']}});
+ await mounted.nodes.get('launcher').onclick();
+ mounted.nodes.get('queue').childNodes[0].onclick();
+ assert.doesNotThrow(()=>mounted.nodes.get('keep').onclick());
+ assert.match(mounted.nodes.get('status').textContent,/Finish the saved album operation/);
+ assert.match(mounted.nodes.get('caption').textContent,/Candidate inspection/);
+ assert.equal((await mounted.read()).items[0].decision,'remove');
+ await mounted.nodes.get('close').onclick();
+});
+test('expired leases block library writes before any RPC and visible pages renew ownership',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:Date.now()+90000},account);tx.oncomplete=resolve;});
+ await mounted.click('load');
+ assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+ assert.equal((await mounted.read()).items.length,1);
+ mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+});
+test('page lifecycle events cannot sync over an in-flight library snapshot',async()=>{
+ let finish,started;const loading=new Promise(resolve=>{started=resolve;}),requests=[];
+ const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
+  requests.push(url);
+  if(new URL(url).origin==='https://sync.example')return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='lcxiM'){started();await new Promise(resolve=>{finish=resolve;});return {ok:true,text:async()=>envelope('lcxiM',[[],null])};}
+  throw Error('Unexpected RPC');
+ }},{url:'https://sync.example',token:'test-secret'});
+ const operation=mounted.nodes.get('load').onclick();await loading;
+ const before=requests.length;
+ mounted.environment.window.listeners.pagehide();mounted.environment.document.listeners.visibilitychange();
+ await new Promise(resolve=>setTimeout(resolve,10));assert.equal(requests.length,before);
+ finish();await operation;assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();
+});
+test('failed saves retain the visible review and lease on close and reopen',async()=>{
+ const mounted=bundleEnvironment(),fault={};mounted.environment.window.indexedDB=fakeIndexedDB(fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('a'),item('b')]});
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ await mounted.nodes.get('launcher').onclick();fault.failSave=true;mounted.nodes.get('keep').onclick();
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);
+ await assert.rejects(db.lease(account,'other-tab'),/busy/);
+ await mounted.nodes.get('launcher').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
+ fault.failSave=false;await mounted.nodes.get('close').onclick();assert.equal((await db.read(account)).items[0].decision,'keep');await db.lease(account,'other-tab');
+});
+test('revision conflicts stay visible and do not retry the stale snapshot',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...await db.read(account),cursor:'other-tab'});
+ mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
+ assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('status').textContent,/Unsaved decisions remain visible.*Reload/);
+ assert.match(mounted.nodes.get('caption').textContent,/^b ·/);assert.equal((await db.read(account)).cursor,'other-tab');
 });

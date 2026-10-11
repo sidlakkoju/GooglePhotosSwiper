@@ -274,15 +274,22 @@ function createSyncClient({fetch,status=()=>{}}) {
  async function sync(scope,state,save,{pull=true}={}) {
   if(!settings.url||!settings.token)return state;
   status('Syncing\u2026');
+  let checkpoint=state;
   try {
    const remote=pull?await request(scope,'api/state'):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress};
    const decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
    const pending={...state.syncPending};
    if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey))pending[item.mediaKey]=item.decision;
    const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
-   if(Object.keys(pending).length)await request(scope,'api/decisions','PUT',{decisions:Object.entries(pending).map(([id,decision])=>({id,decision}))});
+   const historyKeys=new Set([...(state.syncHistoryKeys||[]),...Object.keys(pending),...(dirty?state.history.map(entry=>entry.key):[])]);
+   const remaining={...pending};
+   for(const batch of decisionBatches(pending)){
+    await request(scope,'api/decisions','PUT',{decisions:batch});
+    for(const {id,decision} of batch){delete remaining[id];if(decision===null)delete decisions[id];else decisions[id]=decision;}
+    checkpoint={...state,syncDecisions:{...decisions},syncPending:{...remaining},syncDirty:dirty,syncHistoryKeys:[...historyKeys]};
+   }
    for(const [id,value] of Object.entries(pending)){if(value===null)delete decisions[id];else decisions[id]=value;}
-   const history=(dirty?state.history:remote.history).slice(-2000);
+   const history=(dirty?mergeHistory(remote.history,state.history,historyKeys):remote.history).slice(-2000);
    const items=state.items.map(item=>{
     const value=Object.hasOwn(pending,item.mediaKey)?pending[item.mediaKey]:decisions[item.mediaKey]??(Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
     const entry=history.findLast(entry=>entry.key===item.mediaKey&&entry.decision===value);
@@ -293,9 +300,9 @@ function createSyncClient({fetch,status=()=>{}}) {
     await request(scope,'api/undo','PUT',{history});
     await request(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
    }
-   next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress});
+   next=await save({...next,syncPending:{},syncDirty:false,syncHistoryKeys:[],syncProgress:remote.progress});
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs`);return next;
-  }catch(error){status(`${error.message} \u00b7 saved locally; retry on next action`);return state;}
+  }catch(error){status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
  return {configure,sync};
 }
@@ -315,6 +322,31 @@ function validateSyncSettings(url,token) {
  const parsed=new URL(url);
  if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash||parsed.pathname!=='/'||token.length>4096||!token||/[\r\n]/.test(token))throw Error('Enter an HTTPS Worker origin and sync token.');
  return {url:parsed.origin,token};
+}
+
+function mergeHistory(remote,local,keys) {
+ return [...remote.filter(entry=>!keys.has(entry.key)),...local.filter(entry=>keys.has(entry.key))];
+}
+function mergeSyncResult(current,snapshot,synced) {
+ const before=new Map(snapshot.items.map(item=>[item.mediaKey,item]));
+ const incoming=new Map(synced.items.map(item=>[item.mediaKey,item]));
+ const changed=new Set(current.items.filter(item=>{const old=before.get(item.mediaKey);return !old||item.revision!==old.revision||item.decision!==old.decision;}).map(item=>item.mediaKey));
+ for(const key of new Set([...snapshot.history,...current.history].map(entry=>entry.key)))if(JSON.stringify(snapshot.history.filter(entry=>entry.key===key))!==JSON.stringify(current.history.filter(entry=>entry.key===key)))changed.add(key);
+ const pending={...synced.syncPending};
+ for(const key of changed)if(Object.hasOwn(current.syncPending||{},key))pending[key]=current.syncPending[key];
+ const history=mergeHistory(synced.history,current.history,changed).slice(-2000);
+ return {...current,items:current.items.map(item=>changed.has(item.mediaKey)?item:incoming.get(item.mediaKey)||item),history,syncDecisions:synced.syncDecisions,syncPending:pending,syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
+}
+function decisionBatches(pending) {
+ const batches=[];let batch=[],bytes=16;
+ for(const [id,decision] of Object.entries(pending)){
+  const entry={id,decision},size=new TextEncoder().encode(JSON.stringify(entry)).length;
+  if(batch.length&&(batch.length===2000||bytes+size+1>262144)){batches.push(batch);batch=[];bytes=16;}
+  if(bytes+size>262144)throw Error('Decision exceeds sync input limit');
+  bytes+=size+(batch.length?1:0);batch.push(entry);
+ }
+ if(batch.length)batches.push(batch);
+ return batches;
 }
 
 function previewURL(value,{width=512,height=512,dpr=1,mobile=false,expanded=false,authuser='0',video=false}={}) {
@@ -577,18 +609,17 @@ function mountPhotosSwipe(environment) {
  let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const syncClient=createSyncClient({fetch:environment.fetch,status:value=>{syncSummary=value;$('sync-status').textContent=value;}});
- let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0;
- const writes=createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:next=>{if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};},error:error=>message(`Local save failed: ${error.message} \u00b7 pending changes will retry.`)});
+ let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null;
+ const writes=createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:next=>{if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const synchronize=(pull=true)=>{
-  if(!identity||!syncEnabled||leaseError||!lockedAccount)return Promise.resolve();
+  if(!identity||!syncEnabled||leaseError||writeConflict||!lockedAccount)return Promise.resolve();
   if(syncRunning)return syncRunning.then(()=>synchronize(pull));
   const account=identity.account;let version;
   syncRunning=(async()=>{
-   await writes.flush();version=state;
+   await writes.flush();if(writes.pending)return;version=state;
    const next=await syncClient.sync(account,version,async value=>value,{pull});
    if(identity?.account===account&&next!==version){
-    if(state.items===version.items&&state.history===version.history)state={...next,revision:writeRevision};
-    else {const pending={...state.syncPending};for(const [key,value] of Object.entries(version.syncPending||{}))if(pending[key]===value&&state.items.find(item=>item.mediaKey===key)?.revision===version.items.find(item=>item.mediaKey===key)?.revision)delete pending[key];state={...state,syncDecisions:next.syncDecisions,syncPending:pending,syncDirty:state.history!==version.history||Object.keys(pending).length>0};}
+    state={...mergeSyncResult(state,version,next),revision:writeRevision};
     await writes.enqueue();render();
    }
   })().finally(()=>{syncRunning=null;});
@@ -597,8 +628,8 @@ function mountPhotosSwipe(environment) {
  function scheduleSync(){
   if(!syncEnabled)return;
   window.clearTimeout(syncTimer);
-  if(++decisionCount>=10){decisionCount=0;synchronize(false);}
-  else syncTimer=window.setTimeout(()=>{decisionCount=0;synchronize(false);},2000);
+  if(++decisionCount>=10&&!busy&&!activeOperation){decisionCount=0;synchronize(false);}
+  else syncTimer=window.setTimeout(()=>{decisionCount=0;if(!busy&&!activeOperation)synchronize(false);},2000);
   syncTimer?.unref?.();
  }
  function apply(next,removedKey){state=markSyncChanges(state,next);if(removedKey&&deckCache){deckCache=deckCache.filter(item=>item.mediaKey!==removedKey);deckItems=state.items;}render();writes.enqueue();scheduleSync();}
@@ -613,11 +644,12 @@ function mountPhotosSwipe(environment) {
   return result.data;
  }
  async function assertAccount(){if(!identity)throw Error('Close and reopen Photos Swipe after signing into Google Photos.');const result=await call('identity');if(result.account!==identity.account)throw Error('Google account changed. Close and reopen Photos Swipe.');}
- async function save(next){await assertAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw Error('Local changes have not been saved.');return state;}
+ async function save(next){await syncRunning;await assertAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw Error('Local changes have not been saved.');return state;}
  function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=busy||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
  async function withAccountLease(task) {
   if(leaseError)throw leaseError;
   if(!lockedAccount||lockedAccount!==identity.account)throw Error('Close and reopen Photos Swipe to acquire the account lease.');
+  try{await db.lease(lockedAccount,owner);}catch(error){leaseError=error;throw error;}
   await writes.flush();if(writes.pending)throw Error('Save pending local changes before this operation.');
   await task();scheduleSync();
  }
@@ -778,9 +810,9 @@ function mountPhotosSwipe(environment) {
  async function openSession() {
   if(closingPromise)await closingPromise;
   if(busy)return;
-  busy=true;controls();leaseError=null;buffer.clear();await writes.flush();
-  if(writes.pending){busy=false;controls();message('Local changes are still pending. Retry saving before reopening.');return;}
-  $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
+  busy=true;controls();$('overlay').hidden=false;$('launcher').hidden=true;buffer.clear();await writes.flush();
+  if(writes.pending){busy=false;controls();if(!writeConflict)message('Local changes are still pending. Close and reopen to retry saving.');render();return;}
+  leaseError=null;$('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
   try{
    const result=await rawCall('identity');
    if(!result.ok)throw Error(result.error);
@@ -819,11 +851,13 @@ function mountPhotosSwipe(environment) {
   stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
   await openingPromise;await activeOperation;
   $('overlay').hidden=true;$('launcher').hidden=false;stopMedia();dropWarmVideo();buffer.clear();
-  await writes.flush().then(()=>synchronize(false)).finally(async()=>{
-   clearInterval(leaseTimer);
-   if(lockedAccount)await db.lease(lockedAccount,owner,true).catch(()=>{});
-   lockedAccount=null;
-  });
+  await writes.flush();
+  if(writes.pending){$('overlay').hidden=false;$('launcher').hidden=true;render();return;}
+  await synchronize(false);
+  if(writes.pending){$('overlay').hidden=false;$('launcher').hidden=true;render();return;}
+  clearInterval(leaseTimer);
+  if(lockedAccount)await db.lease(lockedAccount,owner,true).catch(()=>{});
+  lockedAccount=null;
   buffer.clear();
  }
  function close(){
@@ -835,9 +869,11 @@ function mountPhotosSwipe(environment) {
   if(busy||!identity||leaseError||$('overlay').hidden)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
+  try{
   window.performance?.mark('swipe');swipeAt=window.performance?.now()??null;const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);inspected=null;focused=null;previousKey=item.mediaKey;apply({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]},item.mediaKey);message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);
+  }catch(error){message(error.message);}
  }
- function undo(){if(busy||!identity||leaseError||$('overlay').hidden)return;const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;const restored=next.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;apply({...next,history});message(`Decision undone for ${restored.name}.`);}
+ function undo(){if(busy||!identity||leaseError||$('overlay').hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;const restored=next.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;apply({...next,history});message(`Decision undone for ${restored.name}.`);}catch(error){message(error.message);}}
  async function load(refresh=false) {
   buffer.clear();previousKey=null;
   const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
@@ -860,9 +896,9 @@ function mountPhotosSwipe(environment) {
   target.addEventListener('pointerup',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const dx=event.clientX-swipeStart.x,dy=event.clientY-swipeStart.y;swipeStart=null;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5)decide(dx>0?'keep':'remove');});
   target.addEventListener('pointercancel',()=>{swipeStart=null;});
  }
- window.addEventListener('pagehide',()=>{dropWarmVideo();buffer.clear();writes.flush();synchronize(false);});
+ window.addEventListener('pagehide',()=>{dropWarmVideo();buffer.clear();writes.flush();if(!busy&&!activeOperation)synchronize(false);});
  window.addEventListener('focus',()=>{if(identity&&!busy&&!$('overlay').hidden)synchronize();});
- document.addEventListener?.('visibilitychange',()=>{if(document.hidden){buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else if(identity&&!$('overlay').hidden)assertAccount().then(()=>{refill();synchronize();}).catch(error=>{leaseError=error;message(error.message);});});
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden){buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else if(identity&&!busy&&!activeOperation&&!$('overlay').hidden)assertAccount().then(()=>db.lease(lockedAccount,owner)).then(()=>{refill();if(!busy&&!activeOperation)synchronize();}).catch(error=>{leaseError=error;message(error.message);});});
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
  function handleViewerSpace(event){
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
