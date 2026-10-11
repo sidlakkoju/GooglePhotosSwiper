@@ -13,7 +13,7 @@ const functions=['renderControls','enqueueReviewAction','choose','undo','applyDe
 function harness({fail=false}={}){
  const elements=new Map(),writes=[],messages=[];
  const context={
-  busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActions:Promise.resolve(),authenticated:true,bridgeConnected:true,reconciliationSupported:true,mode:'google',workspace:{},
+  busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,reviewActions:Promise.resolve(),authenticated:true,bridgeConnected:true,reconciliationSupported:true,mode:'google',workspace:{},
   items:[{id:'kept'},{id:'sent'},{id:'next'}],decisions:{kept:'keep',sent:'remove'},history:[{id:'kept',old:null},{id:'sent',old:null}],
   $:id=>{if(!elements.has(id))elements.set(id,{style:{},querySelector:()=>null});return elements.get(id);},
   active:()=>context.items.find(item=>!context.decisions[item.id]),albumCandidates:()=>[],

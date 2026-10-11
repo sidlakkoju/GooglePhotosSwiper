@@ -17,7 +17,7 @@ function review({delayed=false}={}){
  };
  const timers=[],toastTimers=new Map(),writes=[];
  let timerId=0;
- const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
+ const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
  context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
@@ -240,3 +240,72 @@ for(const action of ['choose','undo']){
   assert.equal(context.decisions.next,'keep');
  });
 }
+
+test('Z undoes the last decision from the removal queue while arrows do nothing',async()=>{
+ const {context,$,writes}=review();
+ await context.choose('remove');
+ $('review-view').hidden=true;
+ const press=keyboard(context);
+ press('ArrowRight');
+ press('ArrowLeft');
+ press('z');
+ await context.reviewActions;
+ assert.deepEqual(writes,[['first','remove'],['first',null]]);
+ assert.equal(context.history.length,0);
+ assert.equal(context.active().id,'first');
+});
+
+test('a workspace request preserves the sequence queued after it begins',async()=>{
+ const {context,writes}=review();
+ let release;
+ context.api=()=>new Promise(resolve=>{release=resolve;});
+ const refresh=context.refreshWorkspace();
+ const press=keyboard(context);
+ for(const key of ['ArrowLeft','z','ArrowRight','z','ArrowLeft','ArrowLeft','z','z'])press(key);
+ release({items:[{id:'first'},{id:'next'},{id:'third'}],jobs:[]});
+ await refresh;
+ await context.reviewActions;
+ assert.deepEqual(writes,[['first','remove'],['first',null],['first','keep'],['first',null],['first','remove'],['next','remove'],['next',null],['first',null]]);
+ assert.deepEqual(Object.keys(context.decisions),[]);
+ assert.equal(context.history.length,0);
+});
+
+test('a retry entered during failed-save recovery survives the workspace reload',async()=>{
+ const {context,$,writes}=review();
+ context.mode='google';
+ const save=context.updateDecision;
+ let release;
+ context.api=()=>new Promise(resolve=>{release=resolve;});
+ context.updateDecision=async()=>{throw Error('Save failed');};
+ const failed=context.choose('remove');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal($('toast').textContent,'Save failed');
+ context.updateDecision=save;
+ const retry=context.choose('keep');
+ release({items:[{id:'first'},{id:'next'},{id:'third'}],jobs:[]});
+ await failed;
+ await retry;
+ assert.deepEqual(writes,[['first','keep']]);
+ assert.equal($('toast').classList.contains('show'),false);
+});
+
+test('focus skips workspace reloads while review actions are queued or running',async()=>{
+ const {context}=review();
+ let focus,reads=0,release;
+ context.window={addEventListener:(type,handler)=>{assert.equal(type,'focus');focus=handler;}};
+ context.document={querySelector:()=>null};
+ context.refreshWorkspace=async()=>{reads++;};
+ vm.runInContext(source.split('\n').find(line=>line.startsWith("window.addEventListener('focus'")),context);
+ context.updateDecision=()=>new Promise(resolve=>{release=resolve;});
+ const swipe=context.choose('remove');
+ focus();
+ assert.equal(reads,0);
+ await new Promise(resolve=>setImmediate(resolve));
+ focus();
+ assert.equal(reads,0);
+ release();
+ await swipe;
+ focus();
+ assert.equal(reads,1);
+ assert.equal(context.reviewActionsPending,0);
+});
