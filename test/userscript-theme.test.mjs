@@ -24,7 +24,9 @@ test('UI colors are tokenized, including empty media and decision stamps',()=>{
  assert.doesNotMatch(declarations,/#(?:[\da-f]{3,8})\b|\brgba?\(|\b(?:white|black|green)\b(?!-)/i);
  assert.doesNotMatch(source,/green|#(?:193426|e3ebdf|236541|245b3d|13281f|264638|34c759|30d158)/i);
  assert.match(source,/style\.color='var\(--ps-label\)'/);
- for(const [decision,token] of [['keep','accent'],['remove','destructive']])assert.ok(css.includes(`.stamp[data-decision=${decision}]{color:var(--ps-${token});border-color:var(--ps-${token})}`));
+ for(const [decision,token] of [['keep','accent'],['remove','destructive']])assert.match(source,new RegExp(`\\.stamp-${decision}\\{[^}]*color:var\\(--ps-${token}\\)`));
+ assert.match(source,/border:4px solid currentColor/);
+ assert.doesNotMatch(css,/\.stamp\[data-decision=/);
 });
 
 test('controls use system typography and explicit cross-browser styling',()=>{
@@ -40,4 +42,17 @@ test('blurred surfaces retain an opaque fallback without backdrop-filter support
  assert.match(css.slice(0,supported),/\.album-controls,#sync-settings\{background:var\(--ps-surface-solid\)/);
  assert.match(css.slice(supported),/@supports \(\(backdrop-filter:blur\(20px\)\) or \(-webkit-backdrop-filter:blur\(20px\)\)\)/);
  assert.match(css.slice(supported),/background:var\(--ps-surface\);backdrop-filter:blur\(20px\);-webkit-backdrop-filter:blur\(20px\)/);
+});
+
+test('compacted rules preserve control, caption, queue and decision styling',()=>{
+ const rule=selector=>css.split('}').map(block=>block.split('{')).find(([name])=>name===selector)[1];
+ assert.match(rule('button,select,input'),/color:var\(--ps-label\);background:var\(--ps-surface-solid\);border:1px solid var\(--ps-sep\);border-radius:var\(--ps-r-sm\)/);
+ assert.equal(rule('button'),'min-height:44px;border:0;background:var(--ps-fill);padding:10px 16px;cursor:pointer');
+ assert.equal(rule('.caption'),'padding:10px 14px');
+ assert.match(rule('.queue span'),/font:var\(--ps-t-caption\)/);
+ assert.equal(rule('.keep,.remove'),'background:var(--ps-surface-solid)');
+ assert.equal(rule('.keep'),'color:var(--ps-accent)');
+ assert.equal(rule('.remove'),'color:var(--ps-destructive)');
+ assert.match(source,/\.media\{[^']*touch-action:pan-y pinch-zoom/);
+ assert.doesNotMatch(css,/overflow:hidden;position:relative|\.album-controls\{background:|\.queue span\{font:/);
 });
