@@ -427,10 +427,11 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch,confirm:()=>true});
  await mounted.click('send');
  assert.equal((await mounted.read()).items[0].queueSent,true);
- assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash above to use this panel, or open the review album to move items manually in Google Photos.');
+ assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
  const content=mounted.nodes.get('overlay').childNodes[0],footer=content.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or select Enable Move to Trash above.');
  assert.equal(footer.childNodes[0].textContent,'Swipes never delete media. Send candidates to a review album, or select Enable Move to Trash above.');
  const toolbar=content.childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash')));
+ assert.ok(content.childNodes.indexOf(mounted.nodes.get('status'))<content.childNodes.indexOf(toolbar));
  assert.ok(content.childNodes.indexOf(toolbar)<content.childNodes.indexOf(footer));
  assert.ok(toolbar.childNodes.some(node=>node.childNodes.includes(mounted.nodes.get('trash-opt-in'))));
  assert.equal(mounted.nodes.get('move-trash').hidden,true);
