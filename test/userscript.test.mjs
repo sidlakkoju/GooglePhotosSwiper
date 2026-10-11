@@ -1,7 +1,7 @@
 import {injectRelease} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,access,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {readFile,access,mkdtemp,writeFile,rm,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -152,6 +152,24 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  for(const line of metadata.trim().split('\n').slice(1))assert.match(line,/^\/\/ @/);
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+});
+test('rebuilt panel version follows a metadata version bump',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'photos-version-'));
+ try{
+  for(const name of ['scripts','lib','extension','public'])await cp(new URL('../'+name,import.meta.url),join(directory,name),{recursive:true});
+  const builderPath=join(directory,'scripts/build-userscript.mjs');
+  const builder=await readFile(builderPath,'utf8');
+  const version='9.8.7';
+  await writeFile(builderPath,builder.replace(/^\/\/ @version .*$/gm,'// @version '+version));
+  const result=spawnSync(process.execPath,[builderPath],{cwd:directory,encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  const source=await readFile(join(directory,'userscript/photoswiper.user.js'),'utf8');
+  const metadataVersion=/^\/\/ @version (\S+)$/m.exec(source)[1];
+  assert.equal(metadataVersion,version);
+  const mounted=bundleEnvironment();
+  vm.runInNewContext(source,mounted.environment);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+metadataVersion);
+ }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
  const bytes=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));
