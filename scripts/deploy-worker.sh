@@ -11,6 +11,7 @@ if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
 fi
 
 node "$repository_root/scripts/build-userscript.mjs"
+node "$repository_root/scripts/sign-release.mjs"
 cd "$repository_root/worker"
 database_list="$(npx --yes wrangler@4 d1 list --json)"
 database_id="$(printf '%s' "$database_list" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{const db=JSON.parse(s).find(d=>d.name==="photoswiper-sync");if(db)process.stdout.write(db.uuid||db.id);});')"

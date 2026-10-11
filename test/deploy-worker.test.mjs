@@ -11,7 +11,7 @@ test('deployment installs supplied secrets and preserves omitted secrets',()=>{
   for(const directory of ['scripts','worker','bin'])mkdirSync(join(root,directory));
   writeFileSync(join(root,'scripts/deploy-worker.sh'),readFileSync(new URL('../scripts/deploy-worker.sh',import.meta.url)));
   writeFileSync(join(root,'worker/wrangler.toml'),'database_id = "REPLACE_DATABASE_ID"\n');
-  writeFileSync(join(root,'bin/node'),'#!/usr/bin/env bash\nif [[ "$1" == "-e" ]]; then\n  exec "$TEST_NODE" "$@"\nfi\n',{mode:0o755});
+  writeFileSync(join(root,'bin/node'),'#!/usr/bin/env bash\nif [[ "$1" == "-e" ]]; then\n  exec "$TEST_NODE" "$@"\nfi\nprintf "%s\\n" "$1" >> "$TEST_LOG"\nif [[ "$1" == */sign-release.mjs && "${TEST_SIGN_FAIL:-}" == 1 ]]; then exit 1; fi\n',{mode:0o755});
   writeFileSync(join(root,'bin/npx'),`#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$TEST_LOG"
 if [[ "$3 $4" == "d1 list" ]]; then
@@ -28,6 +28,8 @@ fi
    const result=spawnSync('bash',[join(root,'scripts/deploy-worker.sh')],{env:{...base,SYNC_TOKEN:supplied?'test-sync-secret':'',PAIRING_IP_KEY:supplied?'test-pairing-key':''},encoding:'utf8'});
    assert.equal(result.status,0,result.stderr);
    const commands=readFileSync(log,'utf8');
+   assert.ok(commands.indexOf('build-userscript.mjs')<commands.indexOf('sign-release.mjs'));
+   assert.ok(commands.indexOf('sign-release.mjs')<commands.indexOf('d1 list'));
    assert.match(commands,/d1 migrations apply/);
    assert.match(commands,/deploy --config/);
    for(const [name,value] of [['SYNC_TOKEN','test-sync-secret'],['PAIRING_IP_KEY','test-pairing-key']]){
@@ -37,5 +39,9 @@ fi
     if(supplied)assert.ok(commands.indexOf(`secret put ${name}`)<commands.indexOf('deploy --config'));
    }
   }
+  writeFileSync(log,'');
+  const failed=spawnSync('bash',[join(root,'scripts/deploy-worker.sh')],{env:{...base,TEST_SIGN_FAIL:'1'},encoding:'utf8'});
+  assert.notEqual(failed.status,0);
+  assert.equal(readFileSync(log,'utf8').includes('wrangler'),false);
  }finally{rmSync(root,{recursive:true,force:true});}
 });

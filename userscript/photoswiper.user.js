@@ -19,6 +19,8 @@
 
 (function () {
 'use strict';
+if(document.documentElement.dataset.psLoaded)return;
+document.documentElement.dataset.psLoaded='1';
 async function photosOperation(operation,args={},environment=globalThis) {
  const {window,location,fetch,crypto}=environment;
  const AbortController=environment.AbortController;

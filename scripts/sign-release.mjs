@@ -1,0 +1,14 @@
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {createPrivateKey,createPublicKey,sign} from 'node:crypto';
+import {pinnedReleaseKey,releaseMessage} from '../lib/userscript-loader.mjs';
+const keyPath=process.env.PHOTOSWIPER_SIGNING_KEY||'/home/box/shared/photoswiper-signing.key';
+const key=createPrivateKey(await readFile(keyPath));
+const publicKey=createPublicKey(key).export({format:'jwk'});
+if(key.asymmetricKeyType!=='ed25519'||Buffer.from(publicKey.x,'base64url').toString('base64')!==pinnedReleaseKey)throw Error('Signing key does not match the pinned Ed25519 key');
+const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+const version=code.match(/^\/\/ @version\s+(\S+)/m)?.[1];
+if(!version)throw Error('Missing app version');
+const release={version,code};
+release.signature=sign(null,Buffer.from(releaseMessage(release)),key).toString('base64');
+await mkdir(new URL('../worker/generated/',import.meta.url),{recursive:true});
+await writeFile(new URL('../worker/generated/release.mjs',import.meta.url),`export default ${JSON.stringify(release)};\n`);
