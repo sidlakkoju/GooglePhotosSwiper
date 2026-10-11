@@ -30,7 +30,8 @@ test('rollback and timeout fall back to verified cache',async()=>{
  for(const latest of [signed('1.0.0'),'timeout',{...signed(),code:'tampered'}]){
   const {env,scripts,writes}=environment(signed('2.0.0'),latest);
   assert.equal(await startLoader(env,key),true);
-  assert.equal(scripts[0].textContent,signed('2.0.0').code);
+  const context={};vm.runInNewContext(scripts[0].textContent,context);assert.equal(context.appRuns,1);
+  assert.match(scripts[0].textContent,/\}\)\("2\.0\.0"\);$/);
   assert.equal(scripts[0].nonce,'page-nonce');
   assert.equal(env.request.timeout,1500);
   assert.match(env.request.url,/photoswiper-release.json\?t=\d+/);
@@ -63,7 +64,7 @@ test('full app skips when the shared app marker is set',async()=>{
 test('loader metadata declares separate install URL and required grants',async()=>{
  const code=await readFile(new URL('../userscript/photoswiper-loader.user.js',import.meta.url),'utf8');
  for(const line of ['@match https://photos.google.com/*','@inject-into content','@grant GM.xmlHttpRequest','@grant GM.getValue','@grant GM.setValue','@grant GM_xmlhttpRequest','@grant GM_getValue','@grant GM_setValue','@connect photoswiper-sync.sidlakkoju.workers.dev'])assert.ok(code.includes(line));
- for(const field of ['downloadURL','updateURL'])assert.ok(code.includes('@'+field+' https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js'));
+ for(const field of ['downloadURL','updateURL'])assert.deepEqual([...code.slice(0,code.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),['https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js']);
 });
 
 test('loader watchdog falls back when the GM request never calls back',async()=>{

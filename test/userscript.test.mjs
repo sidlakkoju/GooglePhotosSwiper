@@ -1,3 +1,4 @@
+import {injectRelease} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,access,mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -142,6 +143,8 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  const mounted=bundleEnvironment();
  vm.runInNewContext(source,mounted.environment);
  assert.equal(mounted.hosts.length,1);assert.equal(mounted.shadowMode,'open');
+ assert.equal(mounted.nodes.get('running-version').textContent,'v'+/^\/\/ @version (\S+)$/m.exec(source)[1]);
+ for(const field of ['updateURL','downloadURL'])assert.deepEqual([...source.slice(0,source.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),[url]);
  assert.equal(typeof mounted.nodes.get('launcher').onclick,'function');
  assert.match(mounted.root.childNodes[0].childNodes[0].textContent,/#zoom\{[^}]*min-height:44px/);
  assert.doesNotMatch(source,/innerHTML|outerHTML|insertAdjacentHTML/);
@@ -1619,4 +1622,14 @@ test('decision history caps visible rows while retaining all Undo entries',async
  assert.equal(rows[100].textContent,'Showing the latest 100 of 105 decisions.');
  assert.match(rows[0].textContent,/synthetic-104-/);
  assert.equal((await mounted.read()).history.length,105);
+});
+
+test('loader panel displays the selected signed release version instead of the bundled version',async()=>{
+ const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ for(const version of ['1.2.99','1.2.8']){
+  const mounted=bundleEnvironment();
+  const document={documentElement:{dataset:{}},querySelector:()=>null,createElement:()=>({remove(){}}),head:{appendChild:script=>vm.runInNewContext(script.textContent,mounted.environment)}};
+  assert.equal(injectRelease({document},{version,code}),true);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
+ }
 });
