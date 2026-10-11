@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.13
+// @version 1.2.14
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -19,6 +19,8 @@
 
 (function () {
 'use strict';
+if(document.documentElement.dataset.psLoaded)return;
+document.documentElement.dataset.psLoaded='1';
 async function photosOperation(operation,args={},environment=globalThis) {
  const {window,location,fetch,crypto}=environment;
  const AbortController=environment.AbortController;
