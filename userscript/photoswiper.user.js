@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.3
+// @version 1.2.4
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -296,7 +296,7 @@ function createSyncClient({fetch,status=()=>{}}) {
     await request(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
    }
    next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress});
-   status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs`);return next;
+   status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){status(`${error.message} \u00b7 saved locally; retry on next action`);return state;}
  }
  return {configure,sync};
