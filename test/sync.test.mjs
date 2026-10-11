@@ -247,8 +247,25 @@ test('revoking an issuer prevents outstanding pairing claims',async()=>{
 test('concurrent short failures at the global cap burn live codes only once',async()=>{
  const e=env(),pairing=await start(e),window=Math.floor(Date.now()/3600000)*3600;
  e.DB.sqlite.prepare('INSERT INTO pair_attempts VALUES (?,?,99)').run(new Uint8Array(await hash('global-short-failures')),window);
+ const prepare=e.DB.prepare.bind(e.DB),claimCount=8;
+ let reads=0,release;
+ const allRead=new Promise(resolve=>release=resolve);
+ e.DB.prepare=sql=>{
+  const statement=prepare(sql);
+  if(sql!=='SELECT count FROM pair_attempts WHERE ip_hash = ? AND window_start = ?')return statement;
+  return {...statement,bind:(...args)=>{
+   const bound=statement.bind(...args);
+   return {...bound,first:async()=>{
+    const result=await bound.first();
+    if(++reads===claimCount)release();
+    await allRead;
+    return result;
+   }};
+  }};
+ };
  const wrong=pairing.short==='000000'?'000001':'000000';
- const responses=await Promise.all(Array.from({length:8},(_,index)=>claim(e,{short:wrong},`198.51.100.${index+1}`)));
+ const responses=await Promise.all(Array.from({length:claimCount},(_,index)=>claim(e,{short:wrong},`198.51.100.${index+1}`)));
+ assert.equal(reads,claimCount);
  assert.equal(responses.filter(response=>response.status===400).length,1);
  assert.equal(responses.filter(response=>response.status===429).length,7);
  for(const response of responses.filter(response=>response.status===429))assert.ok(Number(response.headers.get('Retry-After'))>0);
