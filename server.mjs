@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { timingSafeEqual,randomInt } from 'node:crypto';
 import { createStore,hash,secret,problem,text,key,mediaURL } from './lib/store.mjs';
 const publicDir=new URL('./public/',import.meta.url),types={html:'text/html',css:'text/css',js:'text/javascript',svg:'image/svg+xml'};
-const assets=new Set(['index.html','guide.html','app.js','viewer.js','model.js','bridge.js','connection.js','cache.js','import-review.js','undo-history.js','styles.css','demo.svg']);
+const assets=new Set(['index.html','guide.html','app.js','viewer.js','swipe.js','model.js','bridge.js','connection.js','cache.js','import-review.js','undo-history.js','styles.css','demo.svg']);
 export function createApp({dbPath=':memory:',loginCode=secret(),now=()=>Date.now(),mediaFetch=fetch}={}){
  const store=createStore(dbPath),{db}=store;let pairing=null,attempts={count:0,start:now()},pairAttempts={count:0,start:now()};
  const server=http.createServer(async(req,res)=>{
