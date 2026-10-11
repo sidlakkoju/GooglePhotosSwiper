@@ -881,13 +881,29 @@ test('release metadata names the author and install guide explains Chrome script
  test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
  const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');
- assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');
+ assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');preview.complete=true;preview.naturalWidth=800;
  await mounted.click('keep');
- assert.equal(mounted.nodes.get('media').querySelector('img'),preview);
+ assert.equal(mounted.nodes.get('media').querySelector('img'),preview);assert.equal(preview.hidden,false);
  assert.equal(under.querySelector('img').dataset.key,'c');
  mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
  assert.equal(under.hidden,true);
  });
+
+test('a failed reused under-card preview refreshes and exposes Retry on another failure',async()=>{
+ const calls=[],mounted=await mountedReview([item('a'),item('b'),item('c')],async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://video-downloads.google.com/download'])};
+ });
+ const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');preview.complete=true;preview.naturalWidth=0;
+ await mounted.click('keep');await settlePreviews();
+ assert.deepEqual(calls,['b']);
+ const media=mounted.nodes.get('media'),refreshed=media.querySelector('img');assert.ok(refreshed);assert.notEqual(refreshed,preview);
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+ await refreshed.onerror();assert.equal(media.querySelector('button').textContent,'Retry');
+ media.querySelector('button').onclick();await settlePreviews();
+ assert.deepEqual(calls,['b','b']);assert.ok(media.querySelector('img'));
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+});
 
 test('an unresolved fly animation never blocks the next decision',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
@@ -1272,6 +1288,7 @@ test('stale saved previews refresh only the current and preload window on open a
  assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
  assert.equal(calls.length,4);
  assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
  assert.equal((await mounted.read()).items.filter(row=>row.decision).length,0);
  calls.length=0;
  mounted.environment.document.visibilityState='visible';
@@ -1280,6 +1297,7 @@ test('stale saved previews refresh only the current and preload window on open a
  const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
  try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
  assert.equal(calls.length,4);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
  mounted.nodes.get('close').onclick();calls.length=0;
  mounted.environment.document.listeners.visibilitychange();await settlePreviews();assert.equal(calls.length,0);
 });
