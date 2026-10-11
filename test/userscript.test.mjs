@@ -119,11 +119,11 @@ test('Trash pagination and unknown reconciliation preserve local state and do no
  await assert.rejects(readReviewTrash(async()=>({items:[],nextPageId:'loop'})),/repeated/);
  await assert.rejects(reconcileReviewTrash({...state,job:{}},call),/Finish/);
 });
-test('built userscript metadata, page isolation, no privileged APIs and reproducible artifact',async()=>{
+test('built userscript metadata, page isolation, privileged pairing storage and reproducible artifact',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const url='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
- for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant none','@inject-into page',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
- assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/\bGM[_\.]|chrome\.|localhost|photos-swipe-request/);
+ for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant GM.getValue','@grant GM.setValue','@grant GM.deleteValue','@grant unsafeWindow','@inject-into content',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
+ assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/chrome\.|localhost|photos-swipe-request/);
  assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('const cardElement=')<source.indexOf('const statsElement='));
  const body=source.slice(source.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);assert.doesNotMatch(body,/^\s*\/\/|\/\*/m);
  new vm.Script(source);
@@ -224,6 +224,7 @@ function fakeIndexedDB(fault={}) {
    const staged=new Map(stores.get(name));let aborted=false;
    const tx={objectStore:()=>({
     get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    delete:key=>staged.delete(key),
     put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
@@ -780,6 +781,7 @@ test('first-use sync setup is above the card and local dismissal survives reopen
  assert.ok(content.childNodes.indexOf(settings)<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.equal(settings.open,true);
+ assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
  await mounted.click('sync-local');assert.equal(settings.open,false);
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
@@ -858,7 +860,78 @@ test('decision history previews the same next Undo and updates after undo and re
 
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- assert.match(source,/\/\/ @version 1\.2\.3\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
+ assert.match(source,/\/\/ @version 1\.2\.4\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
+});
+
+test('GM pairing migrates once, removes page credentials and survives page storage replacement',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ let db=await openReviewDatabase(fakeIndexedDB());
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-device-token',deviceName:'Test phone',onboardingDismissed:true,unrelated:'discard'});
+ const values=new Map(),writes=[];
+ const GM={getValue:async key=>values.get(key),setValue:async(key,value)=>{writes.push(value);values.set(key,structuredClone(value));},deleteValue:async key=>values.delete(key)};
+ const store=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ const first=await store.settings();assert.equal(store.durable,true);assert.ok(first.deviceId);assert.equal(first.deviceName,'Test phone');
+ assert.deepEqual(await db.settings(),{onboardingDismissed:true});assert.equal(writes.length,1);assert.equal(writes[0].unrelated,undefined);
+ await store.settings();assert.equal(writes.length,1);
+ db=await openReviewDatabase(fakeIndexedDB());
+ const reinstalled=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ assert.equal((await reinstalled.settings()).token,first.token);assert.equal((await reinstalled.settings()).deviceId,first.deviceId);
+ await db.saveSettings({url:'https://old.example',token:'stale'});assert.equal((await store.settings()).token,first.token);assert.deepEqual(await db.settings(),{});
+ await store.saveSettings({url:'https://sync.example',token:'replacement-token',deviceName:'New phone',onboardingDismissed:true,items:['excluded']});
+ const replacement=await store.settings();assert.equal(replacement.token,'replacement-token');assert.ok(replacement.deviceId);assert.equal(writes.at(-1).items,undefined);assert.equal(writes.at(-1).onboardingDismissed,undefined);assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+ await store.saveSettings({url:'',token:''});assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);
+});
+
+test('GM failures preserve migration credentials and undefined GM uses local fallback',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(fakeIndexedDB()),credentials={url:'https://sync.example',token:'synthetic-token'};
+ await db.saveSettings(credentials);
+ const broken=await createPairingStore({GM:{getValue:async()=>undefined,setValue:async()=>{throw Error('Synthetic GM failure');},deleteValue:async()=>{}},database:async()=>db,crypto:webcrypto});
+ await assert.rejects(broken.settings(),/Synthetic GM failure/);assert.deepEqual(await db.settings(),credentials);
+ for(const GM of [undefined,{}]){
+  const fallback=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});assert.equal(fallback.durable,false);
+  assert.deepEqual(await fallback.settings(),credentials);await fallback.saveSettings({...credentials,deviceId:'local-device'});assert.equal((await db.settings()).deviceId,'local-device');await db.saveSettings(credentials);
+ }
+});
+
+test('privileged bundle keeps sync fetch and saved credentials away from the page',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment(),pageWindow=mounted.environment.window;
+ mounted.environment.window={...pageWindow,WIZ_global_data:undefined};
+ mounted.environment.unsafeWindow=pageWindow;
+ mounted.environment.AbortSignal=AbortSignal;
+ let pairing={url:'https://sync.example',token:'synthetic-private-token',deviceId:'device'};
+ mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ let calls=0;
+ mounted.environment.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer synthetic-private-token');return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ assert.equal(calls,1);assert.equal(mounted.nodes.get('sync-token').value,'');assert.match(mounted.nodes.get('sync-status').textContent,/Synced/);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.deepEqual(await (await openReviewDatabase(pageWindow.indexedDB)).settings(),{});
+ assert.ok(!JSON.stringify(Object.keys(pageWindow)).includes('synthetic-private-token'));
+});
+
+test('content-only manager bridges Google operations without passing pairing credentials',async()=>{
+ const {createPagePhotosBridge}=await import('../lib/userscript-bridge.mjs');
+ const pageListeners=[],contentListeners=[],messages=[],requests=[];
+ const pageWindow={WIZ_global_data:{...tokens},addEventListener:(type,listener)=>pageListeners.push(listener)};
+ const contentWindow={addEventListener:(type,listener)=>contentListeners.push(listener)};
+ const send=(listeners,source,data)=>{messages.push(structuredClone(data));queueMicrotask(()=>listeners.forEach(listener=>listener({source,data:structuredClone(data)})));};
+ pageWindow.postMessage=data=>send(contentListeners,contentWindow,data);
+ contentWindow.postMessage=data=>send(pageListeners,pageWindow,data);
+ const pageContext={window:pageWindow,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,TextEncoder,Uint8Array,URL,URLSearchParams,fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);
+  return {ok:true,text:async()=>envelope(entry[0],['lcxiM','zy0IHe'].includes(entry[0])?[[],null]:[['synthetic-album']])};
+ }};
+ const document={querySelector:()=>({nonce:'synthetic-nonce'}),createElement:()=>({setAttribute(key,value){this[key]=value;},remove(){this.removed=true;}}),documentElement:{append(script){assert.equal(script.nonce,'synthetic-nonce');vm.runInNewContext(script.textContent,pageContext);}}};
+ const call=createPagePhotosBridge({window:contentWindow,document,crypto:webcrypto,setTimeout,clearTimeout});
+ assert.equal((await call('identity')).data.label,tokens.oPEP7c);
+ assert.equal((await call('library')).ok,true);assert.equal((await call('trashPage')).ok,true);
+ assert.equal((await call('createAlbum',{title:'Photos Swipe · Review · QA-DUMMY'})).ok,true);
+ assert.deepEqual(requests,['lcxiM','zy0IHe','OXvT9d']);
+ assert.ok(messages.every(message=>!JSON.stringify(message).includes('synthetic-private-token')));
+ assert.equal((await call('unsupported')).ok,false);
 });

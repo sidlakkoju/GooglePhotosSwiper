@@ -2,12 +2,15 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.3
+// @version 1.2.4
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
-// @grant none
-// @inject-into page
+// @grant GM.getValue
+// @grant GM.setValue
+// @grant GM.deleteValue
+// @grant unsafeWindow
+// @inject-into content
 // @noframes
 // @updateURL https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js
 // @downloadURL https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js
@@ -240,7 +243,7 @@ async function openReviewDatabase(indexedDB) {
   return new Promise((resolve,reject)=>{
    const tx=db.transaction(store,change?'readwrite':'readonly'),table=tx.objectStore(store),request=table.get(key);let result,failure;
    request.onsuccess=()=>{
-    try {result=change?change(request.result):request.result;if(change)table.put(result,key);}catch(error){failure=error;tx.abort();}
+    try {result=change?change(request.result):request.result;if(change){if(result===undefined)table.delete(key);else table.put(result,key)};}catch(error){failure=error;tx.abort();}
    };
    tx.oncomplete=()=>resolve(result);
    tx.onabort=()=>reject(failure||tx.error||Error('Local storage transaction failed.'));
@@ -249,6 +252,7 @@ async function openReviewDatabase(indexedDB) {
  }
  return {
   settings:async()=>await transaction('settings','sync')||{},
+  deleteSettings:()=>transaction('settings','sync',()=>undefined),
   saveSettings:value=>transaction('settings','sync',()=>value),
   read:async account=>(await transaction('accounts',account))||emptyReview(),
   save:(account,state)=>transaction('accounts',account,current=>{
@@ -319,10 +323,65 @@ function validateSyncSettings(url,token) {
  return {url:parsed.origin,token};
 }
 
+async function createPairingStore({GM,database,crypto}) {
+ const durable=!!GM&&['getValue','setValue','deleteValue'].every(name=>typeof GM[name]==='function');
+ const key='photos-swipe-pairing';
+ const select=value=>Object.fromEntries(['url','token','deviceId','deviceName'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
+ async function settings() {
+  const db=await database();
+  if(!durable)return db.settings();
+  let value=await GM.getValue(key);
+  const legacy=await db.settings();
+  if(value===undefined&&legacy.url&&legacy.token){
+   value={...select(legacy),deviceId:legacy.deviceId||crypto.randomUUID()};
+   await GM.setValue(key,value);
+  }
+  if(legacy.token||legacy.url||legacy.deviceId||legacy.deviceName){await db.deleteSettings();if(legacy.onboardingDismissed)await db.saveSettings({onboardingDismissed:true});}
+  return {...select(value),onboardingDismissed:legacy.onboardingDismissed};
+ }
+ async function saveSettings(value) {
+  const db=await database();
+  if(!durable)return db.saveSettings(value);
+  if(value.url&&value.token)await GM.setValue(key,{...select(value),deviceId:value.deviceId||crypto.randomUUID()});
+  else await GM.deleteValue(key);
+  await db.saveSettings(value.onboardingDismissed?{onboardingDismissed:true}:{});
+ }
+ return {durable,settings,saveSettings};
+}
+
+function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}) {
+ const channel=crypto.randomUUID();
+ const pending=new Map();
+ window.addEventListener('message',event=>{
+  if(event.source!==window||event.data?.channel!==channel||event.data?.kind!=='photos-result')return;
+  const entry=pending.get(event.data.id);
+  if(!entry)return;
+  pending.delete(event.data.id);clearTimeout(entry.timer);entry.resolve(event.data.result);
+ });
+ const script=document.createElement('script');
+ const nonce=document.querySelector('script[nonce]')?.nonce;
+ if(nonce)script.setAttribute('nonce',nonce);
+ script.textContent=`(${function(channel,operation){
+  window.addEventListener('message',async event=>{
+   if(event.source!==window||event.data?.channel!==channel||event.data?.kind!=='photos-call')return;
+   const {id,name,args}=event.data;
+   const result=await operation(name,args);
+   window.postMessage({channel,kind:'photos-result',id,result},location.origin);
+  });
+ }.toString()})(${JSON.stringify(channel)},${photosOperation.toString()});`;
+ document.documentElement.append(script);script.remove();
+ return (name,args={})=>new Promise(resolve=>{
+  const id=crypto.randomUUID();
+  const timer=setTimeout(()=>{pending.delete(id);resolve({ok:false,error:'Google Photos page bridge unavailable. Reload or check userscript injection permissions.'});},35000);
+  pending.set(id,{resolve,timer});
+  window.postMessage({channel,kind:'photos-call',id,name,args},'https://photos.google.com');
+ });
+}
+
 function mountPhotosSwipe(environment) {
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
- const rawCall=createPhotosAPI(environment),owner=environment.crypto.randomUUID();
+ const rawCall=environment.photosCall||createPhotosAPI(environment),owner=environment.crypto.randomUUID();
  const host=document.createElement('div');host.id='photos-swipe-userscript-host';
  host.style.cssText='all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none';
  const root=host.attachShadow({mode:'open'});
@@ -527,7 +586,13 @@ function mountPhotosSwipe(environment) {
  }
  let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
- const syncClient=createSyncClient({fetch:environment.fetch,status:value=>{syncSummary=value;$('sync-status').textContent=value;}});
+ const pairingNotice=document.createElement('p');settingsPanel.append(pairingNotice);
+ const pairingPromise=createPairingStore({GM:environment.GM,database,crypto:environment.crypto}).then(async store=>{
+  if(!store.durable)pairingNotice.textContent='Pairing may not persist in this browser';
+  try{await store.settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}
+  return store;
+ });
+ const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,status:value=>{syncSummary=value;$('sync-status').textContent=value;}});
  const synchronize=async()=>{state=await syncClient.sync(identity.account,state,async next=>{if(leaseError)throw leaseError;await db.lease(identity.account,owner);return db.save(identity.account,next);});};
  const readyMessage=()=>syncEnabled?`Ready. Decisions are saved locally with sync enabled. ${syncSummary}`:'Ready. Decisions are saved locally on this browser.';
  const idleMessage=()=>state.job?'A saved album operation is ready to retry.':readyMessage();
@@ -627,7 +692,7 @@ function mountPhotosSwipe(environment) {
   if(busy)return;
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
   busy=true;controls();
-  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;if(syncEnabled)await withAccountLease(synchronize);message(idleMessage());}
+  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await (await pairingPromise).settings();$('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;if(syncEnabled)await withAccountLease(synchronize);message(idleMessage());}
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
  function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
@@ -644,8 +709,8 @@ function mountPhotosSwipe(environment) {
  }
 
  function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
- $('sync-save').onclick=()=>run(async()=>{const settings=validateSyncSettings($('sync-url').value.trim(),$('sync-token').value);await db.saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
- $('sync-local').onclick=()=>run(async()=>{const settings=await db.settings();await db.saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
+ $('sync-save').onclick=()=>run(async()=>{const previous=await (await pairingPromise).settings();const url=$('sync-url').value.trim();const settings={...previous,...validateSyncSettings(url,$('sync-token').value||(url===previous.url?previous.token||'':''))};$('sync-token').value='';await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
+ $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;render();};
  $('zoom').oninput=()=>{const image=$('media').querySelector('img');if(image){image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'pan-y pinch-zoom';}};
@@ -683,5 +748,8 @@ function mountPhotosSwipe(environment) {
  },true);
 }
 
-mountPhotosSwipe({window,document,location,fetch:window.fetch.bind(window),crypto:window.crypto,indexedDB:window.indexedDB,AbortController:window.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)});
+const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
+const environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:window.indexedDB,AbortController:window.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+if(typeof unsafeWindow==='undefined'&&!window.WIZ_global_data)environment.photosCall=createPagePhotosBridge(environment);
+mountPhotosSwipe(environment);
 })();
