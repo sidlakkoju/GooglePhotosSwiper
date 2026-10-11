@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {loadUndoHistory,validUndoHistory} from '../public/undo-history.js';
+import {createStore} from '../lib/store.mjs';
 import {removalQueue} from '../public/model.js';
 
 const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
@@ -21,7 +22,7 @@ function review({delayed=false}={}){
  context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
- for(const name of ['render','enqueueReviewAction','choose','undo','applyDecision','applyUndo','refreshWorkspace']){
+ for(const name of ['render','enqueueReviewAction','choose','undo','applyDecision','applyUndo','refreshWorkspace','loadWorkspace']){
   const line=source.split('\n').find(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));
   vm.runInContext(line,context);
  }
@@ -260,6 +261,7 @@ test('a workspace request preserves the sequence queued after it begins',async()
  let release;
  context.api=()=>new Promise(resolve=>{release=resolve;});
  const refresh=context.refreshWorkspace();
+ await new Promise(resolve=>setImmediate(resolve));
  const press=keyboard(context);
  for(const key of ['ArrowLeft','z','ArrowRight','z','ArrowLeft','ArrowLeft','z','z'])press(key);
  release({items:[{id:'first'},{id:'next'},{id:'third'}],jobs:[]});
@@ -308,4 +310,109 @@ test('focus skips workspace reloads while review actions are queued or running',
  focus();
  assert.equal(reads,1);
  assert.equal(context.reviewActionsPending,0);
+});
+
+
+test('workspace reload blocks revision-checked writes through the full swipe and undo burst',async()=>{
+ const store=createStore();
+ try{
+  store.setSetting('account','synthetic');
+  store.importItems(['first','next','third'].map(mediaKey=>({mediaKey,type:'photo',thumbUrl:'https://lh3.googleusercontent.com/synthetic'})),'synthetic');
+  const {context,$,timers}=review({delayed:true});
+  context.mode='google';
+  context.items=store.listItems();
+  const writes=[];
+  let releaseWorkspace,releaseDecision;
+  context.api=async(path,data)=>{
+   if(path==='/workspace'){
+    const snapshot={items:store.listItems(),jobs:[]};
+    await new Promise(resolve=>{releaseWorkspace=resolve;});
+    return snapshot;
+   }
+   assert.equal(path,'/decisions');
+   if(!writes.length)await new Promise(resolve=>{releaseDecision=resolve;});
+   const result=store.decide(data.id,data.decision,data.revision);
+   writes.push([data.id,data.decision]);
+   return result;
+  };
+  vm.runInContext(source.slice(source.indexOf('async function updateDecision('),source.indexOf('let reviewActions=')),context);
+  const refresh=context.refreshWorkspace();
+  await new Promise(resolve=>setImmediate(resolve));
+  const press=keyboard(context);
+  for(const key of ['ArrowLeft','z','ArrowRight','z','ArrowLeft','ArrowLeft','z','z'])press(key);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(releaseDecision,undefined);
+  assert.equal(context.animating,false);
+  releaseWorkspace();
+  await refresh;
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(context.animating,true);
+  releaseDecision();
+  for(let n=0;n<4;n++){
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(timers.length,1);
+   timers.shift()();
+  }
+  await context.reviewActions;
+  assert.deepEqual(writes,[['synthetic:first','remove'],['synthetic:first',null],['synthetic:first','keep'],['synthetic:first',null],['synthetic:first','remove'],['synthetic:next','remove'],['synthetic:next',null],['synthetic:first',null]]);
+  assert.ok(store.listItems().every(item=>item.decision===null));
+  assert.equal(context.history.length,0);
+  assert.equal($('progress-text').textContent,'0 of 3 reviewed');
+  assert.equal(removalQueue(context.items,context.decisions).length,0);
+ }finally{store.close();}
+});
+
+test('workspace reload waits for an in-flight decision and its animation',async()=>{
+ const {context,timers}=review({delayed:true});
+ const save=context.updateDecision;
+ let release,reads=0;
+ context.updateDecision=async(item,decision)=>{await new Promise(resolve=>{release=resolve;});return await save(item,decision);};
+ context.api=async()=>{reads++;return {items:context.items.map(item=>({...item,decision:context.decisions[item.id]})),jobs:[]};};
+ const swipe=context.choose('keep');
+ await new Promise(resolve=>setImmediate(resolve));
+ const refresh=context.refreshWorkspace();
+ assert.equal(reads,0);
+ release();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(reads,0);
+ timers.shift()();
+ await swipe;
+ await refresh;
+ assert.equal(reads,1);
+ assert.equal(context.decisions.first,'keep');
+});
+
+test('sort, filter, and navigation cannot change the target of a queued burst',async()=>{
+ const {context,$,timers,writes}=review({delayed:true});
+ context.sort='original';
+ let selectedFilter;
+ const filterButton={dataset:{filter:'video'}};
+ context.document={querySelectorAll:()=>[filterButton],addEventListener(){}};
+ context.setFilter=value=>{selectedFilter=value;};
+ vm.runInContext(source.split('\n').find(line=>line.startsWith('function showView(')),context);
+ const handlers=source.split('\n').find(line=>line.startsWith("document.querySelectorAll('[data-filter]')"));
+ vm.runInContext(handlers.slice(0,handlers.indexOf("document.addEventListener('keydown'")),context);
+ const first=context.choose('remove'),second=context.choose('keep');
+ const sortTarget={value:'newest'};
+ $('sort').onchange({target:sortTarget});
+ filterButton.onclick();
+ context.showView('queue');
+ assert.equal(context.sort,'original');
+ assert.equal(sortTarget.value,'original');
+ assert.equal(selectedFilter,undefined);
+ assert.equal($('review-view').hidden,false);
+ for(let n=0;n<2;n++){
+  await new Promise(resolve=>setImmediate(resolve));
+  context.showView('queue');
+  $('sort').onchange({target:sortTarget});
+  assert.equal($('review-view').hidden,false);
+  timers.shift()();
+ }
+ await Promise.all([first,second]);
+ assert.deepEqual(writes,[['first','remove'],['next','keep']]);
+ sortTarget.value='newest';
+ $('sort').onchange({target:sortTarget});
+ filterButton.onclick();
+ assert.equal(context.sort,'newest');
+ assert.equal(selectedFilter,'video');
 });

@@ -13,11 +13,11 @@ const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 
 test('mobile navigation follows review counts and the selected view',()=>{
  const elements=new Map([...html.matchAll(/id="([^"]+)"/g)].map(([,id])=>[id,{hidden:false,textContent:'',style:{},dataset:{},attributes:{},classes:new Set(),querySelector:()=>null,setAttribute(name,value){this.attributes[name]=value;},removeAttribute(name){delete this.attributes[name];},classList:{toggle(name,on){elements.get(id).classes[on?'add':'delete'](name);}}}]));
- const context={$:id=>elements.get(id),items:[{id:'a'},{id:'b'},{id:'c'}],decisions:{a:'keep',b:'remove'},workspace:{},summarize,removalQueue,active:()=>null,pending:()=>[],arrangeCollection(){},renderGuide(){},renderStorage(){},resetCardGesture(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){}};
+ const context={reviewActionsPending:0,$:id=>elements.get(id),items:[{id:'a'},{id:'b'},{id:'c'}],decisions:{a:'keep',b:'remove'},workspace:{},summarize,removalQueue,active:()=>null,pending:()=>[],arrangeCollection(){},renderGuide(){},renderStorage(){},resetCardGesture(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){}};
  runInNewContext(app.match(/^function render\(\).*$/m)[0]+';render();',context);
  assert.equal(elements.get('mobile-remaining').textContent,1);
  assert.equal(elements.get('mobile-queue-count').textContent,1);
- runInNewContext(app.match(/^function showView\(v\).*$/m)[0]+";showView('queue');",context);
+ runInNewContext(app.match(/^function showView\(.*$/m)[0]+";showView('queue');",context);
  for(const prefix of ['mobile','nav']){
   assert.equal(elements.get(`${prefix}-queue`).attributes['aria-current'],'page');
   assert.ok(elements.get(`${prefix}-queue`).classes.has('active'));
@@ -37,7 +37,7 @@ test('collection controls follow view changes and viewport changes in DOM order'
  let resize;
  const viewport={matches:false,addEventListener(type,listener){assert.equal(type,'change');resize=listener;}};
  const context={$:id=>elements[id],document:{querySelector:selector=>elements[selector.slice(1)]},matchMedia:query=>{assert.equal(query,'(max-width:760px)');return viewport;}};
- const setup=app.slice(app.indexOf('const phoneLayout='),app.indexOf('function showView(v)'));
+ const setup=app.slice(app.indexOf('const phoneLayout='),app.indexOf('function showView('));
  runInNewContext(setup,context);
  assert.deepEqual(order,['stats','storage-detail','collection-actions','review-view','queue-view']);
  viewport.matches=true;resize();
