@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.4
+// @version 1.2.5
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -319,6 +319,43 @@ function validateSyncSettings(url,token) {
  return {url:parsed.origin,token};
 }
 
+function createReviewPreloader({createImage,createVideo,videoURL,previewURL,playbackURL}) {
+ const entries=new Map();
+ const active=entry=>entries.get(entry.key)===entry;
+ function dispose(entry){
+  entry.image?.removeAttribute('src');
+  if(entry.video){entry.video.pause();entry.video.removeAttribute('src');entry.video.removeAttribute('poster');entry.video.load();}
+ }
+ function update(items,current,{width,height,compact=false}={}) {
+  const index=items.findIndex(item=>item.mediaKey===current?.mediaKey),ahead=index<0?[]:items.slice(index+1);
+  const photos=ahead.filter(item=>item.type!=='video').slice(0,compact?2:3),videos=ahead.filter(item=>item.type==='video').slice(0,compact?1:2);
+  const wanted=new Map();
+  for(const item of [...(current?[current]:[]),...photos,...videos]){
+   try{const url=previewURL(item.thumbUrl,{width,height});wanted.set(item.mediaKey,{item,url});}catch{}
+  }
+  for(const [key,entry] of entries)if(wanted.get(key)?.url!==entry.preview){entries.delete(key);dispose(entry);}
+  for(const {item,url} of [...photos,...videos].map(item=>wanted.get(item.mediaKey)).filter(Boolean)){
+   if(entries.has(item.mediaKey))continue;
+   const entry={key:item.mediaKey,preview:url};entries.set(entry.key,entry);
+   Promise.resolve().then(async()=>{
+    if(!active(entry))return;
+    const image=createImage();entry.image=image;image.src=url;
+    const decoded=image.decode();
+    const warming=item.type==='video'?(entry.request=(async()=>{
+     const result=await videoURL(item.mediaKey);
+     if(!active(entry))return;
+     const source=playbackURL(result.url),video=createVideo();entry.video=video;entry.source=source;
+     video.preload='metadata';video.muted=true;video.poster=url;video.src=source;video.load();
+     video.onerror=()=>{if(active(entry)){entries.delete(entry.key);dispose(entry);}};
+     return source;
+    })()):Promise.resolve();
+    await Promise.all([decoded,warming]);
+   }).catch(()=>{if(active(entry)){entries.delete(entry.key);dispose(entry);}});
+  }
+ }
+ return {update,videoSource:key=>entries.get(key)?.source||entries.get(key)?.request,clear(){for(const entry of entries.values())dispose(entry);entries.clear();}};
+}
+
 function mountPhotosSwipe(environment) {
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
@@ -574,20 +611,23 @@ function mountPhotosSwipe(environment) {
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
  function deck(){const items=reviewDeck(state).filter(item=>$('filter').value==='all'||item.type===$('filter').value);if($('sort').value==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if($('sort').value==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));return items;}
  function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):reviewDeck(state).find(item=>item.mediaKey===focused)||deck()[0];}
- function mediaURL(value,video=false) {
+ function mediaURL(value,video=false,size={width:1200,height:1200}) {
   const url=new URL(value);
   if(url.protocol!=='https:'||!(url.hostname==='photos.fife.usercontent.google.com'||url.hostname.endsWith('.googleusercontent.com'))||url.username||url.password||url.port)throw Error('Unexpected preview host.');
-  if(!video){url.pathname=url.pathname.replace(/=.+$/,'')+'=w1200-h1200-k-no';url.searchParams.set('authuser',location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0');}
+  if(!video){url.pathname=url.pathname.replace(/=.+$/,'')+`=w${Math.max(1,Math.ceil(size.width))}-h${Math.max(1,Math.ceil(size.height))}-k-no`;url.searchParams.set('authuser',location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0');}
   return url.href;
  }
+ const preloader=createReviewPreloader({createImage:()=>document.createElement('img'),createVideo:()=>document.createElement('video'),videoURL:async mediaKey=>{const result=await rawCall('video',{mediaKey,account:identity.account});if(!result.ok)throw Error(result.error);return result.data;},previewURL:(url,size)=>mediaURL(url,false,size),playbackURL:url=>mediaURL(url,true)});
+ function previewSize(){const {width,height}=$('media').getBoundingClientRect();return {width:width||1,height:height||1,compact:!!window.matchMedia?.('(max-width:760px), (pointer:coarse)').matches};}
+ function preloadReview(item){preloader.update($('overlay').hidden||inspected?[]:deck(),$('overlay').hidden?null:item,previewSize());}
  function stopMedia(){generation++;const video=$('media').querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
  async function display(item) {
   stopMedia();$('zoom').value='1';shown=item?.mediaKey||null;const token=generation;
   if(!item){$('media').textContent='No items to review. Load more or refresh latest.';$('media').style.color='white';return;}
   try {
    const media=document.createElement(item.type==='video'?'video':'img');
-   if(item.type==='video'){media.controls=true;media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=mediaURL(item.thumbUrl);$('media').append(media);const result=await call('video',{mediaKey:item.mediaKey});if(token!==generation)return;media.src=mediaURL(result.url,true);media.play().catch(()=>{});}
-   else {media.alt=item.name;media.draggable=false;media.src=mediaURL(item.thumbUrl);media.ondblclick=()=>toggleEnlarge();$('media').append(media);}
+   if(item.type==='video'){media.controls=true;media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=mediaURL(item.thumbUrl,false,previewSize());$('media').append(media);const cached=preloader.videoSource(item.mediaKey),prefetched=await Promise.resolve(cached).catch(()=>null);if(token!==generation)return;const source=prefetched||mediaURL((await call('video',{mediaKey:item.mediaKey})).url,true);if(token!==generation)return;media.src=source;media.play().catch(()=>{});}
+   else {media.alt=item.name;media.draggable=false;media.src=mediaURL(item.thumbUrl,false,previewSize());media.ondblclick=()=>toggleEnlarge();$('media').append(media);}
    media.onerror=()=>{if(token===generation)message('Preview unavailable. Reload Google Photos and try again.');};
   }catch(error){if(token===generation)message(error.message);}
  }
@@ -595,6 +635,7 @@ function mountPhotosSwipe(environment) {
   const item=current(),queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
   $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:'No unreviewed items in this batch.';
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
+  preloadReview(item);
   $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
   const entries=[...(state.history||[])].reverse(),nextUndo=entries.find(entry=>canUndoReview(state,entry));
   const decisionLabel=value=>value==='remove'?'Queue':value==='keep'?'Keep':'Unreviewed';
@@ -625,12 +666,13 @@ function mountPhotosSwipe(environment) {
  }
  async function open() {
   if(busy)return;
+  preloader.clear();
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
   busy=true;controls();
   try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;if(syncEnabled)await withAccountLease(synchronize);message(idleMessage());}
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
- function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
+ function close(){preloader.clear();$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
  function decide(decision){
   if(busy)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
@@ -643,7 +685,9 @@ function mountPhotosSwipe(environment) {
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.limited?' \u00b7 Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);
  }
 
- function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
+ function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';refreshPreviews();}
+ function refreshPreviews(){if($('overlay').hidden)return;const item=current(),media=$('media').querySelector('img')||$('media').querySelector('video');if(item&&item.mediaKey===shown&&media?.tagName===(item.type==='video'?'VIDEO':'IMG')){const url=mediaURL(item.thumbUrl,false,previewSize());if(item.type==='video')media.poster=url;else media.src=url;}preloadReview(item);}
+ window.addEventListener('resize',refreshPreviews);
  $('sync-save').onclick=()=>run(async()=>{const settings=validateSyncSettings($('sync-url').value.trim(),$('sync-token').value);await db.saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await db.settings();await db.saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
