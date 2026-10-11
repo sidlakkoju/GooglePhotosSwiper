@@ -100,3 +100,35 @@ test('a failed new swipe replaces the Undo toast with the decision error',async(
  assert.equal(timers.size,1);
  assert.equal(context.active().id,'first');
 });
+
+test('a new swipe dismisses the Undo toast before its decision save completes',async()=>{
+ const {context,$,timers}=review();
+ await context.choose('keep');
+ await context.undo();
+ let finishSave;
+ context.updateDecision=()=>new Promise(resolve=>{finishSave=resolve;});
+ const swipe=context.choose('remove');
+ assert.equal(context.animating,true);
+ assert.equal($('toast').textContent,'');
+ assert.equal($('toast').classList.contains('show'),false);
+ assert.equal(timers.size,0);
+ finishSave(true);
+ await swipe;
+ assert.equal(context.animating,false);
+});
+
+for(const guard of ['busy','animating','hidden','no active item']){
+ test(`a swipe blocked by ${guard} preserves the Undo toast`,async()=>{
+  const {context,$,decisions,timers}=review();
+  await context.choose('keep');
+  await context.undo();
+  if(guard==='hidden')$('review-view').hidden=true;
+  else if(guard==='no active item')Object.assign(decisions,{first:'keep',next:'keep'});
+  else context[guard]=true;
+  context.updateDecision=()=>assert.fail('A blocked swipe must not save a decision');
+  await context.choose('remove');
+  assert.equal($('toast').textContent,'Last swipe undone');
+  assert.equal($('toast').classList.contains('show'),true);
+  assert.equal(timers.size,1);
+ });
+}
