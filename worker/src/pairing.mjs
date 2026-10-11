@@ -86,6 +86,12 @@ export async function pairingRequest(request,env,device,readBody,respond) {
   }
   return respond({error:'Pairing unavailable'},503);
  }
+ if(route==='/api/pair/start'&&method==='DELETE'){
+  const value=await readBody(request);
+  if(typeof value.id!=='string'||Object.keys(value).length!==1)throw Error('Invalid pairing input');
+  await db.prepare('UPDATE pairing_codes SET used_at = COALESCE(used_at, ?) WHERE id = ? AND created_by_device = ?').bind(now,value.id,device.id).run();
+  return respond({ok:true});
+ }
  if(route==='/api/pair/status'&&method==='GET'){
   const result=await db.prepare('SELECT p.claimed_device, d.name FROM pairing_codes p LEFT JOIN devices d ON d.id = p.claimed_device WHERE p.id = ? AND p.created_by_device = ?').bind(url.searchParams.get('id'),device.id).first();
   return result?respond({claimed:!!result.claimed_device,name:result.name||null}):respond({error:'Not found'},404);

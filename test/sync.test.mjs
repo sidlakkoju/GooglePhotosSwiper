@@ -312,6 +312,18 @@ test('device mutations report unknown IDs and revocation remains idempotent',asy
   assert.equal(e.DB.sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(device.deviceId).revoked_at,revoked);
  }finally{Date.now=original;}
 });
+test('pairing cancellation burns both codes and respects device ownership',async()=>{
+ const e=env(),pairing=await start(e);
+ const other=await start(e),device=await (await claim(e,{code:other.code})).json();
+ const active=await start(e);
+ assert.equal((await call(e,'pair/start','DELETE',{id:active.id},withToken(device.token))).status,200);
+ assert.equal((await claim(e,{code:active.code})).status,200);
+ const cancelled=await start(e);
+ assert.equal((await call(e,'pair/start','DELETE',{id:cancelled.id})).status,200);
+ assert.equal((await claim(e,{code:cancelled.code})).status,400);
+ assert.equal((await claim(e,{short:cancelled.short})).status,400);
+ assert.equal((await claim(e,{code:pairing.code})).status,400);
+});
 
 
 test('device names are trimmed plain text of 1–40 characters and lists are newest first',async()=>{
