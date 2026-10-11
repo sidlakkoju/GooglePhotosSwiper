@@ -176,6 +176,26 @@ test('pairing round trip, status ownership, replay and hash-only storage',async(
  assert.equal(JSON.stringify([stored,tokenRow]).includes(device.token),false);
  assert.equal((await (await call(e,'state')).json()).decisions[0].id,'preserved');
 });
+test('pairing stores code, token and IP HMAC digests as D1 blobs',async()=>{
+ const e=env(),pairing=await start(e),ip='203.0.113.42';
+ const response=await claim(e,{code:pairing.code},ip);
+ assert.equal(response.status,200);
+ const device=await response.json();
+ const stored=e.DB.sqlite.prepare('SELECT typeof(code_hash) AS codeType, typeof(short_hash) AS shortType, hex(code_hash) AS code, hex(short_hash) AS short FROM pairing_codes WHERE id = ?').get(pairing.id);
+ assert.equal(stored.codeType,'blob');
+ assert.equal(stored.shortType,'blob');
+ assert.equal(stored.code,Buffer.from(await hash(pairing.code)).toString('hex').toUpperCase());
+ assert.equal(stored.short,Buffer.from(await hash(pairing.short)).toString('hex').toUpperCase());
+ const token=e.DB.sqlite.prepare('SELECT typeof(token_hash) AS type, hex(token_hash) AS digest FROM devices WHERE id = ?').get(device.deviceId);
+ assert.equal(token.type,'blob');
+ assert.equal(token.digest,Buffer.from(await hash(device.token)).toString('hex').toUpperCase());
+ const encoder=new TextEncoder(),key=await crypto.subtle.importKey('raw',encoder.encode(e.PAIRING_IP_KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+ const ipDigest=new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(ip)));
+ const attempt=e.DB.sqlite.prepare('SELECT typeof(ip_hash) AS type, count FROM pair_attempts WHERE ip_hash = ?').get(ipDigest);
+ assert.equal(attempt.type,'blob');
+ assert.equal(attempt.count,1);
+ assert.equal((await call(e,'state','GET',undefined,withToken(device.token))).status,200);
+});
 test('50 concurrent claims create exactly one device',async()=>{
  const e=env(),pairing=await start(e);
  const responses=await Promise.all(Array.from({length:50},(_,index)=>claim(e,{code:pairing.code},`192.0.2.${index+1}`)));
