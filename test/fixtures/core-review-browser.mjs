@@ -6,7 +6,7 @@ const pagination=process.argv.includes('--pagination');
 const video=await readFile((process.argv[2]&&!process.argv[2].startsWith('--')?process.argv[2]:null)||new URL('./synthetic-video.mov',import.meta.url));
 const app=createApp({loginCode:'synthetic-browser-qa',mediaFetch:async()=>new Response(video,{headers:{'Content-Type':'video/quicktime','Content-Length':String(video.length)}})});
 app.store.setSetting('account','synthetic');app.store.setSetting('accountLabel','Synthetic browser test');app.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run(hash('synthetic-token'),'synthetic','Synthetic browser test');
-app.store.importItems([{mediaKey:'testphoto',name:'Synthetic photo.jpg',type:'photo',size:1000000},{mediaKey:'testvideo',name:'Synthetic video.mov',type:'video',size:2000000,duration:3000},{mediaKey:'nextphoto',name:'Next synthetic photo.jpg',type:'photo',size:3000000}].map(i=>({...i,thumbUrl:'https://lh3.googleusercontent.com/synthetic'})),'synthetic');
+app.store.importItems([{mediaKey:'testphoto',name:'Synthetic photo.jpg',type:'photo',size:1000000},{mediaKey:'testvideo-poster-v2',name:'Synthetic video.mov',type:'video',size:2000000,duration:3000},{mediaKey:'nextphoto',name:'Next synthetic photo.jpg',type:'photo',size:3000000}].map(i=>({...i,thumbUrl:'https://lh3.googleusercontent.com/synthetic'})),'synthetic');
 const paginationItems=Array.from({length:50},(_,n)=>({mediaKey:'reviewed'+n,name:`Reviewed ${n}.jpg`,type:'photo',size:1000,thumbUrl:'https://lh3.googleusercontent.com/synthetic'}));
 if(pagination){app.store.db.prepare('DELETE FROM items').run();app.store.importItems(paginationItems,'synthetic');for(const i of app.store.listItems())app.store.decide(i.id,'keep',0);app.store.setSetting('cursor','qa-page-1');app.store.setSetting('exhausted','false');}
 const svg='<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#426b53"/><circle cx="600" cy="360" r="190" fill="#dce8cc"/><text x="600" y="640" fill="white" font-size="44" text-anchor="middle">Synthetic preview</text></svg>';
@@ -23,7 +23,11 @@ app.server.on('request',async(req,res)=>{
    const result=app.store.importPage(items,'synthetic',{requestCursor:restart?null:cursor,refreshLatest:restart,nextPageId});res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(result));
   }catch(error){res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({error:error.message}));}return;
  }
- if(req.url?.startsWith('/qa-preview/')){const item=app.store.listItems().find(i=>i.id===decodeURIComponent(req.url.slice('/qa-preview/'.length)));res.writeHead(item?200:404,{'Content-Type':'application/json'});res.end(JSON.stringify(item?{dataUrl:item.type==='video'?videoPoster:'data:image/svg+xml;base64,'+Buffer.from(svg).toString('base64')}:{error:'Synthetic item not found'}));return;}
+ if(req.url?.startsWith('/qa-preview/')){
+  let id;
+  try{id=decodeURIComponent(req.url.slice('/qa-preview/'.length));}catch{res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Invalid synthetic item id'}));return;}
+  const item=app.store.listItems().find(i=>i.id===id);res.writeHead(item?200:404,{'Content-Type':'application/json'});res.end(JSON.stringify(item?{dataUrl:item.type==='video'?videoPoster:'data:image/svg+xml;base64,'+Buffer.from(svg).toString('base64')}:{error:'Synthetic item not found'}));return;
+ }
  if(req.url==='/qa-bridge.js'){res.writeHead(200,{'Content-Type':'text/javascript'});res.end(bridge);return;}
  if(req.url?.startsWith('/qa-album/')&&req.method==='POST'){try{const job=app.store.getJob(req.url.slice('/qa-album/'.length));res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(app.store.progressJob(job.id,{status:'completed',albumKey:'synthetic-album',confirmed:job.mediaKeys})));}catch(e){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:e.message}));}return;}
  if(req.url==='/'){const html=(await readFile(new URL('../../public/index.html',import.meta.url),'utf8')).replace('<script type="module" src="/app.js">','<script type="module" src="/qa-bridge.js"></script><script type="module" src="/app.js">');res.writeHead(200,{'Content-Type':'text/html'});res.end(html);return;}
