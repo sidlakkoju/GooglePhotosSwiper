@@ -17,7 +17,7 @@ test('review progress starts empty and follows decisions and undo',async()=>{
  };
  const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue};
  context.active=()=>pending(context.items,context.decisions)[0];
- for(const name of ['renderStorage','renderCard','renderQueue','renderOperations','renderReconciliation','renderControls','prefetchReview'])context[name]=()=>{};
+ for(const name of ['resetCardGesture','renderStorage','renderCard','renderQueue','renderOperations','renderReconciliation','renderControls','prefetchReview'])context[name]=()=>{};
  const renderSource=app.match(/^function render\(\)\{.*\}$/m)?.[0];
  assert.ok(renderSource);
  runInNewContext(renderSource+';render();',context);
