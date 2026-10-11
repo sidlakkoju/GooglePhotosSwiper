@@ -10,3 +10,6 @@ diagrams/**/.grok/
 .dev.vars
 .dev.vars.*
 .env.*
+
+worker/generated/
+*.key
