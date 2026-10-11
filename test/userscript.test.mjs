@@ -354,7 +354,7 @@ test('mounted undo restores undecided after queue, keep instead, and two undos',
 test('mounted oldest-first puts missing dates at the epoch before dated media',async()=>{
  const mounted=await mountedReview([item('dated',{date:'1990-01-01T00:00:00.000Z'}),item('missing')]);
  mounted.nodes.get('sort').value='oldest';mounted.nodes.get('sort').onchange();
- assert.match(mounted.nodes.get('caption').textContent,/^missing · Unknown date$/);
+ assert.match(mounted.nodes.get('caption').textContent,/^missing · Unknown date · Unknown size$/);
  await mounted.click('keep');
  assert.match(mounted.nodes.get('caption').textContent,/^dated · /);
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,'keep']);
@@ -406,19 +406,19 @@ test('Trash completion status resets on reload and cached-page restore while est
  };
  const mounted=await mountedReview([item('previous',{decision:'remove',state:'in_trash',spaceTaken:55000}),...candidates],{fetch,confirm:()=>true});
  const ready='Ready. Decisions are saved locally on this browser.';
- assert.match(mounted.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 55 KB$/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 55 KB \(running total\)$/);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  await mounted.click('move-trash');
  assert.equal(mounted.nodes.get('status').textContent,'Verified 5 items in Trash.');
- assert.match(mounted.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 112 KB$/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
  await mounted.environment.window.listeners.pageshow({persisted:true});
  assert.equal(mounted.nodes.get('status').textContent,ready);
- assert.match(mounted.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 112 KB$/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
  const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
  assert.equal(reloaded.nodes.get('status').textContent,ready);
- assert.match(reloaded.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 112 KB$/);
+ assert.match(reloaded.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
  assert.equal(reloaded.nodes.get('move-trash').textContent,'Move 0 items to Trash');
 });
 test('mounted Trash and deleted-item checks retain all 45 undecided items despite six older dedup matches',async()=>{
@@ -657,4 +657,33 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  assert.equal((await first.read()).revision,completed.revision+1);
  assert.equal((await first.read()).items[0].state,'in_trash');
  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+});
+
+test('mounted stats distinguish queue savings from the Trash running total',async()=>{
+ const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
+ const stats=mounted.nodes.get('stats').textContent;
+ assert.equal(stats,'0 to review · 2/2 reviewed · Queue: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total)');
+ assert.equal(stats.match(/estimated savings/g).length,1);
+});
+test('mounted Keep names the decided item after advancing and during candidate inspection',async()=>{
+ const mounted=await mountedReview([item('first.jpg'),item('next.jpg')]);
+ await mounted.click('keep');
+ assert.equal(mounted.nodes.get('status').textContent,'Kept first.jpg.');
+ assert.match(mounted.nodes.get('caption').textContent,/^next.jpg · /);
+ await mounted.click('remove');
+ mounted.nodes.get('queue').childNodes[0].onclick();
+ await mounted.click('keep');
+ assert.equal(mounted.nodes.get('status').textContent,'Kept next.jpg.');
+});
+test('mounted photo and video captions show file size with explicit unknown metadata',async()=>{
+ for(const type of ['photo','video']){
+  for(const [size,label] of [[112000,'112 KB'],[2500000,'2.5 MB'],[1200000000,'1.2 GB'],[0,'0 KB'],[undefined,'Unknown size'],[null,'Unknown size']]){
+   const name=type==='photo'?'sample.jpg':'sample.mp4';
+   const mounted=await mountedReview([item('sample',{name,type,size,spaceTaken:1000})],{fetch:async()=>({ok:true,text:async()=>envelope('VrseUb',[['sample'],'https://lh3.googleusercontent.com/synthetic-video'])})});
+   assert.equal(mounted.nodes.get('caption').textContent,`${name} · Unknown date · ${label}`);
+   await mounted.click('remove');
+   mounted.nodes.get('queue').childNodes[0].onclick();
+   assert.equal(mounted.nodes.get('caption').textContent,`Candidate inspection · ${name} · Unknown date · ${label}`);
+  }
+ }
 });
