@@ -536,16 +536,60 @@ test('swipes lock direction after slop and cancellation releases capture without
    assert.equal(captures,0);
   }else{
    const move=swipeEvent({clientX:scenario==='short'?40:150});media.listeners.pointermove(move);
-   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(media.style.transform,/translateX/);
+   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(mounted.nodes.get('card').style.transform,/translateX/);
    if(scenario==='other-pointer'){
     media.listeners.pointercancel(swipeEvent({pointerId:2}));assert.equal(captured,true);
    }
    if(scenario!=='short')media.listeners.pointercancel(swipeEvent());
   }
   media.listeners.pointerup(swipeEvent({clientX:scenario==='short'?40:150}));
-  assert.equal(media.style.transform,'');assert.equal(captured,false);
+  assert.equal(mounted.nodes.get('card').style.transform,'');assert.equal(captured,false);
   assert.equal(releases,scenario==='vertical'?0:1);
   assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+test('touch drag, spring-back and outgoing copy share the card transform',async()=>{
+ for(const surface of ['media','swipe'])for(const release of ['short','cancel','keep','remove']){
+  const mounted=await mountedReview([item('synthetic-video',{type:'video'})]);
+  const card=mounted.nodes.get('card'),target=mounted.nodes.get(surface),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  const animations=[],copies=[],dx=release==='short'?20:release==='remove'?-120:120;
+  const committing=release==='keep'||release==='remove',pose=`translateX(${dx}px)${committing?` rotate(${dx/20}deg)`:''}`;
+  card.animate=(frames,options)=>{animations.push({frames,options});};
+  card.ownerDocument={body:{append(copy){copies.push(copy);}}};
+  card.cloneNode=deep=>{
+   assert.equal(deep,true);
+   assert.equal(card.style.transform,pose);
+   assert.equal(media.style.transform,undefined);
+   assert.equal(mounted.nodes.get('swipe').style.transform,undefined);
+   return {style:{},querySelectorAll:()=>[],removeAttribute(){},setAttribute(){},animate(frames,options){animations.push({frames,options});return {finished:Promise.resolve(),finish(){},cancel(){}};},remove(){}};
+  };
+  let captured=false;
+  target.setPointerCapture=()=>{captured=true;};
+  target.hasPointerCapture=()=>captured;
+  target.releasePointerCapture=()=>{captured=false;};
+  target.listeners.pointerdown(swipeEvent({target:surface==='media'?video:target,pointerType:'touch',timeStamp:0}));
+  const move=swipeEvent({clientX:20+dx,timeStamp:200});
+  target.listeners.pointermove(move);
+  assert.equal(move.prevented,true);
+  assert.equal(card.style.transform,`translateX(${dx}px)`);
+  assert.equal(target.style.transform,undefined);
+  target.listeners[release==='cancel'?'pointercancel':'pointerup'](swipeEvent({clientX:20+dx,timeStamp:400}));
+  if(committing)await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+  assert.equal(captured,false);
+  assert.equal(card.style.transform,'');
+  assert.equal(animations.length,1);
+  assert.equal(animations[0].frames[0].transform,pose);
+  if(release==='short'||release==='cancel'){
+   assert.equal(animations[0].frames[1].transform,'translateX(0px)');
+   assert.equal(copies.length,0);
+   assert.equal((await mounted.read()).items[0].decision,null);
+  }else{
+   assert.equal(copies.length,1);
+   assert.equal(copies[0].style.transform,pose);
+   assert.match(animations[0].frames[1].transform,new RegExp(`translateX\\(${dx>0?'':'-'}[0-9]+px\\) rotate`));
+   await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+   assert.equal((await mounted.read()).items[0].decision,release);
+  }
  }
 });
 test('video capture transfer preserves the swipe until media capture ends',async()=>{
@@ -558,11 +602,11 @@ test('video capture transfer preserves the swipe until media capture ends',async
   media.listeners.pointerdown(swipeEvent({target:video,pointerType:'touch'}));
   media.listeners.pointermove(swipeEvent({target:video,clientX:120}));
   media.listeners.lostpointercapture(swipeEvent({target:video}));
-  assert.equal(captured,true);assert.equal(media.style.transform,'translateX(100px)');
+  assert.equal(captured,true);assert.equal(mounted.nodes.get('card').style.transform,'translateX(100px)');
   if(cancel){
    captured=false;
    media.listeners.lostpointercapture(swipeEvent({target:media}));
-   assert.equal(media.style.transform,'');
+   assert.equal(mounted.nodes.get('card').style.transform,'');
   }
   media.listeners.pointerup(swipeEvent({target:media,clientX:120}));
   await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
