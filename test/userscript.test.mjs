@@ -584,7 +584,7 @@ test('mounted album send creates a readable title and saves the verified album',
  assert.ok(requests.includes('E1Cajb'));
 });
 
-test('phone layout keeps library controls clear and Trash text inside its cell in Chrome',async t=>{
+test('phone layout stacks sync fields and keeps library controls and Trash text clear in Chrome',async t=>{
  const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
  if(!browser){t.skip('Chrome is unavailable');return;}
  const mounted=await mountedReview([item('a')]);
@@ -601,7 +601,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true]]){
+  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true],[390,844,false]]){
    const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
@@ -622,8 +622,18 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const explanationVisible=inside(explanation,footer)&&inside(explanation,overlay)&&textInside(explanation);
    const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
    const checkFits=inside(check,footer)&&textInside(check);
+   const settings=root.getElementById('sync-settings');settings.open=true;
+   const settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
+   const buttons=Array.from(settings.querySelectorAll('button')).filter(button=>button.getClientRects().length);
+   const syncFields=['sync-url','sync-token'].map(id=>{
+    const input=root.getElementById(id),field=input.parentElement;
+    range.selectNodeContents(field.firstChild);const text=range.getBoundingClientRect(),box=bounds(input),fieldBox=bounds(field);
+    return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
+   });
+   const local=bounds(root.getElementById('sync-local'));
+   const localOwnRow=Array.from(settings.children).filter(element=>element!==root.getElementById('sync-local')&&element.getClientRects().length).every(element=>bounds(element).bottom<=local.top||bounds(element).top>=local.bottom);
    const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   results.push({width,height,syncFields,localOwnRow,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -631,8 +641,10 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
   if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
   assert.equal(result.status,0,result.stderr);
-  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
+  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,4,result.stdout);
   for(const measurement of measurements){
+   assert.equal(measurement.localOwnRow,true,JSON.stringify(measurement));
+   for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    assert.equal(measurement.initialClear,true,JSON.stringify(measurement));assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
    assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
    for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
