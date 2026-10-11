@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {pending,summarize,removalQueue} from '../public/model.js';
 
-test('review progress starts empty and follows decisions and undo',async()=>{
+test('workspace loading updates guide copy and progress while preserving guide dismissal',async()=>{
  const [html,css,app]=await Promise.all(['index.html','styles.css','app.js'].map(name=>readFile(new URL('../public/'+name,import.meta.url),'utf8')));
  assert.match(html,/<span id="progress-text">0 of 0 reviewed<\/span>/);
  const fillRule=css.match(/\.progress-track i\{([^}]+)\}/)?.[1];
@@ -15,20 +15,35 @@ test('review progress starts empty and follows decisions and undo',async()=>{
   if(!elements.has(id))elements.set(id,{style:{},dataset:{},querySelector:()=>null});
   return elements.get(id);
  };
- const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue};
+ const saved=new Map();
+ const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue,authenticated:true,history:[],localStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)}};
  context.active=()=>pending(context.items,context.decisions)[0];
  for(const name of ['resetCardGesture','renderStorage','renderCard','renderQueue','renderOperations','renderReconciliation','renderControls','prefetchReview'])context[name]=()=>{};
  const renderSource=app.match(/^function render\(\)\{.*\}$/m)?.[0];
  assert.ok(renderSource);
- const guideSource=app.slice(app.indexOf('function renderGuide('),app.indexOf("$('toast').onclick="));
- runInNewContext(guideSource+renderSource+';render();',context);
+ const guideSource=app.slice(app.indexOf("try{$('review-guide').open="),app.indexOf("$('toast').onclick="));
+ const refreshSource=app.split('\n').find(line=>line.startsWith('async function refreshWorkspace('));
+ assert.ok(refreshSource);
+ runInNewContext(guideSource+renderSource+refreshSource+';render();',context);
+ assert.match($('guide-first-step').innerHTML,/Load a batch/);
+ $('dismiss-guide').onclick();
+ assert.equal($('review-guide').open,false);
  const check=(reviewed,total)=>{
   context.render();
   assert.equal($('progress-text').textContent,`${reviewed} of ${total} reviewed`);
   assert.equal($('progress').style.width,`${total?reviewed/total*100:0}%`);
  };
  check(0,0);
- context.items=Array.from({length:3},(_,n)=>({id:'synthetic:'+n,type:'photo'}));
+ const fakeItems=Array.from({length:3},(_,n)=>({id:'synthetic:'+n,type:'photo'}));
+ await context.refreshWorkspace(false,{items:fakeItems});
+ assert.match($('guide-first-step').innerHTML,/Your items are ready/);
+ assert.doesNotMatch($('guide-first-step').innerHTML,/Load 50 more/);
+ assert.equal($('review-guide').open,false);
+ runInNewContext(guideSource,context);
+ assert.equal($('review-guide').open,false);
+ $('review-guide').open=true;
+ $('review-guide').ontoggle();
+ assert.match($('guide-first-step').innerHTML,/Your items are ready/);
  check(0,3);
  context.decisions['synthetic:0']='keep';
  check(1,3);
@@ -36,8 +51,13 @@ test('review progress starts empty and follows decisions and undo',async()=>{
  check(2,3);
  context.decisions['synthetic:2']='keep';
  check(3,3);
+ assert.match($('guide-first-step').innerHTML,/All loaded items are reviewed/);
+ assert.doesNotMatch($('guide-first-step').innerHTML,/choose Load 50 more/);
+ await context.refreshWorkspace(false,{items:fakeItems.map(item=>({...item,decision:'keep'}))});
+ assert.doesNotMatch($('guide-first-step').innerHTML,/choose Load 50 more/);
  delete context.decisions['synthetic:2'];
  check(2,3);
+ assert.match($('guide-first-step').innerHTML,/Your items are ready/);
  context.decisions={};
  check(0,3);
 });

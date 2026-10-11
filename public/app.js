@@ -60,7 +60,7 @@ function renderGuide(){
  if(!items.length)step.innerHTML='<strong>Load a batch.</strong> Connect the Chrome extension to your signed-in Google Photos tab, keep that tab open, then choose Load 50 more.';
  else if(pending(items,decisions).length)step.innerHTML='<strong>Your items are ready.</strong> Start reviewing the loaded photos and videos. Keep the Google Photos tab open for previews.';
  else if(workspace.exhausted)step.innerHTML='<strong>All imported items are reviewed.</strong> Review your removal queue or choose Refresh latest to check for new photos.';
- else step.innerHTML='<strong>All loaded items are reviewed.</strong> Review your removal queue or choose Load 50 more to continue.';
+ else step.innerHTML='<strong>All loaded items are reviewed.</strong> Review your removal queue. Load another batch when you’re ready to continue.';
 }
 $('toast').onclick=dismissToast;
 let queueObserver,queueGeneration=0,thumbnailRunning=0;
