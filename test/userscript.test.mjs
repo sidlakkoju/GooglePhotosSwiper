@@ -484,8 +484,9 @@ test('Trash candidate list includes queued and sent items regardless of review f
 test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
- const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
- for(let count=0;count<100&&mounted.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
+ mounted.nodes.get('card').offsetWidth=300;
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
+ await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
 
@@ -885,6 +886,21 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
  await new Promise(resolve=>setImmediate(resolve));assert.equal(panel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
  assert.equal(calls.at(-2).options.method,'DELETE');assert.equal(calls.at(-2).options.body,JSON.stringify({id:'pair-id'}));
 });
+test('userscript cancels the live snap-back before a filter renders another photo',async()=>{
+ const mounted=await mountedReview([item('a'),item('b',{type:'video'})]);
+ const card=mounted.nodes.get('card'),media=mounted.nodes.get('media');
+ let running=false,cancelled=0;
+ card.animate=()=>{running=true;};
+ card.getAnimations=()=>running?[{cancel(){running=false;cancelled++;}}]:[];
+ media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20,timeStamp:0});
+ media.listeners.pointerup({pointerId:1,clientX:40,clientY:20,timeStamp:200});
+ assert.equal(running,true);
+ mounted.nodes.get('filter').value='video';
+ mounted.nodes.get('filter').onchange();
+ assert.equal(running,false);
+ assert.equal(cancelled,1);
+});
+
 test('review preloads match card sizing, respect compact viewports and refresh on resize',async()=>{
  for(const compact of [false,true]){
   const created=[],mounted=await mountedReview(Array.from({length:6},(_,index)=>item(`sized-${index}`))),document=mounted.environment.document;
@@ -1040,9 +1056,10 @@ test('finished and interrupted fly-offs retain their pose until a slow save rend
  assert.equal(animations[0].cancelled,undefined);
  assert.match(mounted.nodes.get('caption').textContent,/^a /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
+ mounted.nodes.get('card').offsetWidth=300;
  const swipe=mounted.nodes.get('swipe');
  swipe.listeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,target:swipe});
- swipe.listeners.pointerup({pointerId:1,clientX:100,clientY:0});
+ swipe.listeners.pointerup({pointerId:1,clientX:120,clientY:0});
  assert.equal(animations[0].cancelled,undefined);
  fault.holdSave=null;release();
  await waitForReview(()=>animations.length===2);

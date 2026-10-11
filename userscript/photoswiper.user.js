@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.7
+// @version 1.2.8
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -101,6 +101,49 @@ async function photosOperation(operation,args={},environment=globalThis) {
   }
   throw Error('Unsupported Google Photos operation.');
  }catch(e){return {ok:false,error:e.message||'Google Photos request failed.'};}
+}
+
+function sampleSwipe(samples,event){
+  const time=Number.isFinite(event.timeStamp)?event.timeStamp:0;
+  samples.push({x:event.clientX,time});
+  while(samples.length>1&&samples[0].time<time-100)samples.shift();
+  return samples;
+}
+function releaseSwipe(samples,event,startX,width,cancel=false){
+  sampleSwipe(samples,event);
+  const dx=event.clientX-startX,first=samples[0],last=samples.at(-1),elapsed=last.time-first.time;
+  const velocity=elapsed>0?(last.x-first.x)/elapsed:0;
+  return {dx,velocity,commit:!cancel&&(Math.abs(dx)>width/3||(Math.abs(velocity)>.5&&velocity*dx>0)),duration:Math.round(Math.max(180,Math.min(300,300-Math.abs(velocity)*60)))};
+}
+function animateSwipe(element,dx,commit,duration=320){
+  if(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  const start=element.style.transform||'translateX(0px)',direction=dx>0?1:-1;
+  const distance=(globalThis.innerWidth||1000)+(element.getBoundingClientRect?.().width||350);
+  return element.animate?.([{transform:start,opacity:1},{transform:commit?`translateX(${direction*distance}px) rotate(${direction*18}deg)`:'translateX(0px)',opacity:commit?0:1}],{duration,easing:commit?'ease-out':'cubic-bezier(.2,1.5,.5,1)'});
+}
+function throwSwipe(element,dx,duration){
+  if(!element.cloneNode||!element.ownerDocument?.body)return;
+  const transform=element.style.transform,transition=element.style.transition;
+  element.style.transition='none';
+  element.style.transform='none';
+  const rect=element.getBoundingClientRect();
+  element.style.transform=transform;
+  element.style.transition=transition;
+  const copy=element.cloneNode(true);
+  if(globalThis.getComputedStyle){
+    const originals=[element,...element.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
+    originals.forEach((original,index)=>{const computed=globalThis.getComputedStyle(original);for(const property of computed)copies[index].style.setProperty(property,computed.getPropertyValue(property));});
+  }
+  copy.removeAttribute('id');
+  for(const child of copy.querySelectorAll('[id]'))child.removeAttribute('id');
+  copy.setAttribute('aria-hidden','true');
+  copy.inert=true;
+  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',boxSizing:'border-box',right:'auto',bottom:'auto',transform,pointerEvents:'none',zIndex:'2147483647',transition:'none'});
+  (element.parentNode||element.ownerDocument.body).append(copy);
+  const animation=animateSwipe(copy,dx,true,duration);
+  if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
+  else copy.remove();
+  return animation;
 }
 
 function buildPhotosRequest(tokens,location,id,payload) {
@@ -763,6 +806,7 @@ function mountPhotosSwipe(environment) {
   }catch(error){if(token===generation)message(error.message);}
  }
  function render() {
+  for(const animation of $('card').getAnimations?.()||[])animation.cancel();
   const item=current(),queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
   $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:'No unreviewed items in this batch.';
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
@@ -806,12 +850,18 @@ function mountPhotosSwipe(environment) {
  function close(){preloader.clear();finishCardAnimation();clearCardAnimation();$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
  let reviewActions=Promise.resolve(),reviewInputsPending=0,reviewInputEpoch=0,cardAnimation=null;
  function finishCardAnimation(){if(cardAnimation)cardAnimation.finish();}
- function clearCardAnimation(){if(cardAnimation){cardAnimation.cancel();cardAnimation=null;}}
- async function animateCard(decision,restoring=false){
+ function clearCardAnimation(){if(cardAnimation){cardAnimation.cancel();cardAnimation=null;}$('card').style.visibility='';}
+ async function animateCard(decision,restoring=false,swipeResult=null){
   clearCardAnimation();
-  if(!$('card').animate||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  for(const animation of $('card').getAnimations?.()||[])animation.cancel();
+  if(swipeResult)$('card').style.transform=`translateX(${swipeResult.dx}px) rotate(${swipeResult.dx/20}deg)`;
+  const thrown=swipeResult&&throwSwipe($('card'),swipeResult.dx,swipeResult.duration);
+  if(swipeResult)$('card').style.transform='';
+  if(!thrown&&(!$('card').animate||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches))return;
   const side=decision==='keep'?1:-1,center={transform:'translateX(0) rotate(0deg)',opacity:1},edge={transform:`translateX(${side*120}vw) rotate(${side*18}deg)`,opacity:0};
-  const animation=$('card').animate(restoring?[edge,center]:[center,edge],{duration:250,easing:'ease-out',fill:'forwards'});cardAnimation=animation;controls();
+  if(thrown)$('card').style.visibility='hidden';
+  const start=swipeResult?{transform:`translateX(${swipeResult.dx}px) rotate(${swipeResult.dx/20}deg)`,opacity:1}:center;
+  const animation=thrown||$('card').animate(restoring?[edge,center]:[start,edge],{duration:swipeResult?.duration||250,easing:'ease-out',fill:'forwards'});cardAnimation=animation;controls();
   if(reviewInputsPending>1)finishCardAnimation();
   let timer;
   try{await Promise.race([animation.finished,new Promise(resolve=>{timer=window.setTimeout(()=>{animation.finish();resolve();},350);})]);}catch{}finally{window.clearTimeout(timer);}
@@ -823,12 +873,13 @@ function mountPhotosSwipe(environment) {
   reviewActions=(queued?reviewActions.then(execute):Promise.resolve(execute())).catch(error=>{reviewInputEpoch++;message(error.message);}).finally(()=>{reviewInputsPending--;});
   return reviewActions;
  }
- function decide(decision){return enqueueReviewInput(()=>applyDecision(decision));}
+ function decide(decision,swipeResult=null){return enqueueReviewInput(()=>applyDecision(decision,swipeResult));}
  function undo(){return enqueueReviewInput(applyUndo);}
- async function applyDecision(decision){
+ async function applyDecision(decision,swipeResult=null){
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
-  await run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);const flight=animateCard(decision);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});await flight;inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);},true);
+  const flight=animateCard(decision,false,swipeResult);
+  await run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});await flight;inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);},true);
  }
  async function applyUndo(){await run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});const restored=state.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;render();await animateCard(last.decision,true);message(`Decision undone for ${restored.name}.`);},true);}
  async function load(refresh=false) {
@@ -854,9 +905,12 @@ function mountPhotosSwipe(environment) {
  $('trash').onclick=()=>run(async()=>{message('Reading Google Photos Trash\u2026');await save(await reconcileReviewTrash(state,call));message('Trash check complete. Unknown results leave local state unchanged.');});
  let swipeStart=null;
  for(const target of [$('media'),$('swipe')]){
-  target.addEventListener('pointerdown',event=>{if((busy&&!reviewInputsPending)||event.isPrimary===false||event.button!==0||event.target.tagName==='VIDEO'||Number($('zoom').value)>1)return;swipeStart={id:event.pointerId,x:event.clientX,y:event.clientY};target.setPointerCapture(event.pointerId);});
-  target.addEventListener('pointerup',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const dx=event.clientX-swipeStart.x,dy=event.clientY-swipeStart.y;swipeStart=null;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5)decide(dx>0?'keep':'remove');});
-  target.addEventListener('pointercancel',()=>{swipeStart=null;});
+  target.addEventListener('pointerdown',event=>{if((busy&&!reviewInputsPending)||swipeStart||event.isPrimary===false||event.button!==0||event.target.tagName==='VIDEO'||Number($('zoom').value)>1)return;if(!busy)for(const animation of $('card').getAnimations?.()||[])animation.cancel();swipeStart={id:event.pointerId,x:event.clientX,y:event.clientY,samples:sampleSwipe([],event)};target.setPointerCapture(event.pointerId);});
+  target.addEventListener('pointermove',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;sampleSwipe(swipeStart.samples,event);if(busy)return;const dx=event.clientX-swipeStart.x;$('card').style.transform=`translateX(${dx}px) rotate(${dx/20}deg)`;});
+  const release=(event,cancel=false)=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const result=releaseSwipe(swipeStart.samples,event,swipeStart.x,$('card').offsetWidth||$('card').getBoundingClientRect?.().width||300,cancel),dy=event.clientY-swipeStart.y;swipeStart=null;const commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.5;if(commit)decide(result.dx>0?'keep':'remove',result);else if(!busy)animateSwipe($('card'),result.dx,false);$('card').style.transform='';};
+  target.addEventListener('pointerup',event=>release(event));
+  target.addEventListener('pointercancel',event=>release(event,true));
+  target.addEventListener('lostpointercapture',event=>release(event,true));
  }
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
  const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
