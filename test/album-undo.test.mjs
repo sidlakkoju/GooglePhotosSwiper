@@ -17,7 +17,7 @@ function harness({fail=false}={}){
   items:[{id:'kept'},{id:'sent'},{id:'next'}],decisions:{kept:'keep',sent:'remove'},history:[{id:'kept',old:null},{id:'sent',old:null}],
   $:id=>{if(!elements.has(id))elements.set(id,{style:{},querySelector:()=>null});return elements.get(id);},
   active:()=>context.items.find(item=>!context.decisions[item.id]),albumCandidates:()=>[],
-  photoViewer:{open:true,refreshControls(){}},toast:message=>messages.push(message),
+  photoViewer:{open:true,refreshControls(){}},dismissToast(){},toast:message=>messages.push(message),
   updateDecision:async(item,decision)=>{writes.push({id:item.id,decision});if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];},
   bridge:async(operation,args)=>{assert.equal(operation,'sendAlbum');assert.equal(args.jobId,'job');assert.equal(context.$('undo').disabled,true);if(fail)throw Error('Album update interrupted');},
   api:async()=>({id:'job',ids:['sent'],status:'queued'}),refreshWorkspace:async()=>{},
