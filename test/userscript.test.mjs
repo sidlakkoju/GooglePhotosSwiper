@@ -862,3 +862,26 @@ test('release metadata names the author and install guide explains Chrome script
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });
+
+test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=>{
+ const calls=[];
+ const mounted=await mountedReview([item('photo')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({id:'pair-id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:Date.now()+60000})};}});
+ mounted.environment.AbortSignal=AbortSignal;
+ const {nodes,root}=mounted;
+ const panel=root.childNodes.find(node=>node['aria-label']==='Pair another device');
+ assert.ok(panel);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ await db.saveSettings({url:'https://worker.example',token:'secret-token'});
+ await nodes.get('pair-another').onclick();
+ assert.equal(panel.hidden,false);
+ const before=await mounted.read();
+ for(const key of ['ArrowLeft','ArrowRight','z','f',' ']){
+  const event={type:'keydown',key,preventDefault(){throw Error('Pairing key swallowed');},stopImmediatePropagation(){throw Error('Pairing key stopped');}};
+  mounted.environment.window.listeners.keydown(event);
+ }
+ assert.deepEqual(await mounted.read(),before);assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('card').classList.contains('expanded'),false);
+ mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(panel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
+ assert.equal(calls.at(-1).options.method,'DELETE');assert.equal(calls.at(-1).options.body,JSON.stringify({id:'pair-id'}));
+});

@@ -400,12 +400,13 @@ function createPairingModal({document,parent,fetch,settings,setTimeout,clearTime
  devices.onclick=async()=>{try{const result=await request('devices');status.textContent='Devices';qr.replaceChildren();for(const device of result.devices.filter(device=>!device.revoked_at)){const row=document.createElement('p');row.textContent=device.name+' ('+device.platform+')';qr.append(row);}}catch(error){status.textContent=error.message;}};
  return {open,close,modal};
 }
-function receivePairingLink({document,parent,location,window,fetch,saveSettings,onPaired,manual=false}) {
- const match=location.hash?.match(/^#pswipe-pair=([A-Za-z0-9_-]{22})$/);if(!match&&!manual)return;
+function receivePairingLink({document,parent,location,window,fetch,saveSettings,onPaired,manual=false,url='https://photoswiper-sync.sidlakkoju.workers.dev'}) {
+ const match=location.hash?.match(/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/);if(!match&&!manual)return;
  if(match)window.history.replaceState(null,'',location.pathname+location.search);
- const panel=document.createElement('section'),name=document.createElement('input'),button=document.createElement('button'),status=document.createElement('p'),shortCode=document.createElement('input'),cancel=document.createElement('button');
- panel.style.cssText='position:fixed;inset:0;background:#f4f7f1;padding:24px;pointer-events:auto;z-index:2';name.value=/iPhone/.test(window.navigator?.userAgent||'')?'iPhone (Safari)':'New browser';name.setAttribute('aria-label','Device name');button.textContent='Pair this device';panel.append(name,button,status);if(manual){shortCode.setAttribute('aria-label','Six-digit pairing code');shortCode.inputMode='numeric';shortCode.maxLength=7;panel.append(shortCode);}cancel.textContent='Cancel';cancel.onclick=()=>{panel.hidden=true;};panel.append(cancel);parent.append(panel);
- button.onclick=async()=>{button.disabled=true;try{const url='https://photoswiper-sync.sidlakkoju.workers.dev';const response=await fetch(url+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url,token:result.token,onboardingDismissed:true});panel.hidden=true;await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
+ const panel=document.createElement('section'),name=document.createElement('input'),button=document.createElement('button'),status=document.createElement('p'),shortCode=document.createElement('input'),origin=document.createElement('input'),cancel=document.createElement('button');
+ panel.style.cssText='position:fixed;inset:0;background:#f4f7f1;padding:24px;pointer-events:auto;z-index:2';name.value=/iPhone/.test(window.navigator?.userAgent||'')?'iPhone (Safari)':'New browser';name.setAttribute('aria-label','Device name');button.textContent='Pair this device';panel.append(name,button,status);if(manual){shortCode.setAttribute('aria-label','Six-digit pairing code');shortCode.inputMode='numeric';shortCode.maxLength=7;origin.setAttribute('aria-label','Worker origin');origin.type='url';origin.value=url;panel.append(shortCode,origin);}cancel.textContent='Cancel';cancel.onclick=()=>{panel.hidden=true;};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.append(cancel);parent.append(panel);
+ button.onclick=async()=>{button.disabled=true;try{const worker=new URL(match?.[2]?decodeURIComponent(match[2]):manual?origin.value:url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
+ return panel;
 }
 
 function mountPhotosSwipe(environment) {
@@ -737,7 +738,8 @@ function mountPhotosSwipe(environment) {
  function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
  $('sync-save').onclick=()=>run(async()=>{const settings=validateSyncSettings($('sync-url').value.trim(),$('sync-token').value);await db.saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await db.settings();await db.saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
- const receivePairing=manual=>receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.fetch,saveSettings:async settings=>{const storage=await database();await storage.saveSettings(settings);},onPaired:open,manual});
+ let receivingPanel;
+ const receivePairing=manual=>receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.fetch,saveSettings:async settings=>{const storage=await database();await storage.saveSettings(settings);},onPaired:open,manual,url:$('sync-url').value.trim()||undefined});
  const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=()=>receivePairing(true);receivePairing(false);
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;render();};
@@ -753,7 +755,9 @@ function mountPhotosSwipe(environment) {
   target.addEventListener('pointercancel',()=>{swipeStart=null;});
  }
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
+ const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
  function handleViewerSpace(event){
+  if(activePairingDialog())return false;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
   if(['INPUT','SELECT','TEXTAREA'].includes(root.activeElement?.tagName)||root.activeElement?.isContentEditable)return false;
   const video=$('media').querySelector('video');
@@ -763,6 +767,8 @@ function mountPhotosSwipe(environment) {
  }
  window.addEventListener('keyup',handleViewerSpace,true);
  window.addEventListener('keydown',event=>{
+  const dialog=activePairingDialog();
+  if(dialog){if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();if(dialog===pairingModal.modal)pairingModal.close();else dialog.onkeydown(event);}return;}
   if(handleViewerSpace(event))return;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing)return;
   if(event.key==='Tab'){
