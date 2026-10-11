@@ -7,7 +7,8 @@ export function pending(items, decisions, filter = 'all', sort = 'original') {
 export function summarize(items, decisions) {
   const kept = items.filter(i => decisions[i.id] === 'keep');
   const removed = items.filter(i => decisions[i.id] === 'remove');
-  return { kept, removed, reviewed: kept.length + removed.length, bytes: removed.reduce((sum, i) => sum + (i.size || 0), 0), unknown: removed.filter(i => !i.size).length };
+  const sent = removed.filter(i => i.queueSent && (!i.state || i.state === 'active') && !i.cropPending);
+  return { kept, removed, sent, reviewed: kept.length + removed.length, bytes: removed.reduce((sum, i) => sum + (i.size || 0), 0), unknown: removed.filter(i => !i.size).length };
 }
 export function albumCandidates(items, decisions) {
   return items.filter(i => decisions[i.id] === 'remove' && !i.queueSent && !i.albumKey && !i.cropPending);
