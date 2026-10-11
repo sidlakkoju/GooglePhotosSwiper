@@ -112,8 +112,8 @@ test('failed album write responses still verify membership, stable IDs count, an
 });
 test('Trash pagination and unknown reconciliation preserve local state and do not infer deletion from absence',async()=>{
  const state={...emptyReview(),items:[item('a',{decision:'remove',dedupKey:'stable'}),item('b',{decision:'remove',state:'in_trash'}),item('c',{decision:'remove'})]};
- const calls=[],call=async(operation,args)=>{calls.push(operation);return operation==='itemState'?{state:'unknown'}:args.cursor?{items:[{mediaKey:'alternate',dedupKey:'stable'}],nextPageId:null}:{items:[],nextPageId:'next'};};
- const result=await reconcileReviewTrash(state,call);assert.deepEqual(result.items.map(i=>i.state),['in_trash','in_trash','active']);assert.deepEqual(calls,['trashPage','trashPage','itemState']);assert.equal(state.items[0].state,'active');
+ const calls=[],call=async(operation,args)=>{calls.push(operation);return operation==='itemState'?{state:args.mediaKey==='a'?'in_trash':'unknown'}:args.cursor?{items:[{mediaKey:'alternate',dedupKey:'stable'}],nextPageId:null}:{items:[],nextPageId:'next'};};
+ const result=await reconcileReviewTrash(state,call);assert.deepEqual(result.items.map(i=>i.state),['in_trash','in_trash','active']);assert.deepEqual(calls,['trashPage','trashPage','itemState','itemState']);assert.equal(state.items[0].state,'active');
  await assert.rejects(readReviewTrash(async()=>({items:[],nextPageId:'loop'})),/repeated/);
  await assert.rejects(reconcileReviewTrash({...state,job:{}},call),/Finish/);
 });
@@ -220,10 +220,36 @@ test('library sightings restore active state and retain local album membership o
 });
 test('Trash reconciliation covers kept and undecided rows and verifies their restoration',async()=>{
  const state={...emptyReview(),items:[item('kept',{decision:'keep'}),item('new',{dedupKey:'stable'}),item('other')]};
- const marked=await reconcileReviewTrash(state,async()=>({items:[{mediaKey:'kept'},{mediaKey:'alternate',dedupKey:'stable'}],nextPageId:null}));
+ const marked=await reconcileReviewTrash(state,async operation=>operation==='itemState'?{state:'in_trash'}:{items:[{mediaKey:'kept'},{mediaKey:'alternate',dedupKey:'stable'}],nextPageId:null});
  assert.deepEqual(marked.items.map(row=>row.state),['in_trash','in_trash','active']);assert.deepEqual(reviewDeck(marked).map(row=>row.mediaKey),['other']);
  const restored=await reconcileReviewTrash(marked,async operation=>operation==='trashPage'?{items:[],nextPageId:null}:{state:'active'});
  assert.deepEqual(restored.items.map(row=>row.state),['active','active','active']);assert.equal(restored.items[0].decision,'keep');assert.equal(restored.items[1].revision,2);
+});
+test('dedup-only Trash matches require item-specific confirmation and repair false positives',async()=>{
+ const state={...emptyReview(),items:[
+  item('active',{dedupKey:'shared',revision:3}),
+  item('unknown',{dedupKey:'shared'}),
+  item('removed',{decision:'remove',dedupKey:'shared',queueSent:true}),
+  item('kept',{decision:'keep',dedupKey:'shared'}),
+  item('misclassified',{dedupKey:'shared',state:'in_trash',revision:7}),
+  item('unresolved',{dedupKey:'shared',state:'in_trash'}),
+  item('exact',{dedupKey:'shared'}),
+  item('unmatched')
+ ]};
+ const checked=[],call=async(operation,args)=>{
+  if(operation==='trashPage')return {items:[{mediaKey:'old-copy',dedupKey:'shared'},{mediaKey:'exact'}],nextPageId:null};
+  assert.equal(operation,'itemState');checked.push(args.mediaKey);
+  return {state:['unknown','unresolved'].includes(args.mediaKey)?'unknown':args.mediaKey==='removed'?'in_trash':'active'};
+ };
+ const result=await reconcileReviewTrash(state,call);
+ assert.deepEqual(checked,['active','unknown','removed','kept','misclassified','unresolved']);
+ assert.deepEqual(result.items.map(row=>row.state),['active','active','in_trash','active','active','in_trash','in_trash','active']);
+ assert.deepEqual(reviewDeck(result).map(row=>row.mediaKey),['active','unknown','misclassified','unmatched']);
+ assert.equal(result.items[0].revision,3);assert.equal(result.items[1].revision,0);assert.equal(result.items[4].revision,8);
+ assert.equal(result.items[2].decision,'remove');assert.equal(result.items[2].queueSent,true);assert.equal(result.items[3].decision,'keep');
+ assert.equal(state.items[4].state,'in_trash');
+ await assert.rejects(reconcileReviewTrash(state,async(operation,args)=>operation==='trashPage'?call(operation,args):Promise.reject(Error('Fake read failure'))),/Fake read failure/);
+ assert.equal(state.items[0].state,'active');
 });
 test('undo eligibility rejects missing, trashed, revised and job-locked decisions',()=>{
  const entry={key:'a',decision:'keep',revision:1},state={...emptyReview(),items:[item('a',{decision:'keep',revision:1})]};
@@ -234,6 +260,7 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),fault={};
  mounted.environment.window.indexedDB=fakeIndexedDB(fault);
+ if(fetch)mounted.environment.window.fetch=fetch;
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
@@ -246,9 +273,10 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
  const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone.');
 });
-async function mountedReview(items) {
+async function mountedReview(items,fetch) {
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ if(fetch)mounted.environment.window.fetch=fetch;
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
@@ -305,6 +333,29 @@ test('mounted Trash is opt-in, confirms the exact count and verifies synthetic T
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
  for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
+});
+test('mounted Trash and deleted-item checks retain all 45 undecided items despite six older dedup matches',async()=>{
+ for(const action of ['move-trash','trash']){
+  const undecided=Array.from({length:45},(_,index)=>item(`new-${index}`,{dedupKey:`stable-${index}`}));
+  const reviewed=Array.from({length:5},(_,index)=>item(`reviewed-${index}`,{decision:'remove',dedupKey:`removed-${index}`,queueSent:true}));
+  const requests=[],fetch=async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);requests.push(entry[0]);
+   let data;
+   if(entry[0]==='XwAOJf'){assert.deepEqual(args,[null,1,reviewed.map(row=>row.dedupKey),3]);data=[];}
+   else if(entry[0]==='zy0IHe')data=[[...undecided.slice(0,6).map(row=>[`old-${row.mediaKey}`,null,null,row.dedupKey]),...reviewed.map(row=>[row.mediaKey,null,null,row.dedupKey])],null];
+   else {assert.equal(entry[0],'VrseUb');assert.ok(undecided.slice(0,6).some(row=>row.mediaKey===args[0]));data=[[args[0],{225032867:[0]}]];}
+   return {ok:true,text:async()=>envelope(entry[0],data)};
+  };
+  const mounted=await mountedReview([...undecided,...reviewed],fetch);
+  mounted.environment.window.confirm=()=>true;
+  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+  await mounted.click(action);
+  const state=await mounted.read();
+  assert.equal(reviewDeck(state).length,45);assert.match(mounted.nodes.get('stats').textContent,/^45 to review/);
+  assert.ok(state.items.slice(0,45).every(row=>row.state==='active'&&row.decision===null&&(row.revision||0)===0));
+  assert.ok(state.items.slice(45).every(row=>row.state==='in_trash'&&row.decision==='remove'&&row.queueSent));
+  assert.deepEqual(requests,[...(action==='move-trash'?['XwAOJf']:[]),'zy0IHe',...Array(6).fill('VrseUb')]);
+ }
 });
 test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
