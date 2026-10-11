@@ -285,7 +285,8 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
- const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
@@ -520,13 +521,184 @@ test('Trash candidate list includes queued and sent items regardless of review f
  mounted.nodes.get('trash-opt-in').checked=false;mounted.nodes.get('trash-opt-in').onchange();
  assert.equal(mounted.nodes.get('trash-candidates').hidden,true);assert.equal(mounted.nodes.get('move-trash').hidden,true);
 });
-test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
+for(const mediaType of ['IMG','VIDEO'])test(`shadow overlay puts the card above stats and ${mediaType} touch swipes persist decisions`,async()=>{
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
- mounted.nodes.get('card').offsetWidth=300;
- const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
+ mounted.nodes.get('card').offsetWidth=280;
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:mediaType,getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20});media.listeners.pointermove({pointerId:1,clientX:120,clientY:25,preventDefault(){}});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
  await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
+
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
+});
+
+function swipeEvent(overrides={}) {
+ return {isPrimary:true,button:0,target:{tagName:'VIDEO'},pointerId:1,clientX:20,clientY:20,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...overrides};
+}
+test('zoomed photos allow touch panning without swiping and reset for the next photo',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {nodes}=mounted,card=nodes.get('card'),media=nodes.get('media'),zoom=nodes.get('zoom');
+ const css=mounted.root.childNodes[0].childNodes[0].textContent;
+ assert.match(css,/\.card\.zoomed,\.card\.zoomed \.media\{touch-action:pan-x pan-y pinch-zoom\}/);
+ assert.match(css,/\.card\.zoomed \.media img\{pointer-events:auto\}/);
+ assert.equal(card.classList.contains('expanded'),false);
+ for(const value of ['2','2.5','1','3']){
+  zoom.value=value;zoom.oninput();
+  assert.equal(card.classList.contains('zoomed'),Number(value)>1);
+ }
+ const image=media.querySelector('img');
+ assert.equal(image.style.touchAction,'pan-x pan-y pinch-zoom');
+ media.setPointerCapture=()=>assert.fail('Zoomed photos must keep native touch panning');
+ media.listeners.pointerdown(swipeEvent({target:image,pointerType:'touch'}));
+ const move=swipeEvent({target:image,clientX:120});media.listeners.pointermove(move);
+ media.listeners.pointerup(swipeEvent({target:image,clientX:120}));
+ assert.equal(move.prevented,undefined);
+ assert.equal((await mounted.read()).history.length,0);
+ await mounted.click('keep');
+ assert.equal(zoom.value,'1');
+ assert.equal(card.classList.contains('zoomed'),false);
+});
+
+test('swipes lock direction after slop and cancellation releases capture without deciding',async()=>{
+ for(const scenario of ['vertical','cancel','short','other-pointer']){
+  const mounted=await mountedReview([item('synthetic')]),media=mounted.nodes.get('media');
+  let captured=false,captures=0,releases=0;
+  media.setPointerCapture=id=>{assert.equal(id,1);captured=true;captures++;};
+  media.hasPointerCapture=()=>captured;
+  media.releasePointerCapture=()=>{captured=false;releases++;};
+  media.listeners.pointerdown(swipeEvent());assert.equal(captures,0);
+  const slop=swipeEvent({clientX:25,clientY:24});media.listeners.pointermove(slop);
+  assert.equal(captures,0);assert.equal(slop.prevented,undefined);
+  if(scenario==='vertical'){
+   const vertical=swipeEvent({clientX:24,clientY:35});media.listeners.pointermove(vertical);
+   assert.equal(vertical.prevented,undefined);
+   media.listeners.pointermove(swipeEvent({clientX:150,clientY:35}));
+   assert.equal(captures,0);
+  }else{
+   const move=swipeEvent({clientX:scenario==='short'?40:150});media.listeners.pointermove(move);
+   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,/translate3d/);
+   if(scenario==='other-pointer'){
+    media.listeners.pointercancel(swipeEvent({pointerId:2}));assert.equal(captured,true);
+   }
+   if(scenario!=='short')media.listeners.pointercancel(swipeEvent());
+  }
+  media.listeners.pointerup(swipeEvent({clientX:scenario==='short'?40:150}));
+  assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'');assert.equal(captured,false);
+  assert.equal(releases,scenario==='vertical'?0:1);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+test('touch drag, spring-back and outgoing copy share the card transform',async()=>{
+ for(const surface of ['media','swipe'])for(const release of ['short','cancel','keep','remove']){
+  const mounted=await mountedReview([item('synthetic-video',{type:'video'})]);
+  const card=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card'),target=mounted.nodes.get(surface),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  const animations=[],copies=[],dx=release==='short'?20:release==='remove'?-120:120;
+  const committing=release==='keep'||release==='remove',pose=`translate3d(${dx}px,0px,0) rotate(${dx/300*15}deg) scale(1.02)`;
+  card.animate=(frames,options)=>{animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}};};
+  card.parentNode={append(copy){copies.push(copy);}};
+  card.cloneNode=deep=>{
+   assert.equal(deep,true);
+   assert.equal(card.style.transform,pose);
+   assert.equal(media.style.transform,undefined);
+   assert.equal(mounted.nodes.get('swipe').style.transform,undefined);
+   return {style:{},querySelectorAll:()=>[],removeAttribute(){},setAttribute(){},animate(frames,options){animations.push({frames,options});return {finished:Promise.resolve(),finish(){},cancel(){}};},remove(){}};
+  };
+  let captured=false;
+  target.setPointerCapture=()=>{captured=true;};
+  target.hasPointerCapture=()=>captured;
+  target.releasePointerCapture=()=>{captured=false;};
+  target.listeners.pointerdown(swipeEvent({target:surface==='media'?video:target,pointerType:'touch',timeStamp:0}));
+  const move=swipeEvent({clientX:20+dx,timeStamp:200});
+  target.listeners.pointermove(move);
+  assert.equal(move.prevented,true);
+  assert.equal(card.style.transform,pose);
+  assert.equal(target.style.transform,undefined);
+  target.listeners[release==='cancel'?'pointercancel':'pointerup'](swipeEvent({clientX:20+dx,timeStamp:400}));
+  if(committing)await mounted.settle();
+  assert.equal(captured,false);
+  assert.equal(card.style.transform,'');
+  assert.equal(animations.length,1);
+  assert.equal(animations[0].frames[0].transform,pose);
+  if(release==='short'||release==='cancel'){
+   assert.equal(animations[0].frames[1].transform,'none');
+   assert.equal(copies.length,0);
+   assert.equal((await mounted.read()).items[0].decision,null);
+  }else{
+   assert.equal(copies.length,1);
+   assert.match(copies[0].style.transform,/translate3d/);
+   assert.match(animations[0].frames[1].transform,new RegExp(`translate3d\\(${dx>0?'':'-'}[0-9]+px,0,0\\) rotate`));
+   await mounted.settle();
+   assert.equal((await mounted.read()).items[0].decision,release);
+  }
+ }
+});
+test('video capture transfer preserves the swipe until media capture ends',async()=>{
+ for(const cancel of [false,true]){
+  const mounted=await mountedReview([item('video',{type:'video'})]),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  let captured=false;
+  media.setPointerCapture=()=>{captured=true;};
+  media.hasPointerCapture=()=>captured;
+  media.releasePointerCapture=()=>{captured=false;};
+  media.listeners.pointerdown(swipeEvent({target:video,pointerType:'touch'}));
+  media.listeners.pointermove(swipeEvent({target:video,clientX:120}));
+  media.listeners.lostpointercapture(swipeEvent({target:video}));
+  assert.equal(captured,true);assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'translate3d(100px,0px,0) rotate(5deg) scale(1.02)');
+  if(cancel){
+   captured=false;
+   media.listeners.lostpointercapture(swipeEvent({target:media}));
+   assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'');
+  }
+  media.listeners.pointerup(swipeEvent({target:media,clientX:120}));
+  await mounted.settle();
+  assert.equal((await mounted.read()).items[0].decision,cancel?null:'keep');
+ }
+});
+test('mouse capture delivers release outside either swipe surface during slop and allows the next swipe',async()=>{
+ for(const surface of ['media','swipe']){
+  const mounted=await mountedReview([item('mouse')]),target=mounted.nodes.get(surface);
+  let captured=false;
+  target.setPointerCapture=()=>{captured=true;};
+  target.hasPointerCapture=()=>captured;
+  target.releasePointerCapture=()=>{captured=false;};
+  target.listeners.pointerdown(swipeEvent({target,pointerType:'mouse'}));
+  assert.equal(captured,true);
+  target.listeners.pointermove(swipeEvent({target,clientX:25,clientY:24}));
+  if(captured)target.listeners.pointerup(swipeEvent({target,clientX:25,clientY:24}));
+  assert.equal(captured,false);assert.equal((await mounted.read()).items[0].decision,null);
+  target.listeners.pointerdown(swipeEvent({target,pointerType:'mouse'}));
+  target.listeners.pointermove(swipeEvent({target,clientX:120}));
+  target.listeners.pointerup(swipeEvent({target,clientX:120}));
+  await mounted.settle();
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+ }
+});
+test('deck videos support tap playback and swiping with native controls only when enlarged',async()=>{
+ const mounted=await mountedReview([item('synthetic-video',{type:'video'}),item('next')],{fetch:async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])})});
+ const media=mounted.nodes.get('media'),video=media.querySelector('video');
+ for(let count=0;count<100&&!video.src;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.ok(video.src);assert.equal(video.controls,false);
+ assert.equal(video.paused,false);
+ media.listeners.click(swipeEvent());assert.equal(video.paused,true);
+ media.listeners.click(swipeEvent());assert.equal(video.paused,false);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);
+ media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
+ assert.equal((await mounted.read()).items[0].decision,null);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);
+ media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
+ const click=swipeEvent();media.listeners.click(click);assert.equal(click.prevented,true);assert.equal(click.stopped,true);
+ await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+test('overlay isolates pointer touch wheel and all key events while preserving native defaults',async()=>{
+ const mounted=await mountedReview([item('synthetic')]),overlay=mounted.nodes.get('overlay');
+ for(const type of ['pointerdown','pointermove','pointerup','pointercancel','touchstart','touchmove','touchend','touchcancel','wheel','keydown','keyup','keypress']){
+  const event=swipeEvent();overlay.listeners[type](event);assert.equal(event.stopped,true,type);assert.equal(event.prevented,undefined,type);
+ }
+ const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
+ const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+ assert.match(source,/\.card\{touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media\{touch-action:pan-y;[^}]*overflow:auto/);
+ assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
+ assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
 
 test('obsolete userscript artifact is absent',async()=>{await assert.rejects(access(new URL('../userscript/photos-swipe.user.js',import.meta.url)),{code:'ENOENT'});});
@@ -1498,7 +1670,7 @@ test('mounted under-card shares the media origin and image gestures reach the me
  const css=styles.map(node=>node.textContent||node.childNodes.map(child=>child.textContent||'').join('')).join('');
  assert.match(css,/\.under-card\{position:absolute;inset:0 0 auto;/);
  assert.match(css,/\.media img\{pointer-events:none;/);
- mounted.nodes.get('media').ondblclick();assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
+ mounted.nodes.get('media').listeners.dblclick({target:{tagName:'IMG'}});assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
 });
 
 test('empty and filtered decks cannot latch swipe dismissal',async()=>{
