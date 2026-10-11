@@ -776,6 +776,30 @@ test('first-use sync setup is above the card and local dismissal survives reopen
  assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
 });
 
+test('sync setup actions preserve the saved album retry status and job',async()=>{
+ for(const action of ['sync-local','sync-save']){
+  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})});
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+  const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  const job={title:'Photos Swipe · Review',mediaKeys:['a'],albumKey:'saved-album'};
+  await db.save(account,{...await mounted.read(),job});
+  mounted.environment.AbortSignal=AbortSignal;
+  await mounted.nodes.get('launcher').onclick();
+  assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
+  if(action==='sync-save'){
+   mounted.nodes.get('sync-url').value='https://sync.example';
+   mounted.nodes.get('sync-token').value='synthetic-token';
+  }
+  await mounted.click(action);
+  assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
+  assert.equal(mounted.nodes.get('send').textContent,'Retry saved album operation');
+  assert.deepEqual((await mounted.read()).job,job);
+  assert.equal(mounted.nodes.get('sync-settings').open,false);
+  if(action==='sync-save')assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
+ }
+});
+
 test('main and visible sync status report successful sync, failures and disabling sync',async()=>{
  const mounted=await mountedReview([item('a')]);
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
