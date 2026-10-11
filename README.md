@@ -6,9 +6,9 @@ A local desktop app for reviewing Google Photos one photo or video at a time. Sw
 
 ## Standalone userscript (desktop and iOS Safari)
 
-[Install Photos Swipe](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js) in Tampermonkey, Violentmonkey, or quoid's iOS **Userscripts** Safari extension. Open Google Photos in the browser, then tap the **Photos Swipe** launcher. This version runs inside your signed-in Photos page, with account-scoped decisions and progress saved in IndexedDB; no server or pairing is needed.
+[Install Photos Swipe](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js) in Tampermonkey, Violentmonkey, or quoid's iOS **Userscripts** Safari extension. Open Google Photos in the browser, then tap the **Photos Swipe** launcher. This version runs inside your signed-in Photos page, with account-scoped decisions and progress saved in IndexedDB; no server or pairing is needed.
 
-See [userscript installation and usage](docs/userscript.md). The review card sits above the stats on mobile, with touch swipes and desktop keyboard controls. Album writes are verified; deletion remains manual in Google Photos. State is separate from the desktop app and does not sync across devices. Physical iPhone/Safari validation remains outstanding.
+See [userscript installation and usage](docs/userscript.md). The review card sits above the stats on mobile, with touch swipes and desktop keyboard controls. Album writes are verified. Move to Trash is opt-in and requires confirmation of the exact count; undo history survives reloads. State is separate from the desktop app and does not sync across devices. Physical iPhone/Safari validation remains outstanding.
 
 ## Quick start
 

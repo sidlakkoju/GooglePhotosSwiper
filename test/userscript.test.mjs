@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile,access} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {webcrypto} from 'node:crypto';
 import vm from 'node:vm';
@@ -118,8 +118,8 @@ test('Trash pagination and unknown reconciliation preserve local state and do no
  await assert.rejects(reconcileReviewTrash({...state,job:{}},call),/Finish/);
 });
 test('built userscript metadata, page isolation, no privileged APIs and reproducible artifact',async()=>{
- const source=await readFile(new URL('../userscript/photos-swipe.user.js',import.meta.url),'utf8');
- const url='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js';
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const url='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js';
  for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant none','@inject-into page',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
  assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/\bGM[_\.]|chrome\.|localhost|photos-swipe-request/);
  assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('const cardElement=')<source.indexOf('const statsElement='));
@@ -201,13 +201,13 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{toggle(){},contains(){return false;}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(){return null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},addEventListener(){},focus(){}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{toggle(){},contains(){return false;}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(){return null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
  const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,addEventListener(){}};window.top=window;
- result.environment={window,document,location:{...page},URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
 test('library sightings restore active state and retain local album membership on load and refresh',()=>{
@@ -231,7 +231,7 @@ test('undo eligibility rejects missing, trashed, revised and job-locked decision
  for(const changed of [{...state,items:[]},{...state,items:[item('a',{decision:'keep',revision:2})]},{...state,items:[item('a',{decision:'keep',revision:1,state:'in_trash'})]},{...state,job:{mediaKeys:['a']}}])assert.equal(canUndoReview(changed,entry),false);
 });
 test('mounted bundle keeps album links in the page account and undo skips stale history',async()=>{
- const source=await readFile(new URL('../userscript/photos-swipe.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),fault={};
  mounted.environment.window.indexedDB=fakeIndexedDB(fault);
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
@@ -247,7 +247,7 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone.');
 });
 async function mountedReview(items) {
- const source=await readFile(new URL('../userscript/photos-swipe.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
@@ -278,3 +278,40 @@ test('mounted oldest-first puts missing dates at the epoch before dated media',a
  assert.match(mounted.nodes.get('caption').textContent,/^dated · /);
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,'keep']);
 });
+test('Trash writes require confirmation and bounded valid stable identifiers',async()=>{
+ const f=fixture(()=>[]);
+ for(const args of [{dedupKeys:['stable']},{confirmed:true,dedupKeys:[]},{confirmed:true,dedupKeys:['bad/key']},{confirmed:true,dedupKeys:Array(26).fill('stable')}])assert.equal((await f.api('moveToTrash',args)).ok,false);
+ assert.equal(f.calls.length,0);
+ assert.equal((await call(f,'moveToTrash',{confirmed:true,dedupKeys:['stable']})).requested,1);
+ assert.equal(f.calls[0].id,'XwAOJf');assert.deepEqual(f.calls[0].args,[null,1,['stable'],3]);
+});
+test('mounted undo survives a fresh script instance with the same IndexedDB',async()=>{
+ const first=await mountedReview([item('a')]);await first.click('keep');
+ const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('undo').onclick();
+ for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
+});
+test('mounted Trash is opt-in, confirms the exact count and verifies synthetic Trash',async()=>{
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})]);const requests=[],prompts=[];
+ mounted.environment.window.fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['a',null,null,'stable']],null])};};
+ assert.equal(mounted.nodes.get('move-trash').hidden,true);await mounted.click('move-trash');assert.equal(requests.length,0);
+ mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+ mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return false;};await mounted.click('move-trash');assert.equal(requests.length,0);assert.match(prompts[0],/exactly 1 items/);
+ mounted.environment.window.confirm=()=>true;
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
+ vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
+ for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
+});
+test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
+ const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
+ const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
+ for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
+});
+
+test('obsolete userscript artifact is absent',async()=>{await assert.rejects(access(new URL('../userscript/photos-swipe.user.js',import.meta.url)),{code:'ENOENT'});});

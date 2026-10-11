@@ -1,41 +1,24 @@
 // ==UserScript==
 // @name Photos Swipe
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.0.0
+// @version 1.1.0
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
 // @grant none
 // @inject-into page
 // @noframes
-// @updateURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js
-// @downloadURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js
+// @updateURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js
+// @downloadURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js
 // @license MIT
 // ==/UserScript==
 
 (function () {
 'use strict';
-function buildPhotosRequest(tokens,location,id,payload) {
- const path=tokens.eptZe;
- if(location.origin!=='https://photos.google.com'||typeof path!=='string'||!/^\/(?:u\/\d+\/|_\/PhotosUi\/(?:u\/\d+\/)?)?$/.test(path)||!tokens.SNlM0e)throw Error('Unsupported Google Photos page tokens.');
- const query=new URLSearchParams({rpcids:id,'source-path':location.pathname,'f.sid':String(tokens.FdrFJe),bl:String(tokens.cfb2h),pageId:'none',rt:'c'});
- return {url:`https://photos.google.com${path}data/batchexecute?${query}`,options:{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({'f.req':JSON.stringify([[[id,JSON.stringify(payload),null,'generic']]]),at:tokens.SNlM0e}),credentials:'include'}};
-}
-function parsePhotosResponse(raw,id) {
- for(const line of raw.split('\n')) {
-  let parsed;
-  try {parsed=JSON.parse(line);}catch {continue;}
-  if(!Array.isArray(parsed))continue;
-  const envelope=parsed.find(entry=>Array.isArray(entry)&&entry[0]==='wrb.fr'&&entry[1]===id);
-  if(!envelope)continue;
-  if(typeof envelope[2]!=='string')throw Error('Google returned an unexpected response. No changes were confirmed.');
-  try {return JSON.parse(envelope[2]);}catch {throw Error('Google response could not be read.');}
- }
- throw Error('Google returned an unexpected response. No changes were confirmed.');
-}
-function createPhotosAPI(environment) {
- const {window,location,fetch,crypto,AbortController,setTimeout,clearTimeout}=environment;
-return async function photosOperation(operation,args={}) {
+async function photosOperation(operation,args={},environment=globalThis) {
+ const {window,location,fetch,crypto}=environment;
+ const AbortController=environment.AbortController;
+ const setTimeout=environment.setTimeout.bind(environment),clearTimeout=environment.clearTimeout.bind(environment);
  try {
   if(location.origin!=='https://photos.google.com')throw Error('Open Google Photos before connecting.');
   const global=window.WIZ_global_data;
@@ -52,17 +35,16 @@ return async function photosOperation(operation,args={}) {
   function requireSamePage(){const current=window.WIZ_global_data;if(!current||String(current.oPEP7c).trim().toLowerCase()!==label||current.SNlM0e!==pageToken)throw Error('Google account or page authentication changed. Reload and retry.');}
   async function rpc(id,payload) {
    requireSamePage();
-   const request=buildPhotosRequest(global,location,id,payload);
-   const controller=new AbortController();
-   const timer=setTimeout(()=>controller.abort(),30000);
+   const query=new URLSearchParams({rpcids:id,'source-path':location.pathname,'f.sid':String(global.FdrFJe),bl:String(global.cfb2h),pageId:'none',rt:'c'});
+   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
    try {
-    const response=await fetch(request.url,{...request.options,signal:controller.signal});
-    if(!response.ok)throw Error(`Google Photos request failed (${response.status}). Reload and retry.`);
-    const raw=await response.text();
-    requireSamePage();
-    return parsePhotosResponse(raw,id);
+   const response=await fetch(`https://photos.google.com${path}data/batchexecute?${query}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({'f.req':JSON.stringify([[[id,JSON.stringify(payload),null,'generic']]]),at:pageToken}),credentials:'include',signal:controller.signal});
+   if(!response.ok)throw Error(`Google Photos request failed (${response.status}). Reload its tab and try again.`);
+   const raw=await response.text();requireSamePage();let envelope;
+   for(const line of raw.split('\n')) {if(!line.includes('wrb.fr'))continue;try {const parsed=JSON.parse(line);envelope=parsed.find(e=>Array.isArray(e)&&e[0]==='wrb.fr'&&e[1]===id);if(envelope)break;}catch{}}
+   if(!envelope||typeof envelope[2]!=='string')throw Error('Google returned an unexpected response. No changes were confirmed.');
+   let data;try{data=JSON.parse(envelope[2]);}catch{throw Error('Google response could not be read.');}return data;
    } finally {clearTimeout(timer);}
-
   }
   if(operation==='library') {
    const data=await rpc('lcxiM',[args.cursor||null,null,50,null,1,1]);
@@ -108,6 +90,10 @@ return async function photosOperation(operation,args={}) {
    if(!validKey(args.albumKey)||!Array.isArray(args.mediaKeys)||!args.mediaKeys.length||args.mediaKeys.length>25||args.mediaKeys.some(k=>!validKey(k)))throw Error('Invalid album batch.');
    await rpc('E1Cajb',[args.mediaKeys,args.albumKey]);return {ok:true,data:{requested:args.mediaKeys.length}};
   }
+  if(operation==='moveToTrash') {
+   if(args.confirmed!==true||!Array.isArray(args.dedupKeys)||!args.dedupKeys.length||args.dedupKeys.length>25||new Set(args.dedupKeys).size!==args.dedupKeys.length||args.dedupKeys.some(key=>!validKey(key)))throw Error('Invalid confirmed Trash batch.');
+   await rpc('XwAOJf',[null,1,args.dedupKeys,3]);return {ok:true,data:{requested:args.dedupKeys.length}};
+  }
   if(operation==='video') {
    if(!validKey(args.mediaKey))throw Error('Invalid video.');const data=await rpc('VrseUb',[args.mediaKey,null,null,null,null]);
    if(data?.[0]?.[0]!==args.mediaKey||!safeMediaUrl(data[1]))throw Error('Video preview unavailable. Open it in Google Photos.');return {ok:true,data:{url:data[1]}};
@@ -115,9 +101,30 @@ return async function photosOperation(operation,args={}) {
   throw Error('Unsupported Google Photos operation.');
  }catch(e){return {ok:false,error:e.message||'Google Photos request failed.'};}
 }
+
+function buildPhotosRequest(tokens,location,id,payload) {
+ const path=tokens.eptZe;
+ if(location.origin!=='https://photos.google.com'||typeof path!=='string'||!/^\/(?:u\/\d+\/|_\/PhotosUi\/(?:u\/\d+\/)?)?$/.test(path)||!tokens.SNlM0e)throw Error('Unsupported Google Photos page tokens.');
+ const query=new URLSearchParams({rpcids:id,'source-path':location.pathname,'f.sid':String(tokens.FdrFJe),bl:String(tokens.cfb2h),pageId:'none',rt:'c'});
+ return {url:`https://photos.google.com${path}data/batchexecute?${query}`,options:{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({'f.req':JSON.stringify([[[id,JSON.stringify(payload),null,'generic']]]),at:tokens.SNlM0e}),credentials:'include'}};
+}
+function parsePhotosResponse(raw,id) {
+ for(const line of raw.split('\n')) {
+  let parsed;
+  try {parsed=JSON.parse(line);}catch {continue;}
+  if(!Array.isArray(parsed))continue;
+  const envelope=parsed.find(entry=>Array.isArray(entry)&&entry[0]==='wrb.fr'&&entry[1]===id);
+  if(!envelope)continue;
+  if(typeof envelope[2]!=='string')throw Error('Google returned an unexpected response. No changes were confirmed.');
+  try {return JSON.parse(envelope[2]);}catch {throw Error('Google response could not be read.');}
+ }
+ throw Error('Google returned an unexpected response. No changes were confirmed.');
+}
+function createPhotosAPI(environment) {
+ return (operation,args={})=>photosOperation(operation,args,environment);
 }
 
-const emptyReview = () => ({revision:0,items:[],cursor:null,started:false,exhausted:false,albumKey:null,job:null});
+const emptyReview = () => ({revision:0,history:[],items:[],cursor:null,started:false,exhausted:false,albumKey:null,job:null});
 const reviewDeck = state => state.items.filter(item=>!item.decision&&item.state!=='in_trash');
 const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.queueSent&&item.state!=='in_trash');
 function reviewStorage(items) {
@@ -419,10 +426,14 @@ function mountPhotosSwipe(environment) {
  albumElement.append(document.createTextNode("Open review album \u2197"));
  const pElement40=document.createElement('p');
  divElement4.append(pElement40);
- pElement40.append(document.createTextNode("Swipes never delete media. Send candidates to a review album, then move them to Trash yourself in Google Photos."));
+ pElement40.append(document.createTextNode("Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash below."));
+ const trashOptIn=document.createElement('input');trashOptIn.setAttribute('id','trash-opt-in');trashOptIn.type='checkbox';
+ const trashLabel=document.createElement('label');trashLabel.append(trashOptIn,document.createTextNode('Enable Move to Trash'));
+ const moveTrash=document.createElement('button');moveTrash.setAttribute('id','move-trash');moveTrash.hidden=true;
+ divElement36.append(trashLabel,moveTrash);
  document.documentElement.append(host);
  const $=id=>root.getElementById(id);
- let dbPromise,db,state=emptyReview(),identity,busy=false,history=[],inspected=null,shown=null,generation=0,leaseError=null,lockedAccount=null;
+ let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,shown=null,generation=0,leaseError=null,lockedAccount=null;
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const message=value=>{$('status').textContent=value;};
  async function call(operation,args={}) {
@@ -479,6 +490,7 @@ function mountPhotosSwipe(environment) {
   $('caption').textContent=item?`${inspected?'Queue inspection · ':''}${item.name} · ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'}`:'No unreviewed items in this batch.';
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
   $('stats').textContent=`${deck().length} to review · ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed · Queue: ${queue.length} · estimated savings ${estimate(queue)} · In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))}`;
+  moveTrash.textContent=`Move ${state.items.filter(item=>item.decision==='remove'&&item.state!=='in_trash').length} items to Trash`;
   $('queue-title').textContent=`Removal queue (${queue.length})`;
   $('queue').replaceChildren();
   for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
@@ -490,7 +502,7 @@ function mountPhotosSwipe(environment) {
   if(busy)return;
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress…');
   busy=true;controls();
-  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){history=[];inspected=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);message(state.job?'A saved album operation is ready to retry.':'Ready. Decisions are saved locally on this browser.');}
+  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);message(state.job?'A saved album operation is ready to retry.':'Ready. Decisions are saved locally on this browser.');}
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
  function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
@@ -498,9 +510,9 @@ function mountPhotosSwipe(environment) {
   if(busy)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
-  run(async()=>{const previous=item.decision;await save(decideReview(state,item.mediaKey,decision,previous,item.revision||0));history.push({key:item.mediaKey,previous,decision,revision:(item.revision||0)+1});inspected=null;message(decision==='remove'?'Added to the local removal queue.':'Kept.');});
+  run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;message(decision==='remove'?'Added to the local removal queue.':'Kept.');});
  }
- function undo(){if(busy||!history.length)return;run(async()=>{while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.at(-1);if(!last){message('No previous decisions can be undone.');return;}await save(decideReview(state,last.key,last.previous,last.decision,last.revision));history.pop();const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=state.items.find(item=>item.mediaKey===last.key).revision;inspected=null;message('Decision undone.');});}
+ function undo(){if(busy)return;run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});inspected=null;message('Decision undone.');});}
  async function load(refresh=false) {
   const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library · ${scanned} rows checked…`)});
   message(`${result.added} new items to review · ${result.scanned} library rows checked${result.exhausted?' · End of library':''}${result.limited?' · Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);
@@ -510,7 +522,9 @@ function mountPhotosSwipe(environment) {
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;render();};
  $('zoom').oninput=()=>{const image=$('media').querySelector('img');if(image){image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'pan-y pinch-zoom';}};
- $('send').onclick=()=>{if(busy)return;const confirmedKeys=[...(state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey))];const count=confirmedKeys.length;if(!count){message('The removal queue is empty.');return;}if(!window.confirm(`Add ${count} candidates to a private review album? This does not delete media.`))return;run(async()=>{const keys=state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey);if(keys.length!==confirmedKeys.length||keys.some(key=>!confirmedKeys.includes(key)))throw Error('The queue changed in another tab. Review it and confirm again.');message('Updating and verifying the review album…');await sendReviewAlbum({read:async()=>state,save,call,title:`Photos Swipe · Review · ${identity.account.slice(0,12)}`});history=[];inspected=null;message('Every candidate was verified in the review album. Open it in Google Photos to move items to Trash.');});};
+ $('send').onclick=()=>{if(busy)return;const confirmedKeys=[...(state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey))];const count=confirmedKeys.length;if(!count){message('The removal queue is empty.');return;}if(!window.confirm(`Add ${count} candidates to a private review album? This does not delete media.`))return;run(async()=>{const keys=state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey);if(keys.length!==confirmedKeys.length||keys.some(key=>!confirmedKeys.includes(key)))throw Error('The queue changed in another tab. Review it and confirm again.');message('Updating and verifying the review album…');await sendReviewAlbum({read:async()=>state,save,call,title:`Photos Swipe · Review · ${identity.account.slice(0,12)}`});inspected=null;message('Every candidate was verified in the review album. Open it in Google Photos to move items to Trash.');});};
+ trashOptIn.onchange=()=>{moveTrash.hidden=!trashOptIn.checked;};
+ moveTrash.onclick=()=>{if(busy||!trashOptIn.checked)return;const keys=state.items.filter(item=>item.decision==='remove'&&item.state!=='in_trash').map(item=>item.mediaKey);if(!keys.length){message('No candidates to move to Trash.');return;}if(!window.confirm(`Move exactly ${keys.length} items to Google Photos Trash?`))return;run(async()=>{if(state.job)throw Error('Finish the saved album operation before moving items to Trash.');const currentKeys=state.items.filter(item=>item.decision==='remove'&&item.state!=='in_trash').map(item=>item.mediaKey);if(currentKeys.length!==keys.length||currentKeys.some(key=>!keys.includes(key)))throw Error('Candidates changed. Review the count and confirm again.');if(state.items.some(item=>keys.includes(item.mediaKey)&&!item.dedupKey))throw Error('Missing Trash identifiers. Refresh latest before retrying.');for(let index=0;index<keys.length;index+=25){const batch=keys.slice(index,index+25);await call('moveToTrash',{dedupKeys:state.items.filter(item=>batch.includes(item.mediaKey)).map(item=>item.dedupKey),confirmed:true});await save(await reconcileReviewTrash(state,call));if(state.items.some(item=>batch.includes(item.mediaKey)&&item.state!=='in_trash'))throw Error('Trash move was not verified. Check deleted items before retrying.');}trashOptIn.checked=false;moveTrash.hidden=true;message(`Verified ${keys.length} items in Trash.`);});};
  $('trash').onclick=()=>run(async()=>{message('Reading Google Photos Trash…');await save(await reconcileReviewTrash(state,call));message('Trash check complete. Unknown results leave local state unchanged.');});
  let swipeStart=null;
  for(const target of [$('media'),$('swipe')]){

@@ -1,6 +1,6 @@
 # Standalone userscript
 
-Photos Swipe can run directly in your signed-in Google Photos tab, without Node, a server, the Chrome bridge or pairing. The single installable file is [photos-swipe.user.js](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js).
+Photos Swipe can run directly in your signed-in Google Photos tab, without Node, a server, the Chrome bridge or pairing. The single installable file is [photoswiper.user.js](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js).
 
 ## Desktop: Tampermonkey or Violentmonkey
 
@@ -13,7 +13,7 @@ Photos Swipe can run directly in your signed-in Google Photos tab, without Node,
 
 1. Install [Userscripts](https://github.com/quoid/userscripts), open the app, and check its scripts directory. Choose a directory if your version asks for one.
 2. Enable Userscripts in Safari's extension settings and allow it on `photos.google.com`. Depending on iOS, these settings are under Settings → Apps → Safari → Extensions, or Settings → Safari → Extensions.
-3. Open the install link in Safari. Open Safari's extensions menu, select Userscripts, and accept its installation prompt. Alternatively, save the downloaded file as `photos-swipe.user.js` in the app's selected scripts directory. Open the Userscripts popup so it discovers the file and ensure it is enabled.
+3. Open the install link in Safari. Open Safari's extensions menu, select Userscripts, and accept its installation prompt. Alternatively, save the downloaded file as `photoswiper.user.js` in the app's selected scripts directory. Open the Userscripts popup so it discovers the file and ensure it is enabled.
 4. Open Google Photos **in Safari**, sign in, reload, and tap the **Photos Swipe** launcher. Review the account label before loading media. This runs in the website, not the Google Photos native app.
 
 The two installation methods and page-context metadata follow the [Userscripts documentation](https://github.com/quoid/userscripts#ios-ipados). Keep `@grant none` and `@inject-into page`: the script needs access to Google's page session tokens. No userscript-manager APIs are used.
@@ -22,17 +22,17 @@ The two installation methods and page-context metadata follow the [Userscripts d
 
 The media card appears above the stats on mobile. Swipe a photo horizontally or use **Queue** and **Keep**. For videos, use the separate swipe strip below the player so native playback and scrubbing controls stay usable. Photos support Enlarge, the Zoom slider, and browser pinch zoom. On desktop, left/right arrows queue/keep, Z undoes, F enlarges, Space toggles video playback, and Escape closes the overlay.
 
-Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** changes its decision; **Back to review** returns to the deck. Undo history lasts for this page session. Decisions survive reloads.
+Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** changes its decision; **Back to review** returns to the deck. Decisions and undo history survive reloads in IndexedDB.
 
 **Load 50 more** scans through overlapping or reviewed pages until it finds 50 new review items, reaches the end, or checks 12 pages. **Refresh latest** reads the head page while retaining older-library progress. Filters and order apply to the current local batch.
 
 **Send to review album** asks for confirmation, creates or finds a private review album, adds candidates in batches of 25, and verifies membership. The entire saved batch stays in the queue until every item is verified. Failed or interrupted operations can be resumed with **Retry saved album operation**, including after reloading. Candidates in that saved operation cannot be changed until it finishes. Previously added items are checked before retrying additions.
 
-Open the album in Google Photos, select the intended items, and use Google's **Move to trash** command yourself. **Check deleted items** only reads Trash and item state. Unknown results preserve existing local state. The userscript has no Trash mutation or permanent deletion operation. Queue and confirmed-Trash estimates use quota bytes when known, count known free items as zero, and flag unknown sizes.
+To move reviewed candidates to Trash, select **Enable Move to Trash**, check the exact count on the button, and explicitly confirm the count. This includes queued and previously sent removal candidates. Each batch is verified in Trash before local state advances. Keep and swipes never move media to Trash. You can also use Google Photos to move items manually. **Check deleted items** only reads Trash and item state. Unknown results preserve existing local state. The userscript has no permanent deletion operation. Queue and confirmed-Trash estimates use quota bytes when known, count known free items as zero, and flag unknown sizes.
 
 ## Local state and compatibility
 
-Account-scoped decisions, imported metadata, pagination and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Tokens and Google cookies are never stored by this script. No data is sent to the existing local app. State does not sync between devices, Safari profiles, userscript managers or the desktop app. Clearing website data removes it. Avoid private browsing if you need durable progress.
+Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Tokens and Google cookies are never stored by this script. No data is sent to the existing local app. State does not sync between devices, Safari profiles, userscript managers or the desktop app. Clearing website data removes it. Avoid private browsing if you need durable progress.
 
 A renewable account lock prevents simultaneous work in multiple tabs. After a tab closes during an operation, a lock can take up to 90 seconds to expire. Account and page-session changes reject requests; close the overlay, reload Google Photos, and reopen it in the intended account.
 
@@ -51,6 +51,6 @@ npm test
 node scripts/check.mjs
 ```
 
-The dependency-free build bundles `lib/userscript-*.mjs` into the installable file. Include that generated file whenever distributing changes, and increase the metadata version in the build script for a release. Unit tests cover request envelopes, fake responses, pagination, decisions, quota estimates, partial album retries and read-only Trash reconciliation. The artifact test checks metadata, absence of privileged APIs and reproducibility.
+The dependency-free build bundles `extension/photos-api.js` and `lib/userscript-*.mjs` into the installable file. Include that generated file whenever distributing changes, and increase the metadata version in the build script for a release. Unit tests cover request envelopes, fake responses, pagination, decisions, quota estimates, partial album retries and read-only Trash reconciliation. The artifact test checks metadata, absence of privileged APIs and reproducibility.
 
 RPC mappings are adapted from Google Photos Toolkit by xob0t, revision `6db9ab355e4797327e4078cf87a2b6994d36cf73`. The upstream MIT license is retained in [the license notice](../extension/LICENSE-GPTK), with [third-party attribution](../extension/THIRD_PARTY_NOTICES.md).
