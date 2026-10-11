@@ -1,5 +1,5 @@
 const encoder = new TextEncoder();
-export const hash = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(value))));
+export const hash = async value => new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(value)));
 const random = size => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(size)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
 function shortCode() {
  let value;
@@ -45,7 +45,7 @@ export async function pairingRequest(request,env,device,readBody,respond) {
  if(route==='/api/pair/claim'&&method==='POST'){
   if(!env.PAIRING_IP_KEY)return respond({error:'Pairing IP key unset'},500);
   const key=await crypto.subtle.importKey('raw',encoder.encode(env.PAIRING_IP_KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);
-  const ipHash=Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(request.headers.get('CF-Connecting-IP')||'unknown'))));
+  const ipHash=new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(request.headers.get('CF-Connecting-IP')||'unknown')));
   if(!await limit(db,ipHash,now,30))return limited();
   const value=await readBody(request);
   if(Object.keys(value).some(key=>!['code','short','name','platform'].includes(key))||!label(value.name)||!label(value.platform)||Boolean(value.code)===Boolean(value.short))throw Error('Invalid pairing input');

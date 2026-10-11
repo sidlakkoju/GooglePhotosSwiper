@@ -11,7 +11,7 @@ class FakeD1 {
  prepare(sql){
   const statement=this.sqlite.prepare(sql);
   const bound=args=>({all:async()=>({results:statement.all(...args)}),first:async()=>statement.get(...args)||null,run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:Number(this.sqlite.prepare('SELECT changes() AS n').get().n)}})});
-  return {...bound([]),bind:(...args)=>bound(args.map(value=>Array.isArray(value)?new Uint8Array(value):value))};
+  return {...bound([]),bind:(...args)=>{if(args.some(Array.isArray))throw Error('D1_TYPE_ERROR');return bound(args);}};
  }
  async batch(statements){this.sqlite.exec('BEGIN');try{const results=statements.map(statement=>statement.execute());this.sqlite.exec('COMMIT');return results;}catch(error){this.sqlite.exec('ROLLBACK');throw error;}}
 }
@@ -151,6 +151,15 @@ test('empty pending maps after offline cursor saves still backfill existing deci
 const claim=(e,value,ip='192.0.2.1')=>call(e,'pair/claim','POST',{name:'QA phone',platform:'test',...value},{Authorization:'','CF-Connecting-IP':ip});
 const start=async e=>{const response=await call(e,'pair/start','POST');assert.equal(response.status,200);return response.json();};
 const withToken=token=>({Authorization:`Bearer ${token}`});
+test('pairing hashes bind as D1 blobs and plain arrays are rejected',async()=>{
+ const db=new FakeD1(),digest=await hash('abc');
+ assert.ok(digest instanceof Uint8Array);
+ assert.equal(Buffer.from(digest).toString('hex'),'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+ assert.throws(()=>db.prepare('SELECT ?').bind(Array.from(digest)),/D1_TYPE_ERROR/);
+ const row=await db.prepare('SELECT typeof(?) AS type, hex(?) AS digest').bind(digest,digest).first();
+ assert.equal(row.type,'blob');
+ assert.equal(row.digest,Buffer.from(digest).toString('hex').toUpperCase());
+});
 test('pairing round trip, status ownership, replay and hash-only storage',async()=>{
  const e=env();await call(e,'decisions/preserved','PUT',{decision:'keep'});
  const pairing=await start(e);
