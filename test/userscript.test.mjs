@@ -223,7 +223,7 @@ function fakeIndexedDB(fault={}) {
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
@@ -315,7 +315,7 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('album').href,'https://photos.google.com/u/2/album/album');
- const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  mounted.nodes.get('keep').onclick();await idle();mounted.nodes.get('keep').onclick();await idle();
  const state=await db.read(account);await db.save(account,{...state,items:state.items.map(row=>row.mediaKey==='b'?{...row,state:'in_trash',revision:row.revision+1}:row)});
  fault.failSave=true;mounted.nodes.get('undo').onclick();await idle();
@@ -327,11 +327,12 @@ async function mountedReview(items,windowOverrides={}) {
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
+ Object.assign(mounted.environment.window,windowOverrides);
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
  Object.assign(mounted.environment.window,windowOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  return {...mounted,click,read:()=>db.read(account)};
 }
 test('mounted undo restores undecided after queue, keep instead, and two undos',async()=>{
@@ -374,13 +375,13 @@ test('mounted undo survives a fresh script instance with the same IndexedDB',asy
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
  second.nodes.get('undo').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
  assert.equal(second.nodes.get('status').textContent,'Decision undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
@@ -394,7 +395,7 @@ test('mounted Trash is opt-in, confirms the exact count and verifies synthetic T
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
 });
 test('Trash completion status resets on reload and cached-page restore while estimates retain a running total',async()=>{
@@ -485,7 +486,7 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
  const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
- for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&mounted.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
 
@@ -958,7 +959,7 @@ for(const [key,button,decision,side] of [['ArrowLeft','remove','remove',-1],['Ar
   await waitForReview(()=>animations.length===2);
   assert.deepEqual(animations[1].frames,animations[0].frames);
   mounted.nodes.get('undo').onclick();
-  assert.equal(animations[1].cancelled,true);
+  assert.equal(animations[1].finishedInstantly,true);
   await waitForReview(()=>animations.length===3);
   assert.deepEqual(structuredClone(animations[2].frames),structuredClone([animations[1].frames[1],animations[1].frames[0]]));
   assert.equal(animations[2].options.duration,250);
@@ -974,7 +975,7 @@ test('mounted ten rapid arrow inputs finish the old flight and persist ten order
  pressReviewKey(mounted,'ArrowLeft');
  await waitForReview(()=>animations.length===1);
  for(let index=1;index<10;index++)pressReviewKey(mounted,index%2?'ArrowRight':'ArrowLeft');
- assert.equal(animations[0].cancelled,true);
+ assert.equal(animations[0].finishedInstantly,true);
  await waitForReview(()=>animations.length===10);
  animations[9].finish();
  await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
@@ -982,4 +983,61 @@ test('mounted ten rapid arrow inputs finish the old flight and persist ten order
  assert.equal(state.history.length,10);
  assert.deepEqual(state.items.slice(0,10).map(row=>row.decision),Array.from({length:10},(_,index)=>index%2?'keep':'remove'));
  assert.equal(state.items[10].decision,null);
+});
+
+
+test('failed decisions discard the rest of a burst and accept fresh input',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{indexedDB:fakeIndexedDB(fault)});
+ fault.failSave=true;
+ pressReviewKey(mounted,'ArrowLeft');pressReviewKey(mounted,'ArrowRight');pressReviewKey(mounted,'ArrowLeft');
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');
+ assert.equal((await mounted.read()).history.length,0);
+ fault.failSave=false;
+ await mounted.click('keep');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null,null]);
+});
+
+test('decision and Undo key repeats do not enqueue actions',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
+ pressReviewKey(mounted,'ArrowRight');
+ await waitForReview(()=>animations.length===1);
+ for(const key of ['ArrowLeft','ArrowRight','z','Z'])mounted.environment.window.listeners.keydown({key,repeat:true,preventDefault(){},stopImmediatePropagation(){}});
+ animations[0].finish();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
+ assert.equal(animations.length,1);
+});
+
+test('finished and interrupted fly-offs retain their pose until a slow save renders the next card',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{indexedDB:fakeIndexedDB(fault)}),animations=controlledCardAnimations(mounted);
+ let release;fault.holdSave=new Promise(resolve=>{release=resolve;});
+ pressReviewKey(mounted,'ArrowLeft');
+ await waitForReview(()=>animations.length===1);
+ animations[0].finish();
+ await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(animations[0].cancelled,undefined);
+ assert.match(mounted.nodes.get('caption').textContent,/^a /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ const swipe=mounted.nodes.get('swipe');
+ swipe.listeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,target:swipe});
+ swipe.listeners.pointerup({pointerId:1,clientX:100,clientY:0});
+ assert.equal(animations[0].cancelled,undefined);
+ fault.holdSave=null;release();
+ await waitForReview(()=>animations.length===2);
+ assert.equal(animations[0].cancelled,true);
+ animations[1].finish();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove','keep',null]);
+});
+
+test('an animation that never settles releases the review task at its deadline',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ let cancelled=false;
+ mounted.nodes.get('card').animate=()=>({finished:new Promise(()=>{}),finish(){},cancel(){cancelled=true;}});
+ pressReviewKey(mounted,'ArrowRight');
+ await new Promise(resolve=>setTimeout(resolve,400));
+ assert.equal(mounted.nodes.get('overlay')['aria-busy'],'false');
+ assert.equal(cancelled,true);
+ assert.equal((await mounted.read()).items[0].decision,'keep');
 });
