@@ -334,3 +334,13 @@ test('401 at a pending write stops further requests and re-pairing merges retain
  reject=false;client.configure({url:'https://sync.example',token:'test-secret'});state=await client.sync('qa',state,async value=>value);
  assert.deepEqual(state.syncPending,{});assert.equal((await (await call(e,'state?scope=qa')).json()).decisions[0].decision,'remove');
 });
+
+test('device management rejects missing credentials without making requests',async()=>{
+ let requests=0;
+ const client=createSyncClient({fetch:async()=>{requests++;throw Error('Unexpected request');}});
+ for(const settings of [{},{url:'https://sync.example'},{token:'synthetic-token'}]){
+  client.configure(settings);
+  for(const action of [()=>client.devices(),()=>client.rename('caller','Browser'),()=>client.revoke('caller'),()=>client.revokeOthers()])await assert.rejects(action,/Configure sync to manage paired devices/);
+ }
+ assert.equal(requests,0);
+});

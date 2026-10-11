@@ -1071,3 +1071,37 @@ test('paired devices render names safely and inline rename and confirmed revoke 
  await list.childNodes[0].childNodes[2].onclick();assert.equal(list.childNodes.length,0);assert.equal(prompts[0],'Revoke QA phone? It will stop syncing immediately.');
  assert.ok(requests.some(([path,method])=>path==='/api/devices/qa'&&method==='PATCH'));
 });
+
+test('paired notice stays visible with settings closed and opens the device list',async()=>{
+ const requests=[];
+ const mounted=await mountedReview([], {fetch:async url=>{
+  const path=new URL(url).pathname;requests.push(path);
+  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:[]}:{decisions:[],history:[],progress:{},suggestRevokeLegacy:true}};
+ }});
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ await mounted.click('sync-save');
+ const notice=mounted.nodes.get('paired-notice'),settings=mounted.nodes.get('sync-settings');
+ assert.equal(settings.open,false);assert.equal(notice.hidden,false);
+ assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(notice));
+ await mounted.click('paired-notice');
+ assert.equal(settings.open,true);assert.equal(mounted.nodes.get('paired-devices').open,true);
+ assert.ok(requests.includes('/api/devices'));
+});
+
+test('device actions are disabled before configuration and after revoking this device',async()=>{
+ const requests=[];
+ const mounted=await mountedReview([], {confirm:()=>true,fetch:async(url,options)=>{
+  const path=new URL(url).pathname;requests.push([path,options.method]);
+  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:[{id:'caller',name:'This browser',platform:'Browser',created_at:1,last_seen_at:1,revoked_at:null}]}:{decisions:[],history:[],progress:{}}};
+ }});
+ for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
+ assert.equal(requests.length,0);
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';await mounted.click('sync-save');
+ for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,false);
+ await mounted.click('refresh-devices');await mounted.nodes.get('devices-list').childNodes[0].childNodes[2].onclick();
+ for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
+ assert.equal(mounted.nodes.get('devices-list').childNodes.length,0);
+ assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
+});
