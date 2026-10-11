@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.20
+// @version 1.2.21
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content
@@ -10,6 +10,9 @@
 // @grant GM.xmlHttpRequest
 // @grant GM.getValue
 // @grant GM.setValue
+// @grant GM.deleteValue
+// @grant unsafeWindow
+// @grant GM_deleteValue
 // @grant GM_xmlhttpRequest
 // @grant GM_getValue
 // @grant GM_setValue
@@ -66,14 +69,11 @@ function fetchRelease(environment,request){
 function injectRelease(environment,release){
  const document=environment.document,root=document.documentElement;
  if(root.dataset.psLoaded||root.dataset.psLoaderInjected)return false;
- const script=document.createElement('script'),nonce=document.querySelector('script[nonce]');
- if(nonce)script.nonce=nonce.nonce||nonce.getAttribute('nonce');
- let code=`(function(photosSwipeReleaseVersion){\n${release.code}\n})(${JSON.stringify(release.version)});`;
- if(environment.trustedTypes)code=environment.trustedTypes.createPolicy('photoswiper-loader',{createScript:value=>value}).createScript(code);
- script.textContent=code;
+ const gm=environment.GM||{getValue:environment.GM_getValue,setValue:environment.GM_setValue,deleteValue:environment.GM_deleteValue};
+ if(!['getValue','setValue','deleteValue'].every(name=>typeof gm[name]==='function'))return false;
+ const execute=new Function('GM','unsafeWindow','window','document','location','fetch','photosSwipeReleaseVersion',release.code);
  root.dataset.psLoaderInjected='1';
- try{(document.head||root).appendChild(script);}catch(error){delete root.dataset.psLoaderInjected;throw error;}
- script.remove();
+ try{execute(gm,environment.unsafeWindow||environment.window,environment.window,document,environment.location,environment.fetch,release.version);}catch(error){delete root.dataset.psLoaderInjected;throw error;}
  return true;
 }
 async function startLoader(environment,key=pinnedReleaseKey){
@@ -95,5 +95,5 @@ async function startLoader(environment,key=pinnedReleaseKey){
  return injectRelease(environment,selected);
 }
 
-await startLoader(globalThis);
+await startLoader({document,window,location,crypto:window.crypto,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),fetch:fetch.bind(globalThis),unsafeWindow:typeof unsafeWindow==='undefined'?window:unsafeWindow,GM:typeof GM==='undefined'?undefined:GM,GM_getValue:typeof GM_getValue==='undefined'?undefined:GM_getValue,GM_setValue:typeof GM_setValue==='undefined'?undefined:GM_setValue,GM_deleteValue:typeof GM_deleteValue==='undefined'?undefined:GM_deleteValue,GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='undefined'?undefined:GM_xmlhttpRequest});
 })();
