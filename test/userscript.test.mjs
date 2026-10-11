@@ -738,3 +738,27 @@ test('enlarged video owns Space down and up without scrolling, closing or replac
  root.activeElement=video;nodes.get('overlay').hidden=true;
  assert.equal(dispatch('keydown',' ').prevented,false);assert.equal(dispatch('keyup',' ').prevented,false);
 });
+
+
+test('photo viewer consumes Space without scrolling, closing or recording decisions',async()=>{
+ const mounted=await mountedReview([item('photo')]);
+ const {nodes,root}=mounted,image=nodes.get('media').querySelector('img'),before=await mounted.read();
+ assert.ok(image);assert.equal(nodes.get('media').querySelector('video'),null);
+ assert.equal(root.activeElement,nodes.get('close'));
+ const dispatch=async(type,repeat=false)=>{
+  const event={type,key:' ',repeat,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;}};
+  mounted.environment.window.listeners[type](event);
+  if(!event.prevented){if(type==='keydown')nodes.get('overlay').scrollTop=100;else await root.activeElement?.onclick?.();}
+  assert.equal(event.prevented,true);assert.equal(event.stopped,true);
+ };
+ for(const expanded of [false,true]){
+  if(expanded)nodes.get('enlarge').onclick();
+  for(const control of ['close','keep','remove']){
+   nodes.get(control).focus();nodes.get('overlay').scrollTop=0;
+   await dispatch('keydown');await dispatch('keydown',true);await dispatch('keyup');
+   assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('overlay').scrollTop,0);
+   assert.equal(nodes.get('media').querySelector('img'),image);assert.ok(image.src);
+   assert.deepEqual(await mounted.read(),before);
+  }
+ }
+});
