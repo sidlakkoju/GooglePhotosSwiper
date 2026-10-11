@@ -271,19 +271,17 @@ function createSyncClient({fetch,status=()=>{}}) {
   if(!response.ok)throw Error(`Sync HTTP ${response.status}`);
   return response.json();
  }
- async function sync(scope,state,save) {
+ async function sync(scope,state,save,{pull=true}={}) {
   if(!settings.url||!settings.token)return state;
   status('Syncing\u2026');
   try {
-   const remote=await request(scope,'api/state');
+   const remote=pull?await request(scope,'api/state'):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress};
    const decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
    const pending={...state.syncPending};
    if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey))pending[item.mediaKey]=item.decision;
    const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
-   for(const [id,value] of Object.entries(pending)){
-    await request(scope,`api/decisions/${encodeURIComponent(id)}`,value===null?'DELETE':'PUT',value===null?undefined:{decision:value});
-    if(value===null)delete decisions[id];else decisions[id]=value;
-   }
+   if(Object.keys(pending).length)await request(scope,'api/decisions','PUT',{decisions:Object.entries(pending).map(([id,decision])=>({id,decision}))});
+   for(const [id,value] of Object.entries(pending)){if(value===null)delete decisions[id];else decisions[id]=value;}
    const history=(dirty?state.history:remote.history).slice(-2000);
    const items=state.items.map(item=>{
     const value=Object.hasOwn(pending,item.mediaKey)?pending[item.mediaKey]:decisions[item.mediaKey]??(Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
@@ -319,6 +317,57 @@ function validateSyncSettings(url,token) {
  return {url:parsed.origin,token};
 }
 
+function previewURL(value,{width=512,height=512,dpr=1,mobile=false,expanded=false,authuser='0',video=false}={}) {
+ const url=new URL(value);
+ if(url.protocol!=='https:'||!(url.hostname==='photos.fife.usercontent.google.com'||url.hostname.endsWith('.googleusercontent.com'))||url.username||url.password||url.port)throw Error('Unexpected preview host.');
+ if(!video){
+  const ratio=Math.min(dpr||1,2),pixels=Math.ceil(Math.max(width,height)*ratio);
+  const bucket=[512,768,1024,1600].find(size=>size>=pixels)||1600;
+  const size=mobile?Math.min(bucket,1024):bucket;
+  url.pathname=url.pathname.replace(/=.+$/,'')+(expanded?`=w${Math.min(Math.ceil(width*ratio),mobile?1024:Infinity)}-h${Math.min(Math.ceil(height*ratio),mobile?1024:Infinity)}-k-no`:`=w${size}-h${size}-k-no`);
+  url.searchParams.set('authuser',authuser);
+ }
+ return url.href;
+}
+function createPreloadBuffer({load,concurrency=2,size=3}) {
+ const entries=new Map();let active=0,generation=0;
+ function pump(){
+  for(const entry of entries.values()){
+   if(active>=concurrency)break;
+   if(entry.state!=='queued')continue;
+   entry.state='loading';active++;
+   Promise.resolve().then(()=>load(entry.item,entry.controller.signal)).then(el=>{
+    if(entries.get(entry.key)===entry&&entry.generation===generation&&!entry.controller.signal.aborted){entry.el=el;entry.state='ready';}
+   },()=>{entry.state='failed';}).finally(()=>{active--;pump();});
+  }
+ }
+ function update(items,previous){
+  const wanted=items.slice(0,size),keys=new Set(wanted.map(item=>item.mediaKey));
+  if(previous)keys.add(previous);
+  for(const [key,entry] of entries)if(!keys.has(key)){entry.controller.abort();if(entry.el)entry.el.src='';entries.delete(key);}
+  for(const item of wanted)if(!entries.has(item.mediaKey))entries.set(item.mediaKey,{key:item.mediaKey,item,state:'queued',controller:new AbortController(),generation});
+  pump();
+ }
+ function clear(){generation++;for(const entry of entries.values()){entry.controller.abort();if(entry.el)entry.el.src='';}entries.clear();}
+ return {update,clear,retain(item,el){const existing=entries.get(item.mediaKey);if(existing?.el!==el)existing?.controller.abort();entries.set(item.mediaKey,{key:item.mediaKey,item,el,state:'ready',controller:new AbortController(),generation});},get:key=>entries.get(key)?.state==='ready'?entries.get(key).el:null,take(key){const entry=entries.get(key);if(entry?.state!=='ready')return null;entries.delete(key);return entry.el;},entries};
+}
+function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
+ let pending=false,running=null;
+ function flush(){
+  if(running)return running;
+  if(!pending)return Promise.resolve();
+  running=Promise.resolve().then(async()=>{
+   while(pending){
+    pending=false;
+    try{const value=snapshot();const started=Date.now();const saved=await write(value);committed(saved,value,Date.now()-started);}
+    catch(failure){pending=true;error(failure);break;}
+   }
+  }).finally(()=>{running=null;});
+  return running;
+ }
+ return {enqueue(){pending=true;return flush();},flush,get pending(){return pending;}};
+}
+
 function mountPhotosSwipe(environment) {
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
@@ -328,7 +377,7 @@ function mountPhotosSwipe(environment) {
  const root=host.attachShadow({mode:'open'});
  const styleElement1=document.createElement('style');
  root.append(styleElement1);
- styleElement1.append(document.createTextNode("\n :host{font:16px system-ui;color:#193426}*{box-sizing:border-box}button,select,input{font:inherit}button,a,select{touch-action:manipulation}button{min-height:44px;border:0;border-radius:12px;background:#e3ebdf;color:#193426;padding:10px 16px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #0075ff;outline-offset:2px}a{color:#236541}p{margin:8px 0;overflow-wrap:anywhere}[hidden]{display:none!important}\n .launcher{pointer-events:auto;position:absolute;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#245b3d;color:white;box-shadow:0 3px 20px #0005}\n .overlay{pointer-events:auto;position:absolute;inset:0;background:#f4f7f1;overflow:auto;overscroll-behavior:contain;padding:calc(12px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom))}\n .content{max-width:850px;margin:auto}header,.actions,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:22px;margin:0}.account{font-size:13px}.card{margin-top:12px;background:#13281f;border-radius:18px;overflow:hidden;position:relative}.media{height:48vh;height:48dvh;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:auto}.media img,.media video{display:block;max-width:100%;max-height:100%;object-fit:contain}.media img{touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-drag:none}.card.expanded .media{height:72vh;height:72dvh}.caption{color:white;padding:10px 14px}.swipe{color:white;text-align:center;padding:12px;touch-action:pan-y pinch-zoom;background:#264638}.actions{justify-content:center;margin:12px 0}.keep{background:#245b3d;color:white}.remove{background:#8c3535;color:white}.stats{padding:12px;background:#e3ebdf;border-radius:12px;margin:12px 0}.toolbar{margin:10px 0}select{max-width:100%;min-height:44px;border-radius:8px}details{margin:16px 0}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}.queue button{padding:6px;overflow:hidden}.queue img{width:100%;height:75px;object-fit:cover}.queue span{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{min-height:24px}.zoom-control,.trash-toggle{display:flex;align-items:center;gap:8px;white-space:nowrap}#zoom{width:120px;min-width:0;min-height:44px}.album-controls{background:#f4f7f1} @media(max-width:599px){.overlay{padding-bottom:calc(var(--album-controls-height,240px) + 18px + env(safe-area-inset-bottom))}.actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.actions button{padding:8px}.zoom-control{grid-column:span 2}.zoom-control input{flex:1}.library-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.library-controls>*{width:100%;min-width:0}.album-controls{position:fixed;bottom:0;left:12px;right:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:8px 0 calc(8px + env(safe-area-inset-bottom));margin-bottom:0}.album-controls button{padding:8px;font-size:14px;min-width:0;white-space:normal;overflow-wrap:anywhere}.album-controls a,.album-explanation{grid-column:1 / -1;min-width:0}.album-explanation{margin:0;font-size:13px}.trash-toggle{min-height:44px;font-size:14px;white-space:normal;min-width:0}.trash-toggle input{flex-shrink:0}.media{height:32vh;height:32dvh}.stats{font-size:14px;padding:8px}} @media(min-width:800px){.media{height:55vh}.overlay{padding:24px}}\n "));
+ styleElement1.append(document.createTextNode("\n :host{font:16px system-ui;color:#193426}*{box-sizing:border-box}button,select,input{font:inherit}button,a,select{touch-action:manipulation}button{min-height:44px;border:0;border-radius:12px;background:#e3ebdf;color:#193426;padding:10px 16px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #0075ff;outline-offset:2px}a{color:#236541}p{margin:8px 0;overflow-wrap:anywhere}[hidden]{display:none!important}\n .launcher{pointer-events:auto;position:absolute;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#245b3d;color:white;box-shadow:0 3px 20px #0005}\n .overlay{pointer-events:auto;position:absolute;inset:0;background:#f4f7f1;overflow:auto;overscroll-behavior:contain;padding:calc(12px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom))}\n .content{max-width:850px;margin:auto}header,.actions,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:22px;margin:0}.account{font-size:13px}.card{margin-top:12px;background:#13281f;border-radius:18px;overflow:hidden;position:relative}.media{height:48vh;height:48dvh;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:auto}.media[aria-busy=true]{background:linear-gradient(110deg,#13281f,#264638,#13281f)}.media[aria-busy=true]::after{content:'Loading\u2026';position:absolute;color:white;background:#13281fcc;padding:8px;border-radius:8px}.media img,.media video{display:block;max-width:100%;max-height:100%;object-fit:contain}.media img{touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-drag:none}.card.expanded .media{height:72vh;height:72dvh}.caption{color:white;padding:10px 14px}.swipe{color:white;text-align:center;padding:12px;touch-action:pan-y pinch-zoom;background:#264638}.actions{justify-content:center;margin:12px 0}.keep{background:#245b3d;color:white}.remove{background:#8c3535;color:white}.stats{padding:12px;background:#e3ebdf;border-radius:12px;margin:12px 0}.toolbar{margin:10px 0}select{max-width:100%;min-height:44px;border-radius:8px}details{margin:16px 0}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}.queue button{padding:6px;overflow:hidden}.queue img{width:100%;height:75px;object-fit:cover}.queue span{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{min-height:24px}.zoom-control,.trash-toggle{display:flex;align-items:center;gap:8px;white-space:nowrap}#zoom{width:120px;min-width:0;min-height:44px}.album-controls{background:#f4f7f1} @media(max-width:599px){.overlay{padding-bottom:calc(var(--album-controls-height,240px) + 18px + env(safe-area-inset-bottom))}.actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.actions button{padding:8px}.zoom-control{grid-column:span 2}.zoom-control input{flex:1}.library-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.library-controls>*{width:100%;min-width:0}.album-controls{position:fixed;bottom:0;left:12px;right:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:8px 0 calc(8px + env(safe-area-inset-bottom));margin-bottom:0}.album-controls button{padding:8px;font-size:14px;min-width:0;white-space:normal;overflow-wrap:anywhere}.album-controls a,.album-explanation{grid-column:1 / -1;min-width:0}.album-explanation{margin:0;font-size:13px}.trash-toggle{min-height:44px;font-size:14px;white-space:normal;min-width:0}.trash-toggle input{flex-shrink:0}.media{height:32vh;height:32dvh}.stats{font-size:14px;padding:8px}} @media(min-width:800px){.media{height:55vh}.overlay{padding:24px}}\n "));
  const launcherElement=document.createElement('button');
  launcherElement.setAttribute("class","launcher");
  launcherElement.setAttribute("id","launcher");
@@ -528,86 +577,188 @@ function mountPhotosSwipe(environment) {
  let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const syncClient=createSyncClient({fetch:environment.fetch,status:value=>{syncSummary=value;$('sync-status').textContent=value;}});
- const synchronize=async()=>{state=await syncClient.sync(identity.account,state,async next=>{if(leaseError)throw leaseError;await db.lease(identity.account,owner);return db.save(identity.account,next);});};
+ let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0;
+ const writes=createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:next=>{if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};},error:error=>message(`Local save failed: ${error.message} \u00b7 pending changes will retry.`)});
+ const synchronize=(pull=true)=>{
+  if(syncRunning||!identity)return syncRunning;
+  if(!syncEnabled||leaseError)return Promise.resolve();
+  const account=identity.account;let version;
+  syncRunning=(async()=>{
+   await writes.flush();version=state;
+   const next=await syncClient.sync(account,version,async value=>value,{pull});
+   if(identity?.account===account&&next!==version){
+    if(state.items===version.items&&state.history===version.history)state={...next,revision:writeRevision};
+    else {const pending={...state.syncPending};for(const [key,value] of Object.entries(version.syncPending||{}))if(pending[key]===value&&state.items.find(item=>item.mediaKey===key)?.revision===version.items.find(item=>item.mediaKey===key)?.revision)delete pending[key];state={...state,syncDecisions:next.syncDecisions,syncPending:pending,syncDirty:state.history!==version.history||state.syncDirty};}
+    await writes.enqueue();render();
+   }
+  })().finally(()=>{syncRunning=null;});
+  return syncRunning;
+ };
+ function scheduleSync(){
+  if(!syncEnabled)return;
+  window.clearTimeout(syncTimer);
+  if(++decisionCount>=10){decisionCount=0;synchronize(false);}
+  else syncTimer=window.setTimeout(()=>{decisionCount=0;synchronize(false);},2000);
+  syncTimer?.unref?.();
+ }
+ function apply(next,removedKey){state=markSyncChanges(state,next);if(removedKey&&deckCache){deckCache=deckCache.filter(item=>item.mediaKey!==removedKey);deckItems=state.items;}render();writes.enqueue();scheduleSync();}
  const readyMessage=()=>syncEnabled?`Ready. Decisions are saved locally with sync enabled. ${syncSummary}`:'Ready. Decisions are saved locally on this browser.';
  const idleMessage=()=>state.job?'A saved album operation is ready to retry.':readyMessage();
  const message=value=>{$('status').textContent=value;};
  async function call(operation,args={}) {
   if(leaseError)throw leaseError;
-  if(lockedAccount)await db.lease(lockedAccount,owner);
   const result=await rawCall(operation,{...args,...(identity?{account:identity.account}:{})});
   if(!result.ok)throw Error(result.error);
   if(leaseError)throw leaseError;
-  if(lockedAccount)await db.lease(lockedAccount,owner);
   return result.data;
  }
  async function assertAccount(){if(!identity)throw Error('Close and reopen Photos Swipe after signing into Google Photos.');const result=await call('identity');if(result.account!==identity.account)throw Error('Google account changed. Close and reopen Photos Swipe.');}
- async function save(next){await assertAccount();state=await db.save(identity.account,markSyncChanges(state,next));await synchronize();return state;}
+ async function save(next){await assertAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw Error('Local changes have not been saved.');return state;}
  function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=busy||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
  async function withAccountLease(task) {
-  const account=identity.account;let acquired=false,timer;
-  leaseError=null;
-  try {
-   await db.lease(account,owner);acquired=true;lockedAccount=account;
-   timer=setInterval(()=>{db.lease(account,owner).catch(error=>{leaseError=error;});},20000);
-   state=await db.read(account);
-   await task();
-  }finally{
-   clearInterval(timer);
-   if(acquired)try{await db.lease(account,owner,true);}catch{}
-   lockedAccount=null;
-  }
+  if(leaseError)throw leaseError;
+  if(!lockedAccount||lockedAccount!==identity.account)throw Error('Close and reopen Photos Swipe to acquire the account lease.');
+  await writes.flush();if(writes.pending)throw Error('Save pending local changes before this operation.');
+  await task();scheduleSync();
  }
  async function run(task) {
   if(busy)return;
-  busy=true;leaseError=null;controls();
-  try {
-   db=await database();
-   await assertAccount();
-   await withAccountLease(task);
-  }catch(error){message(error.message);}finally{
-   busy=false;render();controls();
-  }
+  busy=true;controls();
+  activeOperation=(async()=>{
+   try {
+    db=await database();
+    await syncRunning;
+    await assertAccount();
+    await withAccountLease(task);
+   }catch(error){message(error.message);}finally{
+    busy=false;render();controls();
+   }
+  })();
+  await activeOperation;activeOperation=null;
  }
  const bytes=value=>value>=1e9?`${(value/1e9).toFixed(1)} GB`:value>=1e6?`${(value/1e6).toFixed(1)} MB`:`${Math.round(value/1e3)} KB`;
  const itemSize=item=>Number.isFinite(item.size)&&item.size>=0?bytes(item.size):'Unknown size';
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
- function deck(){const items=reviewDeck(state).filter(item=>$('filter').value==='all'||item.type===$('filter').value);if($('sort').value==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if($('sort').value==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));return items;}
- function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):reviewDeck(state).find(item=>item.mediaKey===focused)||deck()[0];}
- function mediaURL(value,video=false) {
-  const url=new URL(value);
-  if(url.protocol!=='https:'||!(url.hostname==='photos.fife.usercontent.google.com'||url.hostname.endsWith('.googleusercontent.com'))||url.username||url.password||url.port)throw Error('Unexpected preview host.');
-  if(!video){url.pathname=url.pathname.replace(/=.+$/,'')+'=w1200-h1200-k-no';url.searchParams.set('authuser',location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0');}
-  return url.href;
+ let deckCache=null,deckItems=null,deckFilter=null,deckSort=null;
+ function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;const items=reviewDeck(state).filter(item=>$('filter').value==='all'||item.type===$('filter').value);if($('sort').value==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if($('sort').value==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));deckCache=items;return items;}
+ function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):deck().find(item=>item.mediaKey===focused)||deck()[0];}
+ function mediaURL(value,video=false,expanded=false) {
+  return previewURL(value,{video,expanded,width:expanded?(window.innerWidth||512):($('media').getBoundingClientRect?.().width||window.innerWidth||512),height:expanded?(window.innerHeight||800):($('media').getBoundingClientRect?.().height||Math.round((window.innerHeight||800)*.48)),dpr:window.devicePixelRatio,mobile:/iPhone|iPad/.test(window.navigator?.userAgent||''),authuser:location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'});
  }
- function stopMedia(){generation++;const video=$('media').querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
+ const mobile=/iPhone|iPad/.test(window.navigator?.userAgent||'');
+ const smallBuffer=mobile||window.navigator?.deviceMemory<=4||window.navigator?.connection?.saveData;
+ let previousKey=null,swipeAt=null,idlePending=false;
+ const metrics={paint:[],hits:0,misses:0};
+ const buffer=createPreloadBuffer({size:smallBuffer?2:3,load:(item,signal)=>new Promise((resolve,reject)=>{
+  const image=window.Image?new window.Image():document.createElement('img');
+  const abort=()=>{image.src='';reject(Error('Aborted'));};
+  signal.addEventListener('abort',abort,{once:true});
+  image.onload=async()=>{try{if(image.decode)await image.decode();signal.removeEventListener('abort',abort);if(!signal.aborted)resolve(image);}catch(error){reject(error);}};
+  image.onerror=()=>reject(Error('Preview unavailable'));
+  image.src=mediaURL(item.thumbUrl);
+ })});
+ const videoURLs=new Map();let videoRPC=null,warmedVideo=null,warmedKey=null;
+ function videoURL(item){
+  const account=identity?.account;const cached=videoURLs.get(item.mediaKey);
+  if(cached&&Date.now()-cached.fetchedAt<1800000)return Promise.resolve(cached.url);
+  if(videoRPC)return videoRPC.then(()=>videoURL(item));
+  videoRPC=call('video',{mediaKey:item.mediaKey}).then(result=>{const url=mediaURL(result.url,true);if(identity?.account===account){videoURLs.set(item.mediaKey,{url,fetchedAt:Date.now()});if(videoURLs.size>32)videoURLs.delete(videoURLs.keys().next().value);}return url;}).finally(()=>{videoRPC=null;});
+  return videoRPC;
+ }
+ function refill(){
+  if(idlePending||!window.Image||$('overlay').hidden)return;
+  idlePending=true;
+  const idle=window.requestIdleCallback?.bind(window)||((task)=>window.setTimeout(task,0));
+  idle(()=>{
+   idlePending=false;if($('overlay').hidden)return;
+   const upcoming=deck().filter(item=>item.mediaKey!==shown).slice(0,smallBuffer?2:3);
+   buffer.update(smallBuffer&&previousKey?upcoming.slice(0,1):upcoming,previousKey);
+   for(const item of upcoming.slice(0,2).filter(item=>item.type==='video'))videoURL(item).catch(()=>{});
+   const next=upcoming[0];
+   if(warmedKey!==next?.mediaKey){if(warmedVideo){warmedVideo.pause();warmedVideo.removeAttribute('src');warmedVideo.load();}warmedVideo=null;warmedKey=null;}
+   if(!mobile&&next?.type==='video'&&!warmedVideo){
+    const video=document.createElement('video');warmedVideo=video;warmedKey=next.mediaKey;video.preload='metadata';video.muted=true;video.playsInline=true;
+    videoURL(next).then(url=>{if(warmedVideo===video)video.src=url;}).catch(()=>{});
+   }
+  });
+ }
+ function painted(media,token){
+  if(token!==generation||swipeAt===null)return;
+  const finish=()=>{if(token!==generation||swipeAt===null)return;window.performance?.mark('painted');metrics.paint.push(window.performance.now()-swipeAt);swipeAt=null;
+   if(window.localStorage?.psDebug==='1'){const times=[...metrics.paint].sort((a,b)=>a-b);window.console?.table({p50:times[Math.floor(times.length*.5)],p95:times[Math.min(times.length-1,Math.floor(times.length*.95))],bufferHitRate:metrics.hits/(metrics.hits+metrics.misses)});}
+  };
+  (window.requestAnimationFrame?.bind(window)||((task)=>window.setTimeout(task,0)))(finish);
+ }
+ function dropWarmVideo(){if(warmedVideo){warmedVideo.pause();warmedVideo.removeAttribute('src');warmedVideo.load();}warmedVideo=null;warmedKey=null;}
+ function stopMedia(){generation++;const image=$('media').querySelector('img');const old=state.items.find(item=>item.mediaKey===shown);if(image&&old&&image.complete&&image.naturalWidth)buffer.retain(old,image);const video=$('media').querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
  async function display(item) {
   stopMedia();$('zoom').value='1';shown=item?.mediaKey||null;const token=generation;
-  if(!item){$('media').textContent='No items to review. Load more or refresh latest.';$('media').style.color='white';return;}
+  if(!item){$('media').setAttribute('aria-busy','false');$('media').textContent='No items to review. Load more or refresh latest.';$('media').style.color='white';return;}
   try {
-   const media=document.createElement(item.type==='video'?'video':'img');
-   if(item.type==='video'){media.controls=true;media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=mediaURL(item.thumbUrl);$('media').append(media);const result=await call('video',{mediaKey:item.mediaKey});if(token!==generation)return;media.src=mediaURL(result.url,true);media.play().catch(()=>{});}
-   else {media.alt=item.name;media.draggable=false;media.src=mediaURL(item.thumbUrl);media.ondblclick=()=>toggleEnlarge();$('media').append(media);}
+   const cached=buffer.take(item.mediaKey);const media=item.type==='video'?(warmedKey===item.mediaKey?warmedVideo:document.createElement('video')):(cached||document.createElement('img'));if(cached)metrics.hits++;else metrics.misses++;if(media===warmedVideo){warmedVideo=null;warmedKey=null;}
+   if(item.type==='video'){
+    media.controls=true;media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=mediaURL(item.thumbUrl);
+    const poster=cached||document.createElement('img');poster.alt=item.name;
+    poster.onload=()=>painted(poster,token);if(!cached)poster.src=media.poster;
+    media.hidden=true;$('media').replaceChildren(poster,media);$('media').setAttribute('aria-busy','true');
+    if(poster.complete&&poster.naturalWidth)painted(poster,token);
+    const started=window.performance?.now();
+    media.oncanplay=()=>{if(token===generation)$('media').setAttribute('aria-busy','false');};
+    media.onloadeddata=()=>{
+     if(token!==generation)return;
+     media.hidden=false;$('media').replaceChildren(media);painted(media,token);
+     if(window.localStorage?.psDebug==='1')window.console?.table({videoFirstFrameMs:window.performance.now()-started});
+    };
+    const url=await videoURL(item);if(token!==generation)return;
+    if(media.src!==url)media.src=url;media.play().catch(()=>{});
+    if(media.readyState>=2)media.onloadeddata();
+   }else {
+    media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='pan-y pinch-zoom';media.alt=item.name;media.draggable=false;
+    $('media').setAttribute('aria-busy',String(!cached));
+    media.onload=()=>{if(token===generation)$('media').setAttribute('aria-busy','false');painted(media,token);};
+    media.ondblclick=()=>toggleEnlarge();
+    if(!cached)media.src=mediaURL(item.thumbUrl);
+    $('media').replaceChildren(media);
+    if(media.complete&&media.naturalWidth)painted(media,token);
+   }
    media.onerror=()=>{if(token===generation)message('Preview unavailable. Reload Google Photos and try again.');};
   }catch(error){if(token===generation)message(error.message);}
  }
- function render() {
-  const item=current(),queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
-  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:'No unreviewed items in this batch.';
-  if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
-  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
+ let trashListKey=null,queueListKey=null;
+ queue_detailsElement.addEventListener('toggle',()=>render());historyPanel.addEventListener('toggle',()=>render());
+ function historyView(){
   const entries=[...(state.history||[])].reverse(),nextUndo=entries.find(entry=>canUndoReview(state,entry));
   const decisionLabel=value=>value==='remove'?'Queue':value==='keep'?'Keep':'Unreviewed';
   const historyLabel=entry=>`${state.items.find(item=>item.mediaKey===entry.key)?.name||entry.key} \u00b7 ${decisionLabel(entry.previous)} \u2192 ${decisionLabel(entry.decision)}`;
+  return {entries,nextUndo,historyLabel,decisionLabel};
+ }
+ function renderCard(){
+  const item=current();
+  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:'No unreviewed items in this batch.';
+  if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
+ }
+ function renderStats(){
+  const queue=reviewQueue(state);
+  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
+  const {nextUndo,historyLabel,decisionLabel}=historyView();
   undoPreview.textContent=nextUndo?`Next Undo: ${historyLabel(nextUndo)}; restores ${decisionLabel(nextUndo.previous)}.`:'No previous decisions can be undone.';
   $('undo').title=undoPreview.textContent;$('undo').setAttribute('aria-describedby','undo-preview');
-  historyList.replaceChildren();
+  $('remove').textContent=inspected?'Back to review':'\u00d7 Queue';$('keep').textContent=inspected?'Keep instead':'\u2713 Keep';
+  $('send').textContent=state.job?'Retry saved album operation':'Send to review album';
+  $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/album/${encodeURIComponent(state.albumKey)}`;
+ }
+ function renderLists(){
+  const queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
+  const {entries,nextUndo,historyLabel}=historyView();
+  if(historyPanel.open){historyList.replaceChildren();
   for(const entry of entries){const row=document.createElement('li');row.textContent=`${historyLabel(entry)} \u00b7 ID: ${entry.key}${entry===nextUndo?' \u00b7 Next Undo':canUndoReview(state,entry)?'':' \u00b7 Unavailable for Undo'}`;historyList.append(row);}
   if(!entries.length){const row=document.createElement('li');row.textContent='No decisions yet.';historyList.append(row);}
+  }
   moveTrash.textContent=`Move ${candidates.length} items to Trash`;
   trashCandidates.hidden=!trashOptIn.checked;moveTrash.hidden=!trashOptIn.checked;
   trashTitle.textContent=`Move to Trash candidates (${candidates.length})`;
-  trashList.replaceChildren();
+  const candidateKey=JSON.stringify(candidates.map(item=>[item.mediaKey,item.name,item.thumbUrl,item.type,item.date,item.queueSent]));
+  if(trashOptIn.checked&&trashListKey!==candidateKey){trashListKey=candidateKey;trashList.replaceChildren();
   for(const candidate of candidates){
    const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');
    image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
@@ -616,38 +767,88 @@ function mountPhotosSwipe(environment) {
    button.append(image,label);button.setAttribute('aria-label',`Inspect ${label.textContent}`);
    button.onclick=()=>{if(!busy){inspected=candidate.mediaKey;render();}};trashList.append(button);
   }
+  }
   $('queue-title').textContent=`Removal queue (${queue.length})`;
-  $('queue').replaceChildren();
+  const queueKey=JSON.stringify(queue.map(item=>[item.mediaKey,item.name,item.thumbUrl]));
+  if(queue_detailsElement.open&&queueListKey!==queueKey){queueListKey=queueKey;$('queue').replaceChildren();
   for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
-  $('remove').textContent=inspected?'Back to review':'\u00d7 Queue';$('keep').textContent=inspected?'Keep instead':'\u2713 Keep';
-  $('send').textContent=state.job?'Retry saved album operation':'Send to review album';
-  $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/album/${encodeURIComponent(state.albumKey)}`;
+  }
  }
- async function open() {
+ function render(){renderCard();renderStats();renderLists();refill();}
+ async function openSession() {
+  if(closingPromise)await closingPromise;
   if(busy)return;
+  busy=true;controls();leaseError=null;buffer.clear();await writes.flush();
+  if(writes.pending){busy=false;controls();message('Local changes are still pending. Retry saving before reopening.');return;}
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
-  busy=true;controls();
-  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;if(syncEnabled)await withAccountLease(synchronize);message(idleMessage());}
-  catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
+  try{
+   const result=await rawCall('identity');
+   if(!result.ok)throw Error(result.error);
+   if(identity?.account!==result.data.account){
+    clearInterval(leaseTimer);
+    if(lockedAccount)await db.lease(lockedAccount,owner,true);
+    lockedAccount=null;inspected=null;focused=null;stopMedia();dropWarmVideo();buffer.clear();videoURLs.clear();previousKey=null;
+   }
+   identity=result.data;$('account').textContent=identity.label;db=await database();
+   await db.lease(identity.account,owner);lockedAccount=identity.account;
+   state=await db.read(identity.account);writeRevision=state.revision;
+   const settings=await db.settings();
+   $('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';
+   syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
+   settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
+   clearInterval(leaseTimer);
+   leaseTimer=setInterval(()=>{
+    db.lease(lockedAccount,owner).then(()=>{writes.flush();if(++leaseTicks%3===0&&syncEnabled&&!busy&&!$('overlay').hidden)synchronize();}).catch(error=>{leaseError=error;message(error.message);});
+   },20000);
+   leaseTimer?.unref?.();
+   if(syncEnabled)await synchronize();
+   message(idleMessage());
+  }catch(error){
+   clearInterval(leaseTimer);
+   if(lockedAccount)await db.lease(lockedAccount,owner,true).catch(()=>{});
+   lockedAccount=null;identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
+  }finally{busy=false;render();controls();}
  }
- function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
+ function open(){
+  if(openingPromise)return openingPromise;
+  openingPromise=openSession().finally(()=>{openingPromise=null;});
+  return openingPromise;
+ }
+ async function closeSession(){
+  $('overlay').hidden=true;$('launcher').hidden=false;$('launcher').focus();
+  stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
+  await openingPromise;await activeOperation;
+  $('overlay').hidden=true;$('launcher').hidden=false;stopMedia();dropWarmVideo();buffer.clear();
+  await writes.flush().then(()=>synchronize(false)).finally(async()=>{
+   clearInterval(leaseTimer);
+   if(lockedAccount)await db.lease(lockedAccount,owner,true).catch(()=>{});
+   lockedAccount=null;
+  });
+  buffer.clear();
+ }
+ function close(){
+  if(closingPromise)return closingPromise;
+  closingPromise=closeSession().finally(()=>{closingPromise=null;});
+  return closingPromise;
+ }
  function decide(decision){
-  if(busy)return;
+  if(busy||!identity||leaseError||$('overlay').hidden)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
-  run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});
+  window.performance?.mark('swipe');swipeAt=window.performance?.now()??null;const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);inspected=null;focused=null;previousKey=item.mediaKey;apply({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]},item.mediaKey);message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);
  }
- function undo(){if(busy)return;run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});const restored=state.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;message(`Decision undone for ${restored.name}.`);});}
+ function undo(){if(busy||!identity||leaseError||$('overlay').hidden)return;const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;const restored=next.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;apply({...next,history});message(`Decision undone for ${restored.name}.`);}
  async function load(refresh=false) {
+  buffer.clear();previousKey=null;
   const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.limited?' \u00b7 Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);
  }
 
- function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
+ function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';const item=current(),image=$('media').querySelector('img');if(item&&image&&$('card').classList.contains('expanded')){const large=document.createElement('img'),token=generation;large.onload=async()=>{if(large.decode)await large.decode();if(token===generation&&$('card').classList.contains('expanded'))image.src=large.src;};large.src=mediaURL(item.thumbUrl,false,true);}}
  $('sync-save').onclick=()=>run(async()=>{const settings=validateSyncSettings($('sync-url').value.trim(),$('sync-token').value);await db.saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await db.settings();await db.saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
- $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;render();};
+ $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;buffer.clear();render();};
  $('zoom').oninput=()=>{const image=$('media').querySelector('img');if(image){image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'pan-y pinch-zoom';}};
  $('send').onclick=()=>{if(busy)return;const confirmedKeys=[...(state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey))];const count=confirmedKeys.length;if(!count){message('The removal queue is empty.');return;}if(!window.confirm(`Add ${count} candidates to a private review album? This does not delete media.`))return;run(async()=>{const keys=state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey);if(keys.length!==confirmedKeys.length||keys.some(key=>!confirmedKeys.includes(key)))throw Error('The queue changed in another tab. Review it and confirm again.');message('Updating and verifying the review album\u2026');await sendReviewAlbum({read:async()=>state,save,call,title:'Photos Swipe \u00b7 Review'});inspected=null;message('Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');});};
  trashOptIn.onchange=()=>render();
@@ -659,6 +860,9 @@ function mountPhotosSwipe(environment) {
   target.addEventListener('pointerup',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const dx=event.clientX-swipeStart.x,dy=event.clientY-swipeStart.y;swipeStart=null;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5)decide(dx>0?'keep':'remove');});
   target.addEventListener('pointercancel',()=>{swipeStart=null;});
  }
+ window.addEventListener('pagehide',()=>{dropWarmVideo();buffer.clear();writes.flush();synchronize(false);});
+ window.addEventListener('focus',()=>{if(identity&&!busy&&!$('overlay').hidden)synchronize();});
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden){buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else if(identity&&!$('overlay').hidden)assertAccount().then(()=>{refill();synchronize();}).catch(error=>{leaseError=error;message(error.message);});});
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
  function handleViewerSpace(event){
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;

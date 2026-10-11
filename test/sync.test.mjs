@@ -5,6 +5,7 @@ import {syncRequest} from '../worker/src/sync.mjs';
 import {createSyncClient,markSyncChanges,validateSyncSettings} from '../lib/userscript-sync.mjs';
 class FakeD1 {
  decisions=new Map();records=new Map();
+ batch(statements){return Promise.all(statements.map(statement=>statement.run()));}
  prepare(sql){return {bind:(...args)=>{
  const execute=()=>{
  const [a,b,c,d]=args;
@@ -152,4 +153,21 @@ test('empty pending maps after offline cursor saves still backfill existing deci
  state=await client.sync('default',state,async value=>value);
  assert.equal(state.syncDecisions.item,'keep');
  assert.equal(state.items[0].decision,'keep');
+});
+
+test('ten decisions push as one atomic batch without a state pull',async()=>{
+ const e=env(),requests=[];
+ const client=createSyncClient({fetch:(url,options)=>{requests.push({url,options});return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const items=Array.from({length:10},(_,index)=>({mediaKey:`item-${index}`,decision:'keep'}));
+ const state={started:true,items,history:[],syncDecisions:{},syncPending:Object.fromEntries(items.map(item=>[item.mediaKey,item.decision]))};
+ const result=await client.sync('account',state,async value=>value,{pull:false});
+ assert.equal(requests.length,1);assert.equal(new URL(requests[0].url).pathname,'/api/decisions');
+ assert.equal(JSON.parse(requests[0].options.body).decisions.length,10);assert.deepEqual(result.syncPending,{});
+ assert.equal((await (await call(e,'state?scope=account')).json()).decisions.length,10);
+ const before=[...e.DB.decisions];
+ assert.equal((await call(e,'decisions','PUT',{decisions:[{id:'valid',decision:'keep'},{id:'bad',decision:'trash'}]})).status,400);
+ assert.deepEqual([...e.DB.decisions],before);
+ await call(e,'decisions?scope=account','PUT',{decisions:[{id:'item-0',decision:null}]});
+ assert.equal((await (await call(e,'state?scope=account')).json()).decisions.length,9);
 });

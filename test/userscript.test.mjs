@@ -251,13 +251,13 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
  const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
- result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,AbortSignal,setInterval,clearInterval};
  return result;
 }
 test('library sightings restore active state and retain local album membership on load and refresh',()=>{
@@ -306,29 +306,31 @@ test('undo eligibility rejects missing, trashed, revised and job-locked decision
  assert.equal(canUndoReview(state,entry),true);
  for(const changed of [{...state,items:[]},{...state,items:[item('a',{decision:'keep',revision:2})]},{...state,items:[item('a',{decision:'keep',revision:1,state:'in_trash'})]},{...state,job:{mediaKeys:['a']}}])assert.equal(canUndoReview(changed,entry),false);
 });
-test('mounted bundle keeps album links in the page account and undo skips stale history',async()=>{
+test('mounted bundle keeps album links and Undo responds before failed storage',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),fault={};
  mounted.environment.window.indexedDB=fakeIndexedDB(fault);
- if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('album').href,'https://photos.google.com/u/2/album/album');
- const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
- mounted.nodes.get('keep').onclick();await idle();mounted.nodes.get('keep').onclick();await idle();
- const state=await db.read(account);await db.save(account,{...state,items:state.items.map(row=>row.mediaKey==='b'?{...row,state:'in_trash',revision:row.revision+1}:row)});
- fault.failSave=true;mounted.nodes.get('undo').onclick();await idle();
- assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');assert.equal((await db.read(account)).items[0].decision,'keep');
- fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
- const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone for a.');
+ mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ fault.failSave=true;mounted.nodes.get('undo').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^a · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/Local save failed.*pending changes/);
+ assert.equal((await db.read(account)).items[0].decision,'keep');
+ fault.failSave=false;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal((await db.read(account)).items[0].decision,'keep');
 });
-async function mountedReview(items,windowOverrides={}) {
+async function mountedReview(items,windowOverrides={},syncSettings) {
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
+ if(syncSettings)await db.saveSettings(syncSettings);
  Object.assign(mounted.environment.window,windowOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
@@ -368,19 +370,19 @@ test('Trash writes require confirmation and bounded valid stable identifiers',as
 });
 test('mounted undo survives a fresh script instance with the same IndexedDB',async()=>{
  const first=await mountedReview([item('a',{size:1}),item('b',{size:100})]);await first.click('keep');
- const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
+ await first.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
  second.nodes.get('undo').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
  assert.equal(second.nodes.get('status').textContent,'Decision undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
@@ -392,9 +394,9 @@ test('mounted Trash is opt-in, confirms the exact count and verifies synthetic T
  mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return false;};await mounted.click('move-trash');assert.equal(requests.length,0);assert.match(prompts[0],/exactly 1 items/);
  mounted.environment.window.confirm=()=>true;
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
+ await mounted.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
 });
 test('Trash completion status resets on reload and cached-page restore while estimates retain a running total',async()=>{
@@ -414,7 +416,7 @@ test('Trash completion status resets on reload and cached-page restore while est
  await mounted.environment.window.listeners.pageshow({persisted:true});
  assert.equal(mounted.nodes.get('status').textContent,ready);
  assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)$/);
- const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
  assert.equal(reloaded.nodes.get('status').textContent,ready);
@@ -466,7 +468,7 @@ test('sent candidates remain listed for Trash after the removal queue clears and
  assert.match(mounted.nodes.get('caption').textContent,/Candidate inspection · QA-DUMMY-0/);
  await mounted.click('keep');
  assert.equal(listed(mounted).length,4);assert.equal(mounted.nodes.get('move-trash').textContent,'Move 4 items to Trash');
- const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
  await second.nodes.get('launcher').onclick();enable(second);
  assert.deepEqual(listed(second),listed(mounted));assert.equal(second.nodes.get('queue').childNodes.length,0);
@@ -485,7 +487,7 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
  const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
- for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
 
@@ -656,7 +658,7 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  await second.nodes.get('launcher').onclick();
  assert.match(second.nodes.get('status').textContent,/busy in another tab/);
  assert.equal(syncCalls,0);assert.deepEqual(await first.read(),before);
- finishTrash();await moving;
+ finishTrash();await moving;await first.nodes.get('close').onclick();
  const completed=await first.read();
  assert.equal(completed.items[0].state,'in_trash');
  assert.equal(first.nodes.get('status').textContent,'Verified 1 items in Trash.');
@@ -667,7 +669,7 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  finishSync();await opening;
  assert.equal((await first.read()).revision,completed.revision+1);
  assert.equal((await first.read()).items[0].state,'in_trash');
- await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
@@ -770,7 +772,7 @@ test('first-use sync setup is above the card and local dismissal survives reopen
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.equal(settings.open,true);
  await mounted.click('sync-local');assert.equal(settings.open,false);
- const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('sync-settings').open,false);
  assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
@@ -803,7 +805,7 @@ test('sync setup actions preserve the saved album retry status and job',async()=
 test('main and visible sync status report successful sync, failures and disabling sync',async()=>{
  const mounted=await mountedReview([item('a')]);
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
  reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  let fail=false,requests=0;
  reopened.environment.window.fetch=async url=>{
@@ -822,7 +824,7 @@ test('main and visible sync status report successful sync, failures and disablin
  assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);
  reopened.nodes.get('sync-url').value='';reopened.nodes.get('sync-token').value='';
  reopened.nodes.get('sync-save').onclick();
- for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
  assert.equal(reopened.nodes.get('sync-status').textContent,'Sync off · saved locally');
 });
@@ -836,13 +838,13 @@ test('decision history previews the same next Undo and updates after undo and re
  assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
  assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/Next Undo/);
  assert.match(mounted.nodes.get('history-list').childNodes[1].textContent,/Unavailable for Undo/);
- const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
- await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,'remove');
- assert.match(mounted.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);
- await mounted.click('undo');assert.equal(mounted.nodes.get('history-list').childNodes.length,1);
- assert.equal(mounted.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
+ reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal((await mounted.read()).items[0].decision,'remove');
+ assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);
+ reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('history-list').childNodes.length,1);
+ assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
 });
 
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
@@ -850,4 +852,42 @@ test('release metadata names the author and install guide explains Chrome script
  assert.match(source,/\/\/ @version 1\.2\.3\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
+});
+
+test('rapid decisions and Undo repaint synchronously while storage and video never resolve',async()=>{
+ const items=Array.from({length:12},(_,index)=>item(`fast-${index}`,{type:index===1?'video':'photo'}));
+ const mounted=await mountedReview(items,{fetch:()=>new Promise(()=>{}),setTimeout:(task,delay)=>{const timer=setTimeout(task,delay);timer.unref();return timer;}});
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;let blocked=false;
+ database.transaction=function(name,...args){if(name==='accounts'&&!blocked){blocked=true;return {objectStore:()=>({get:()=>({})})};}return transaction.call(this,name,...args);};
+ mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^fast-1 · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^fast-2 · /);
+ for(let index=2;index<10;index++)mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^fast-10 · /);
+ mounted.nodes.get('undo').onclick();assert.match(mounted.nodes.get('caption').textContent,/^fast-9 · /);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(blocked,true);assert.equal((await mounted.read()).items.filter(item=>item.decision).length,0);
+});
+
+test('sync pushes ten rapid decisions in one request while further input stays accepted',async()=>{
+ const requests=[];
+ const mounted=await mountedReview(Array.from({length:15},(_,index)=>item(`batch-${index}`)),{
+  fetch:async(url,options)=>{
+   requests.push({url,options});
+   if(options.method==='GET')return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+   return new Promise(()=>{});
+  },
+  setTimeout:(task,delay)=>{const timer=setTimeout(task,delay);timer.unref();return timer;}
+ },{url:'https://sync.example',token:'synthetic-token'});
+ for(let index=0;index<10;index++)mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^batch-10 · /);
+ await new Promise(resolve=>setTimeout(resolve,10));
+ const batches=requests.filter(request=>new URL(request.url).pathname==='/api/decisions');
+ assert.equal(batches.length,1);assert.equal(JSON.parse(batches[0].options.body).decisions.length,10);
+ mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^batch-11 · /);
+ mounted.nodes.get('undo').onclick();assert.match(mounted.nodes.get('caption').textContent,/^batch-10 · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
 });
