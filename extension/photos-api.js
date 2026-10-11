@@ -61,7 +61,7 @@ export async function photosOperation(operation,args={},environment=globalThis) 
    return {ok:true,data:{albumKey:null}};
   }
   if(operation==='createAlbum') {
-   if(typeof args.title!=='string'||!args.title.startsWith('Photos Swipe · Review · ')||args.title.length>150)throw Error('Invalid review album title.');
+   if(typeof args.title!=='string'||!(args.title==='Photos Swipe · Review'||args.title.startsWith('Photos Swipe · Review · '))||args.title.length>150)throw Error('Invalid review album title.');
    const data=await rpc('OXvT9d',[args.title,null,2]);const albumKey=data?.[0]?.[0];if(!validKey(albumKey))throw Error('Album creation was not confirmed. Retry to look for the album before creating another.');return {ok:true,data:{albumKey}};
   }
   if(operation==='albumMembers') {
