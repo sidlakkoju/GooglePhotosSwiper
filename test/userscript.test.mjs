@@ -357,6 +357,43 @@ test('mounted Trash and deleted-item checks retain all 45 undecided items despit
   assert.deepEqual(requests,[...(action==='move-trash'?['XwAOJf']:[]),'zy0IHe',...Array(6).fill('VrseUb')]);
  }
 });
+test('sent candidates remain listed for Trash after the removal queue clears and reloads',async()=>{
+ const sent=Array.from({length:5},(_,index)=>item(`QA-DUMMY-${index}`,{decision:'remove',queueSent:true,dedupKey:`stable-${index}`}));
+ const mounted=await mountedReview([...sent,item('kept',{decision:'keep'}),item('trashed',{decision:'remove',state:'in_trash'}),item('undecided')]);
+ const enable=target=>{target.nodes.get('trash-opt-in').checked=true;target.nodes.get('trash-opt-in').onchange();};
+ const listed=target=>target.nodes.get('trash-candidates-list').childNodes.map(button=>button.childNodes[1].textContent);
+ assert.equal(mounted.nodes.get('queue-title').textContent,'Removal queue (0)');
+ assert.equal(mounted.nodes.get('trash-candidates').hidden,true);
+ enable(mounted);
+ assert.equal(mounted.nodes.get('trash-candidates').hidden,false);
+ assert.equal(mounted.nodes.get('move-trash').textContent,'Move 5 items to Trash');
+ assert.equal(mounted.nodes.get('trash-candidates-title').textContent,'Move to Trash candidates (5)');
+ assert.deepEqual(listed(mounted),sent.map(row=>`${row.name} · photo · Unknown date · Sent to review album · ID: ${row.mediaKey}`));
+ let prompt;
+ mounted.environment.window.confirm=value=>{prompt=value;assert.equal(listed(mounted).length,5);return false;};
+ await mounted.click('move-trash');
+ assert.match(prompt,/exactly 5 items/);
+ for(const row of sent)assert.ok(prompt.includes(`${row.name} (ID: ${row.mediaKey})`));
+ assert.deepEqual((await mounted.read()).items.slice(0,5),sent);
+ mounted.nodes.get('trash-candidates-list').childNodes[0].onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/Candidate inspection · QA-DUMMY-0/);
+ await mounted.click('keep');
+ assert.equal(listed(mounted).length,4);assert.equal(mounted.nodes.get('move-trash').textContent,'Move 4 items to Trash');
+ const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ await second.nodes.get('launcher').onclick();enable(second);
+ assert.deepEqual(listed(second),listed(mounted));assert.equal(second.nodes.get('queue').childNodes.length,0);
+});
+test('Trash candidate list includes queued and sent items regardless of review filters',async()=>{
+ const mounted=await mountedReview([item('queued',{decision:'remove',type:'video'}),item('sent',{decision:'remove',queueSent:true}),item('kept',{decision:'keep'}),item('trashed',{decision:'remove',state:'in_trash'})]);
+ mounted.nodes.get('filter').value='photo';mounted.nodes.get('filter').onchange();
+ mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+ const rows=mounted.nodes.get('trash-candidates-list').childNodes;
+ assert.equal(rows.length,2);assert.match(rows[0].childNodes[1].textContent,/queued · video .* · Queued · ID: queued/);assert.match(rows[1].childNodes[1].textContent,/Sent to review album · ID: sent/);
+ assert.equal(mounted.nodes.get('move-trash').textContent,'Move 2 items to Trash');
+ mounted.nodes.get('trash-opt-in').checked=false;mounted.nodes.get('trash-opt-in').onchange();
+ assert.equal(mounted.nodes.get('trash-candidates').hidden,true);assert.equal(mounted.nodes.get('move-trash').hidden,true);
+});
 test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
