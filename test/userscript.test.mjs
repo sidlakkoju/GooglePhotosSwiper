@@ -1888,3 +1888,79 @@ test('Tab traps focus in the shell and settings while backdrop click closes the 
  overlay.listeners.click({target:mounted.nodes.get('card')});assert.equal(overlay.hidden,false);
  overlay.listeners.click({target:overlay});assert.equal(overlay.hidden,true);assert.equal(sheet.hidden,true);
 });
+
+test('Settings exposes Load more and continues the cursor after Refresh latest',async()=>{
+ const cursors=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');cursors.push(args[0]);
+  const key=args[0]?'older-photo':'latest-photo';
+  return {ok:true,text:async()=>envelope(entry[0],[[[key,['https://lh3.googleusercontent.com/fake'],1720000000000,key+'-stable',0,{}]],args[0]?null:'older-cursor'])};
+ };
+ const mounted=await mountedReview([],{fetch});
+ mounted.nodes.get('settings').onclick();
+ const load=mounted.nodes.get('load');
+ assert.equal(load.hidden,false);
+ assert.ok(mounted.nodes.get('settings-sheet').childNodes.some(group=>group.childNodes.includes(load)));
+ const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('\n');
+ assert.doesNotMatch(styles,/[^{}]*#load[^{}]*\{[^}]*display:\s*none/);
+ await mounted.click('refresh');await mounted.click('refresh');await mounted.click('load');
+ assert.deepEqual(cursors,[null,null,'older-cursor']);
+ assert.deepEqual((await mounted.read()).items.map(row=>row.mediaKey),['latest-photo','older-photo']);
+ assert.equal((await mounted.read()).exhausted,true);
+});
+
+test('Trash mode remains usable for a second batch after a verified move',async()=>{
+ const trashed=new Set(),batches=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){batches.push(args[2]);for(const key of args[2])trashed.add(key);}
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};
+ };
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a'}),item('b',{dedupKey:'stable-b'})],{fetch,confirm:()=>true});
+ await mounted.click('move-trash');
+ assert.equal(mounted.nodes.get('delete-method').value,'trash');
+ assert.equal(mounted.nodes.get('trash-opt-in').checked,true);
+ await mounted.click('remove');
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);
+ assert.equal(mounted.nodes.get('move-trash').textContent,'Move 1 items to Trash');
+ await mounted.click('move-trash');
+ assert.deepEqual(batches,[['stable-a'],['stable-b']]);
+ assert.ok((await mounted.read()).items.every(row=>row.state==='in_trash'));
+});
+
+test('reload during an uncommitted swipe resumes the item awaiting persistence',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b')],{},fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).currentId,'a');
+ let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
+ try{
+  mounted.nodes.get('keep').onclick();
+  assert.match(mounted.nodes.get('caption').textContent,/^b · /);
+  mounted.nodes.get('close').onclick();
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal((await db.read(account)).items[0].decision,null);
+  assert.equal((await db.resume(account)).currentId,'a');
+  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+  await reopened.nodes.get('launcher').onclick();
+  assert.match(reopened.nodes.get('caption').textContent,/^a · /);
+ }finally{fault.saveGate=null;release();await mounted.settle();}
+});
+
+test('failed sync remains visible alongside keep, queue and undo confirmations',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')],{fetch:async()=>new Response('{}',{status:503})});
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ await mounted.click('sync-save');
+ for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Decision undone for b\./]]){
+  await mounted.click(action);
+  assert.match(mounted.nodes.get('status').textContent,confirmation);
+  assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
+  assert.equal(mounted.nodes.get('settings').classList.contains('gear-error'),true);
+ }
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
+});
