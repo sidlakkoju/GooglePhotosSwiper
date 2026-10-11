@@ -47,3 +47,12 @@ test('Worker rejects unsupported methods on the install path', async () => {
     assert.equal(response.headers.get('Allow'), 'GET, HEAD');
   }
 });
+test('Worker serves the pairing hand-off publicly with strict security headers',async()=>{
+ const url=new URL('/pair',installURL),response=await worker.fetch(new Request(url));
+ assert.equal(response.status,200);assert.equal(response.headers.get('Content-Type'),'text/html; charset=utf-8');
+ assert.equal(response.headers.get('Referrer-Policy'),'no-referrer');assert.equal(response.headers.get('Cache-Control'),'no-store');
+ assert.match(response.headers.get('Content-Security-Policy'),/^default-src 'none'; script-src 'sha256-/);
+ assert.match(await response.text(),/location.hash/);
+ const head=await worker.fetch(new Request(url,{method:'HEAD'}));assert.equal(head.body,null);assert.deepEqual([...head.headers],[...response.headers]);
+ assert.equal((await worker.fetch(new Request(url,{method:'POST'}))).status,405);
+});
