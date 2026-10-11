@@ -491,7 +491,7 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
  mounted.nodes.get('card').offsetWidth=300;
- const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
  await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
@@ -537,27 +537,14 @@ test('phone controls keep zoom together, order in a grid and Trash below the lib
  assert.match(css,/\.zoom-control,\.trash-toggle\{display:flex;align-items:center/);
  assert.match(css,/@media\(max-width:599px\)/);
  assert.match(css,/\.library-controls\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
- assert.match(css,/\.album-controls\{position:fixed;bottom:0/);
+ assert.match(css,/\.album-controls\{position:relative;/);
  assert.match(css,/\.trash-toggle\{min-height:44px/);
+ assert.match(css,/#history-list li\{overflow-wrap:anywhere\}/);
+ assert.doesNotMatch(css,/--album-controls-height/);
  assert.match(css,/\.trash-toggle\{[^}]*white-space:normal/);
  assert.match(css,/\.album-controls button\{[^}]*min-width:0;white-space:normal;overflow-wrap:anywhere/);
  assert.match(css,/\.album-controls a,\.album-explanation\{grid-column:1 \/ -1;min-width:0/);
  assert.ok(footer.childNodes.some(node=>node.class==='album-explanation'));
-});
-test('album control resizing reserves its height in the scrolling overlay',async()=>{
- let callback,footer;
- const mounted=await mountedReview([item('a')],{ResizeObserver:class{
-  constructor(handler){callback=handler;}
-  observe(element){footer=element;}
- }});
- const overlay=mounted.nodes.get('overlay'),values={};
- overlay.style.setProperty=(key,value)=>{values[key]=value;};
- footer.getBoundingClientRect=()=>({height:168});callback();
- assert.equal(values['--album-controls-height'],'168px');
- footer.getBoundingClientRect=()=>({height:0});callback();
- assert.equal(values['--album-controls-height'],'168px');
- footer.getBoundingClientRect=()=>({height:212});callback();
- assert.equal(values['--album-controls-height'],'212px');
 });
 test('mounted album send creates a readable title and saves the verified album',async()=>{
  const titles=[],requests=[];let added=false;
@@ -606,6 +593,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const bounds=element=>element.getBoundingClientRect();
    const controls=['load','refresh','filter','sort'].map(id=>root.getElementById(id)).filter(Boolean);
    const clear=()=>controls.every(control=>bounds(control).bottom<=bounds(footer).top);
+   const initialClear=clear();overlay.scrollTop=overlay.scrollHeight;
    const range=doc.createRange();range.selectNodeContents(label);
    const textFits=range.getBoundingClientRect().right<=bounds(label).right+1;
    const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
@@ -618,7 +606,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
    const checkFits=inside(check,footer)&&textInside(check);
    const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   results.push({width,height,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -628,7 +616,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
   for(const measurement of measurements){
-   assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
+   assert.equal(measurement.initialClear,true,JSON.stringify(measurement));assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
    assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
    for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
@@ -873,10 +861,13 @@ test('decision history previews the same next Undo and updates after undo and re
  assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/No decisions yet/);
  await mounted.click('remove');mounted.nodes.get('queue').childNodes[0].onclick();await mounted.click('keep');
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: a · Queue → Keep; restores Queue/);
- assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(mounted.nodes.get('undo-preview')));
+ assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.find(node=>node.class==='actions').childNodes.includes(mounted.nodes.get('undo-preview')));
  assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
  assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/Next Undo/);
  assert.match(mounted.nodes.get('history-list').childNodes[1].textContent,/Unavailable for Undo/);
+ const retainedRow=mounted.nodes.get('history-list').childNodes[0];
+ mounted.nodes.get('filter').onchange();
+ assert.equal(mounted.nodes.get('history-list').childNodes[0],retainedRow);
  await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
@@ -1525,7 +1516,7 @@ test('userscript cancels the live snap-back before a filter renders another phot
  let running=false,cancelled=0;
  card.animate=()=>{running=true;return {finished:Promise.resolve(),cancel(){running=false;cancelled++;}};};
  card.getAnimations=()=>running?[{cancel(){running=false;cancelled++;}}]:[];
- media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20,timeStamp:0});
+ media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20,timeStamp:0});
  media.listeners.pointerup({pointerId:1,clientX:40,clientY:20,timeStamp:200});
  assert.equal(running,true);
  mounted.nodes.get('filter').value='video';
@@ -1795,4 +1786,14 @@ test('mixed decisions and Undo retain input order across a delayed save',async()
  const state=await mounted.read();
  assert.deepEqual(state.items.map(row=>row.decision),['remove','keep',null]);
  assert.deepEqual(state.history.map(entry=>[entry.key,entry.decision]),[['a','remove'],['b','keep']]);
+});
+
+test('decision history caps visible rows while retaining all Undo entries',async()=>{
+ const mounted=await mountedReview(Array.from({length:105},(_,index)=>item(`synthetic-${index}-${'x'.repeat(160)}`)));
+ for(let index=0;index<105;index++)await mounted.click('keep');
+ const rows=mounted.nodes.get('history-list').childNodes;
+ assert.equal(rows.length,101);
+ assert.equal(rows[100].textContent,'Showing the latest 100 of 105 decisions.');
+ assert.match(rows[0].textContent,/synthetic-104-/);
+ assert.equal((await mounted.read()).history.length,105);
 });
