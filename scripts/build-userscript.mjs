@@ -2,8 +2,9 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 const installURL='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
 const metadata=`// ==UserScript==
 // @name Photos Swipe
+// @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.2
+// @version 1.2.3
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
