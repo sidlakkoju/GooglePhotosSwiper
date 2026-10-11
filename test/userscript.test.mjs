@@ -121,7 +121,7 @@ test('Trash pagination and unknown reconciliation preserve local state and do no
 });
 test('built userscript metadata, page isolation, no privileged APIs and reproducible artifact',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- const url='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js';
+ const url='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
  for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant none','@inject-into page',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
  assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/\bGM[_\.]|chrome\.|localhost|photos-swipe-request/);
  assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('const cardElement=')<source.indexOf('const statsElement='));

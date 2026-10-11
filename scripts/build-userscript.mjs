@@ -1,5 +1,5 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
-const installURL='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js';
+const installURL='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
 const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper

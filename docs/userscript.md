@@ -1,6 +1,6 @@
 # Standalone userscript
 
-Photos Swipe can run directly in your signed-in Google Photos tab, without Node, a server, the Chrome bridge or pairing. The single installable file is [photoswiper.user.js](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js).
+Photos Swipe can run directly in your signed-in Google Photos tab, without Node, a server, the Chrome bridge or pairing. The single installable file is [photoswiper.user.js](https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js).
 
 ## Desktop: Tampermonkey or Violentmonkey
 

@@ -8,8 +8,8 @@
 // @grant none
 // @inject-into page
 // @noframes
-// @updateURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js
-// @downloadURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js
+// @updateURL https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js
+// @downloadURL https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js
 // @license MIT
 // ==/UserScript==
 

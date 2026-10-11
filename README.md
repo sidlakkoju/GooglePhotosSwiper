@@ -6,9 +6,15 @@ A local desktop app for reviewing Google Photos one photo or video at a time. Sw
 
 ## Standalone userscript (desktop and iOS Safari)
 
-[Install Photos Swipe](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js) in Tampermonkey, Violentmonkey, or quoid's iOS **Userscripts** Safari extension. Open Google Photos in the browser, then tap the **Photos Swipe** launcher. This version runs inside your signed-in Photos page, with account-scoped decisions and progress saved in IndexedDB; no server or pairing is needed.
+[Install Photos Swipe](https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js) in Tampermonkey, Violentmonkey, or quoid's iOS **Userscripts** Safari extension. Open Google Photos in the browser, then tap the **Photos Swipe** launcher. This version runs inside your signed-in Photos page, with account-scoped decisions and progress saved in IndexedDB; no server or pairing is needed.
 
 See [userscript installation and usage](docs/userscript.md). The review card sits above the stats on mobile, with touch swipes and desktop keyboard controls. Album writes are verified. Move to Trash is opt-in and requires confirmation of the exact count; undo history survives reloads. State is separate from the desktop app and does not sync across devices. Physical iPhone/Safari validation remains outstanding.
+
+## Publishing the userscript
+
+Every merge to `main` should be followed by `./scripts/deploy-worker.sh` to republish the userscript. The script rebuilds the artifact, then runs `npx --yes wrangler@4 deploy` from `worker/`. It uses existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment variables, or sources `/home/box/shared/cloudflare.env` when they are not both set. Keep credentials outside the repository and never commit secrets.
+
+The `photoswiper-sync` Worker bundles the script at deployment time using a [Wrangler Text module rule](https://developers.cloudflare.com/workers/wrangler/bundling/). It serves public GET and HEAD requests at `/photoswiper.user.js` with a five-minute cache lifetime; unknown paths return 404.
 
 ## Quick start
 
@@ -65,6 +71,7 @@ To delete, open the review album in Google Photos, select the items, then choose
 | `public/` | Review UI, media viewer, preview cache, import controller, browser guide |
 | `server.mjs` | Loopback-only server, local authentication, application/bridge endpoints |
 | `lib/store.mjs` | SQLite persistence, revisions, account binding, album jobs, reconciliation |
+| `worker/` | Cloudflare Worker serving the bundled userscript publicly |
 | `userscript/` | Built standalone userscript for Google Photos in desktop browsers and iOS Safari |
 | `extension/` | Chrome Manifest V3 bridge and Google Photos web API adapter |
 | `test/` | Core regression tests and synthetic browser fixtures |
