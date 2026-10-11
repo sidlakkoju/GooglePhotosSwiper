@@ -933,15 +933,15 @@ test('page lifecycle events cannot sync over an in-flight library snapshot',asyn
  finish();await operation;assert.equal((await mounted.read()).items[0].decision,null);
  await mounted.nodes.get('close').onclick();
 });
-test('failed saves retain the visible review and lease on close and reopen',async()=>{
+test('failed saves release the lease on close and retain pending decisions for reopen',async()=>{
  const mounted=bundleEnvironment(),fault={};mounted.environment.window.indexedDB=fakeIndexedDB(fault);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items:[item('a'),item('b')]});
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
  await mounted.nodes.get('launcher').onclick();fault.failSave=true;mounted.nodes.get('keep').onclick();
- await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);
- await assert.rejects(db.lease(account,'other-tab'),/busy/);
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
  await mounted.nodes.get('launcher').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
  fault.failSave=false;await mounted.nodes.get('close').onclick();assert.equal((await db.read(account)).items[0].decision,'keep');await db.lease(account,'other-tab');
 });
@@ -951,7 +951,9 @@ test('revision conflicts stay visible and do not retry the stale snapshot',async
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...await db.read(account),cursor:'other-tab'});
  mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
- await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('status').textContent,/Unsaved decisions remain visible.*Reload/);
  assert.match(mounted.nodes.get('caption').textContent,/^b ·/);assert.equal((await db.read(account)).cursor,'other-tab');
 });
@@ -966,7 +968,6 @@ test('lease recovery saves pending decisions and resumes input through visibilit
   fault.failLease=true;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
   assert.match(mounted.nodes.get('status').textContent,/lease failure/);
   mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
-  await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);
   fault.failLease=false;fault.failSave=false;
   if(recovery==='visibility'){mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
   else if(recovery==='reopen')await mounted.nodes.get('launcher').onclick();
@@ -1003,5 +1004,35 @@ test('a failed video RPC does not reject the next visible video waiting for it',
  await pending;mounted.nodes.get('keep').onclick();const video=mounted.nodes.get('media').querySelector('video');
  fail();await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(requests.length,2);assert.match(video.src,/second-video/);assert.equal(video.paused,false);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('pagehide and unload flush pending decisions before releasing the session lease',async()=>{
+ for(const [event,failSave] of [['pagehide',false],['unload',false],['pagehide',true],['unload',true]]){
+  const mounted=await mountedReview([item('a')]);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+  const transaction=database.transaction;
+  database.transaction=function(name,...args){if(name==='accounts'&&failSave&&args[0]==='readwrite')throw Error('Synthetic save failure');return transaction.call(this,name,...args);};
+  mounted.nodes.get('keep').onclick();
+  await mounted.environment.window.listeners[event]();
+  assert.equal((await db.read(account)).items[0].decision,failSave?null:'keep');
+  await db.lease(account,'other-tab');
+ }
+});
+test('visibility account changes allow close and reopening the new account',async()=>{
+ const mounted=await mountedReview([item('old')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const nextEmail='next@example.test',nextAccount=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(nextEmail))).toString('hex');
+ await db.save(nextAccount,{...emptyReview(),items:[item('new')]});
+ mounted.environment.window.WIZ_global_data.oPEP7c=nextEmail;
+ mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/Google account changed/);
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await db.lease(account,'other-tab');
+ await mounted.nodes.get('launcher').onclick();assert.match(mounted.nodes.get('caption').textContent,/^new ·/);
+ await mounted.click('keep');assert.equal((await db.read(nextAccount)).items[0].decision,'keep');
  await mounted.nodes.get('close').onclick();
 });

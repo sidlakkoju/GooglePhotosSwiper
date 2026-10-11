@@ -52,3 +52,13 @@ test('a synchronous burst is persisted once with the latest state',async()=>{
  for(let index=1;index<=10;index++){state=index;queue.enqueue();}
  await queue.flush();assert.deepEqual(saved,[10]);
 });
+
+test('failed lookahead preloads retry on the next buffer update',async()=>{
+ let attempts=0;const image={src:'decoded'};
+ const buffer=createPreloadBuffer({load:async()=>{if(++attempts===1)throw Error('Temporary failure');return image;}});
+ buffer.update([item('a')]);await tick();
+ assert.equal(buffer.get('a'),null);assert.equal(attempts,1);
+ buffer.update([item('a')]);await tick();
+ assert.equal(buffer.get('a'),image);assert.equal(attempts,2);
+ buffer.clear();
+});
