@@ -319,6 +319,95 @@ function validateSyncSettings(url,token) {
  return {url:parsed.origin,token};
 }
 
+function pairingQR(value) {
+ const bytes=new TextEncoder().encode(value);
+ if(bytes.length>84)throw Error('Pairing URL too long');
+ const bits=[],push=(value,length)=>{for(let i=length-1;i>=0;i--)bits.push(value>>>i&1);};
+ push(4,4);push(bytes.length,8);for(const byte of bytes)push(byte,8);
+ push(0,Math.min(4,688-bits.length));while(bits.length%8)bits.push(0);
+ const data=[];for(let i=0;i<bits.length;i+=8)data.push(bits.slice(i,i+8).reduce((a,b)=>a*2+b,0));
+ while(data.length<86)data.push(data.length%2===Math.ceil(bits.length/8)%2?236:17);
+ const multiply=(a,b)=>{let result=0;for(let i=0;i<8;i++){if(b&1)result^=a;b>>>=1;a<<=1;if(a&256)a^=285;}return result;};
+ let generator=[1],power=1;
+ for(let i=0;i<24;i++){const next=Array(generator.length+1).fill(0);generator.forEach((v,j)=>{next[j]^=v;next[j+1]^=multiply(v,power);});generator=next;power=multiply(power,2);}
+ const blocks=[data.slice(0,43),data.slice(43)],parity=blocks.map(block=>{const remainder=[...block,...Array(24).fill(0)];for(let i=0;i<43;i++){const factor=remainder[i];for(let j=0;j<generator.length;j++)remainder[i+j]^=multiply(generator[j],factor);}return remainder.slice(43);});
+ const stream=[];for(let i=0;i<43;i++)for(const block of blocks)pushByte(block[i]);for(let i=0;i<24;i++)for(const block of parity)pushByte(block[i]);
+ function pushByte(byte){for(let i=7;i>=0;i--)stream.push(byte>>>i&1);}
+ const size=37,matrix=Array.from({length:size},()=>Array(size).fill(false)),reserved=Array.from({length:size},()=>Array(size).fill(false));
+ const set=(x,y,dark)=>{if(x>=0&&y>=0&&x<size&&y<size){matrix[y][x]=!!dark;reserved[y][x]=true;}};
+ for(const [cx,cy] of [[3,3],[33,3],[3,33]])for(let dy=-4;dy<=4;dy++)for(let dx=-4;dx<=4;dx++){const distance=Math.max(Math.abs(dx),Math.abs(dy));set(cx+dx,cy+dy,distance!==2&&distance!==4);}
+ for(let i=8;i<size-8;i++){set(i,6,i%2===0);set(6,i,i%2===0);}
+ for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)set(30+dx,30+dy,Math.max(Math.abs(dx),Math.abs(dy))!==1);
+ const format=0x5412;
+ for(let i=0;i<=5;i++)set(8,i,format>>>i&1);
+ set(8,7,format>>>6&1);set(8,8,format>>>7&1);set(7,8,format>>>8&1);
+ for(let i=9;i<15;i++)set(14-i,8,format>>>i&1);
+ for(let i=0;i<8;i++)set(size-1-i,8,format>>>i&1);
+ for(let i=8;i<15;i++)set(8,size-15+i,format>>>i&1);
+ set(8,size-8,true);
+ let index=0,up=true;
+ for(let right=size-1;right>=1;right-=2){if(right===6)right=5;for(let vertical=0;vertical<size;vertical++){const y=up?size-1-vertical:vertical;for(let offset=0;offset<2;offset++){const x=right-offset;if(!reserved[y][x])matrix[y][x]=!!((stream[index++]||0)^((x+y)%2===0));}}up=!up;}
+ return matrix;
+}
+function renderPairingQR(document,value) {
+ const matrix=pairingQR(value),canvas=document.createElement('canvas');canvas.width=canvas.height=270;
+ const context=canvas.getContext('2d');context.fillStyle='white';context.fillRect(0,0,270,270);context.fillStyle='black';
+ matrix.forEach((row,y)=>row.forEach((dark,x)=>{if(dark)context.fillRect((x+4)*6,(y+4)*6,6,6);}));
+ canvas.setAttribute('aria-label','Scan to pair another device');return canvas;
+}
+
+function createPairingModal({document,parent,fetch,settings,setTimeout,clearTimeout,now=Date.now,renderQR=renderPairingQR}) {
+ const modal=document.createElement('section');modal.hidden=true;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','Pair another device');modal.style.cssText='position:fixed;inset:0;overflow:auto;background:#f4f7f1;padding:24px;z-index:1;pointer-events:auto';
+ const status=document.createElement('p'),qr=document.createElement('div'),short=document.createElement('p'),countdown=document.createElement('p'),cancel=document.createElement('button'),renew=document.createElement('button'),devices=document.createElement('button');
+ status.setAttribute('role','status');cancel.textContent='Cancel';renew.textContent='New code';devices.textContent='View devices';modal.append(status,qr,short,countdown,cancel,renew,devices);parent.append(modal);
+ let generation=0,current=null,timer=null,credentials=null,nextPollAt=0,polling=false;
+ const request=async(path,method='GET',body)=>{
+  const response=await fetch(new URL('/api/'+path,credentials.url).href,{method,headers:{Authorization:`Bearer ${credentials.token}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
+  if(!response.ok)throw Error(response.status===401?'Pair this device first.':`Pairing request failed (${response.status})`);
+  return response.json();
+ };
+ const reset=()=>{clearTimeout(timer);qr.replaceChildren();short.textContent='';countdown.textContent='';renew.hidden=true;devices.hidden=true;};
+ const burn=async id=>{await request('pair/start','DELETE',{id});};
+ const tick=async version=>{
+  if(version!==generation||modal.hidden||!current)return;
+  const seconds=Math.max(0,Math.ceil((current.expiresAt-now())/1000));countdown.textContent=`${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`;
+  timer=setTimeout(()=>tick(version),250);
+  if(polling)return;
+  try {
+   if(now()>=nextPollAt||!seconds){polling=true;const result=await request('pair/status?id='+encodeURIComponent(current.id));if(version!==generation)return;polling=false;if(result.claimed){reset();status.textContent='New device paired: '+result.name;devices.hidden=false;current=null;return;}nextPollAt=now()+2500;}
+   if(!seconds){const id=current.id;reset();status.textContent='Code expired';renew.hidden=false;current=null;await burn(id);return;}
+  }catch(error){if(version!==generation)return;polling=false;reset();status.textContent=error.message;renew.hidden=false;}
+ };
+ const open=async()=>{
+  if(!modal.hidden)return;
+  modal.hidden=false;cancel.focus();await start();
+ };
+ const start=async()=>{
+  const version=++generation;reset();status.textContent='Loading pairing code\u2026';
+  try{
+   credentials=await settings();if(!credentials.url||!credentials.token)throw Error('Pair this device first.');
+   const result=await request('pair/start','POST');
+   if(version!==generation){await burn(result.id);return;}
+   current=result;polling=false;nextPollAt=now()+2500;qr.append(renderQR(document,new URL('/pair',credentials.url).href+'#'+result.code));short.textContent=result.short.slice(0,3)+' '+result.short.slice(3);status.textContent='Scan this QR or enter the code on your other device.';tick(version);
+  }catch(error){if(version===generation){reset();status.textContent=error.message;renew.hidden=error.message==='Pair this device first.';}}
+ };
+ const close=async()=>{
+  ++generation;reset();const id=current?.id;
+  if(id)try{await burn(id);}catch(error){status.textContent=error.message;renew.hidden=false;return;}
+  current=null;modal.hidden=true;
+ };
+ cancel.onclick=close;renew.onclick=start;modal.addEventListener('keydown',event=>{if(event.key==='Escape')close();});
+ devices.onclick=async()=>{try{const result=await request('devices');status.textContent='Devices';qr.replaceChildren();for(const device of result.devices.filter(device=>!device.revoked_at)){const row=document.createElement('p');row.textContent=device.name+' ('+device.platform+')';qr.append(row);}}catch(error){status.textContent=error.message;}};
+ return {open,close,modal};
+}
+function receivePairingLink({document,parent,location,window,fetch,saveSettings,onPaired,manual=false}) {
+ const match=location.hash?.match(/^#pswipe-pair=([A-Za-z0-9_-]{22})$/);if(!match&&!manual)return;
+ if(match)window.history.replaceState(null,'',location.pathname+location.search);
+ const panel=document.createElement('section'),name=document.createElement('input'),button=document.createElement('button'),status=document.createElement('p'),shortCode=document.createElement('input'),cancel=document.createElement('button');
+ panel.style.cssText='position:fixed;inset:0;background:#f4f7f1;padding:24px;pointer-events:auto;z-index:2';name.value=/iPhone/.test(window.navigator?.userAgent||'')?'iPhone (Safari)':'New browser';name.setAttribute('aria-label','Device name');button.textContent='Pair this device';panel.append(name,button,status);if(manual){shortCode.setAttribute('aria-label','Six-digit pairing code');shortCode.inputMode='numeric';shortCode.maxLength=7;panel.append(shortCode);}cancel.textContent='Cancel';cancel.onclick=()=>{panel.hidden=true;};panel.append(cancel);parent.append(panel);
+ button.onclick=async()=>{button.disabled=true;try{const url='https://photoswiper-sync.sidlakkoju.workers.dev';const response=await fetch(url+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url,token:result.token,onboardingDismissed:true});panel.hidden=true;await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
+}
+
 function mountPhotosSwipe(environment) {
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
@@ -510,6 +599,8 @@ function mountPhotosSwipe(environment) {
  const syncLocal=document.createElement('button');syncLocal.setAttribute('id','sync-local');syncLocal.textContent='Continue locally';settingsPanel.append(syncLocal);
  for(const [id,title,type] of [['sync-url','Sync URL','url'],['sync-token','Sync token','password']]){const label=document.createElement('label'),input=document.createElement('input');label.textContent=title+' ';input.setAttribute('id',id);input.type=type;input.autocomplete='off';label.append(input);settingsPanel.append(label);}
  const syncSave=document.createElement('button');syncSave.setAttribute('id','sync-save');syncSave.textContent='Save and sync';settingsPanel.append(syncSave);
+ const pairAnother=document.createElement('button');pairAnother.textContent='Pair another device';pairAnother.setAttribute('id','pair-another');settingsPanel.append(pairAnother);
+ const pairingModal=createPairingModal({document,parent:root,fetch:environment.fetch,settings:async()=>db?db.settings():{},setTimeout:environment.setTimeout,clearTimeout:environment.clearTimeout});pairAnother.onclick=pairingModal.open;
  const syncStatus=document.createElement('p');syncStatus.setAttribute('id','sync-status');syncStatus.setAttribute('role','status');divElement4.insertBefore(settingsPanel,cardElement);divElement4.insertBefore(syncStatus,cardElement);
  const historyPanel=document.createElement('details');historyPanel.setAttribute('id','history-details');
  const historyTitle=document.createElement('summary');historyTitle.textContent='Decision history';
@@ -646,6 +737,8 @@ function mountPhotosSwipe(environment) {
  function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
  $('sync-save').onclick=()=>run(async()=>{const settings=validateSyncSettings($('sync-url').value.trim(),$('sync-token').value);await db.saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await db.settings();await db.saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
+ const receivePairing=manual=>receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.fetch,saveSettings:async settings=>{const storage=await database();await storage.saveSettings(settings);},onPaired:open,manual});
+ const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=()=>receivePairing(true);receivePairing(false);
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;render();};
  $('zoom').oninput=()=>{const image=$('media').querySelector('img');if(image){image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'pan-y pinch-zoom';}};
