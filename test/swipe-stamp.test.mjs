@@ -108,6 +108,52 @@ test('rapid keyboard swipe and undo inputs survive pending writes and card anima
 });
 
 
+for(const decision of ['keep','remove']){
+ test(`${decision} clicks during an undo save are blocked while rapid keyboard inputs queue`,async()=>{
+  const {context,$,writes}=review();
+  context.albumCandidates=()=>[];
+  context.bridgeConnected=false;
+  context.reconciliationSupported=false;
+  context.photoViewer.refreshControls=()=>{};
+  vm.runInContext(source.split('\n').find(line=>line.startsWith('function renderControls(')),context);
+  const handlers=source.split('\n').find(line=>line.startsWith("$('import-next').onclick="));
+  vm.runInContext(handlers.slice(handlers.indexOf("$('keep').onclick=")),context);
+  for(const id of ['keep','remove','undo'])$(id).click=()=>{if(!$(id).disabled)$(id).onclick();};
+  await context.choose('remove');
+  assert.equal(context.active().id,'next');
+  assert.equal($(decision).disabled,false);
+  const save=context.updateDecision;
+  let release;
+  context.updateDecision=async(item,value)=>{
+   if(value===null&&!release)await new Promise(resolve=>{release=resolve;});
+   return await save(item,value);
+  };
+  $('undo').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(context.animating,true);
+  assert.equal(context.active().id,'next');
+  assert.equal($('keep').disabled,true);
+  assert.equal($('remove').disabled,true);
+  assert.equal($('undo').disabled,true);
+  $(decision).click();
+  assert.equal(context.reviewActionsPending,1);
+  const press=keyboard(context);
+  for(const key of ['ArrowRight','z','ArrowLeft','z'])press(key);
+  assert.equal(context.reviewActionsPending,5);
+  release();
+  await context.reviewActions;
+  assert.deepEqual(writes,[['first','remove'],['first',null],['first','keep'],['first',null],['first','remove'],['first',null]]);
+  assert.equal(context.active().id,'first');
+  assert.equal(context.history.length,0);
+  assert.equal($('keep').disabled,false);
+  assert.equal($('remove').disabled,false);
+  $(decision).click();
+  await context.reviewActions;
+  assert.deepEqual(writes.at(-1),['first',decision]);
+  assert.equal(context.active().id,'next');
+ });
+}
+
 test('queued review actions do not carry into a changed workspace',async()=>{
  const {context,decisions,writes}=review();
  const result=context.choose('remove');
