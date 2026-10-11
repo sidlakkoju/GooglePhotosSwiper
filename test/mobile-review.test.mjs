@@ -58,6 +58,7 @@ test('mobile CSS prioritizes review and preserves labels while hiding keyboard h
  assert.match(mobile,/\.mobile-actions\{order:-3;/);
  assert.match(mobile,/\.review-toolbar\{flex-wrap:wrap;/);
  assert.match(mobile,/\.keyboard-hint\{display:none\}/);
+ assert.match(mobile,/\.card-area\{height:max\(240px,min\(385px,50dvh,calc\(100dvh - 300px\)\)\)\}/);
  assert.doesNotMatch(css,/\.sort\{font-size:0[;}]/);
  assert.ok(html.indexOf('id="import-next"')<html.indexOf('id="card"'));
  assert.ok(html.indexOf('id="rescan"')<html.indexOf('id="card"'));
@@ -89,6 +90,16 @@ test('app layout preserves phone review priority, queue controls, and desktop sp
   const style=selector=>getComputedStyle(document.querySelector(selector));
   const results={width:innerWidth,height:innerHeight,cardBeforeStats:rect('#card').bottom<rect('.stats').top,cardBeforeImport:rect('#card').bottom<rect('.collection-actions').top,cardVisible:rect('#card').top>0&&rect('#card').bottom<innerHeight,decisionsVisible:rect('.decision-actions').bottom<innerHeight,sortLabelVisible:parseFloat(style('.sort').fontSize)>0,hintsHidden:style('.keyboard-hint').display==='none',countsVisible:rect('#mobile-remaining').width>0&&rect('#mobile-queue-count').width>0,activeDistinct:style('#mobile-review').backgroundColor!==style('#mobile-queue').backgroundColor,noOverflow:document.documentElement.scrollWidth===innerWidth};
   const phone=innerWidth<=760;
+  if(phone){
+   results.cardHasMinimumHeight=rect('#card').height>=240;
+   results.metadataInsideCard=rect('.photo-meta').top>=rect('#card').top&&rect('.photo-meta').bottom<=rect('#card').bottom;
+   if(innerHeight<568){
+    delete results.cardVisible;delete results.decisionsVisible;
+    document.querySelector('.decision-actions').scrollIntoView({block:'end'});
+    results.decisionsReachable=rect('.decision-actions').top>=0&&rect('.decision-actions').bottom<=innerHeight;
+    window.scrollTo(0,0);
+   }
+  }
   if(!phone){
    results.cardBeforeStats=rect('.stats').bottom<rect('#card').top;
    results.cardBeforeImport=rect('.collection-actions').bottom<rect('#card').top;
@@ -111,7 +122,7 @@ test('app layout preserves phone review priority, queue controls, and desktop sp
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));`;
   const page=html.replace(/<link[^>]+>|<script[^>]+><\/script>/g,'').replace('</head>',`<style>${css}</style></head>`).replace('</body>',`<script>${runtime}\n${assertions}</script></body>`);
   const path=join(dir,'layout.html');await writeFile(path,page);
-  for(const [width,height] of [[370,800],[370,700],[320,568],[390,844],[412,915],[1280,800],[761,800]]){
+  for(const [width,height] of [[370,800],[370,700],[320,568],[390,844],[412,915],[667,375],[568,320],[320,320],[1280,800],[761,800]]){
    const framePath=join(dir,'frame.html');
    await writeFile(framePath,`<!doctype html><iframe scrolling="no" style="border:0;width:${width}px;height:${height}px" src="file://${path}"></iframe><script>const frame=document.querySelector('iframe');frame.onload=()=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:frame.contentDocument.querySelector('pre').textContent}));</script>`);
    const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu',`--user-data-dir=${join(dir,`chrome-${width}`)}`,`--window-size=${width},${height}`,'--allow-file-access-from-files','--virtual-time-budget=1000','--dump-dom',`file://${framePath}`],{encoding:'utf8',timeout:30000});
