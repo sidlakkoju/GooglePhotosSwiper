@@ -47,7 +47,7 @@ test('guide first step follows loading, review and library exhaustion',()=>{
  vm.createContext(context);vm.runInContext(app.slice(app.indexOf('function renderGuide('),app.indexOf("$('toast').onclick=")),context);
  context.renderGuide();assert.match(step.innerHTML,/Load a batch/);
  context.items=[{id:'synthetic-photo'}];context.renderGuide();assert.match(step.innerHTML,/Your items are ready/);assert.doesNotMatch(step.innerHTML,/Load 50 more/);
- context.decisions={'synthetic-photo':'keep'};context.renderGuide();assert.match(step.innerHTML,/All loaded items are reviewed/);assert.match(step.innerHTML,/Load 50 more/);
+ context.decisions={'synthetic-photo':'keep'};context.renderGuide();assert.match(step.innerHTML,/All loaded items are reviewed/);assert.match(step.innerHTML,/Review your removal queue/);assert.doesNotMatch(step.innerHTML,/choose Load 50 more/);
  context.workspace.exhausted=true;context.renderGuide();assert.match(step.innerHTML,/Refresh latest/);assert.doesNotMatch(step.innerHTML,/Load 50 more/);
  context.decisions={};context.renderGuide();assert.match(step.innerHTML,/Your items are ready/);
  assert.match(app,/function render\(\)\{renderGuide\(\);/);assert.match(html,/id="guide-first-step"/);
