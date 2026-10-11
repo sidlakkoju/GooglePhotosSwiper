@@ -1,3 +1,4 @@
+import {sampleSwipe,releaseSwipe,animateSwipe,throwSwipe} from '../public/swipe.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -18,7 +19,7 @@ function review({delayed=false}={}){
  };
  const timers=[],toastTimers=new Map(),writes=[];
  let timerId=0;
- const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceLoadsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,evict:async()=>{},mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
+ const context=vm.createContext({sampleSwipe,releaseSwipe,animateSwipe,throwSwipe,photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceLoadsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,evict:async()=>{},mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
  context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
@@ -91,12 +92,7 @@ test('rapid keyboard swipe and undo inputs survive pending writes and card anima
  for(const key of ['z','ArrowRight','z','ArrowLeft','ArrowLeft','z','z'])press(key);
  release();
  const complete=context.reviewActions;
- for(let i=0;i<4;i++){
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(context.animating,true);
-  assert.equal(timers.length,1);
-  timers.shift()();
- }
+ assert.equal(timers.length,0);
  await complete;
  assert.deepEqual(writes,[['first','remove'],['first',null],['first','keep'],['first',null],['first','remove'],['next','remove'],['next',null],['first',null]]);
  assert.deepEqual(decisions,{});
@@ -394,11 +390,7 @@ test('workspace reload blocks revision-checked writes through the full swipe and
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(context.animating,true);
   releaseDecision();
-  for(let n=0;n<4;n++){
-   await new Promise(resolve=>setImmediate(resolve));
-   assert.equal(timers.length,1);
-   timers.shift()();
-  }
+  assert.equal(timers.length,0);
   await context.reviewActions;
   assert.deepEqual(writes,[['synthetic:first','remove'],['synthetic:first',null],['synthetic:first','keep'],['synthetic:first',null],['synthetic:first','remove'],['synthetic:next','remove'],['synthetic:next',null],['synthetic:first',null]]);
   assert.ok(store.listItems().every(item=>item.decision===null));
@@ -408,7 +400,7 @@ test('workspace reload blocks revision-checked writes through the full swipe and
  }finally{store.close();}
 });
 
-test('workspace reload waits for an in-flight decision and its animation',async()=>{
+test('workspace reload waits for an in-flight decision without waiting for animation',async()=>{
  const {context,timers}=review({delayed:true});
  const save=context.updateDecision;
  let release,reads=0;
@@ -420,8 +412,7 @@ test('workspace reload waits for an in-flight decision and its animation',async(
  assert.equal(reads,0);
  release();
  await new Promise(resolve=>setImmediate(resolve));
- assert.equal(reads,0);
- timers.shift()();
+ assert.equal(timers.length,0);
  await swipe;
  await refresh;
  assert.equal(reads,1);
@@ -447,13 +438,7 @@ test('sort, filter, and navigation cannot change the target of a queued burst',a
  assert.equal(sortTarget.value,'original');
  assert.equal(selectedFilter,undefined);
  assert.equal($('review-view').hidden,false);
- for(let n=0;n<2;n++){
-  await new Promise(resolve=>setImmediate(resolve));
-  context.showView('queue');
-  $('sort').onchange({target:sortTarget});
-  assert.equal($('review-view').hidden,false);
-  timers.shift()();
- }
+ assert.equal(timers.length,0);
  await Promise.all([first,second]);
  assert.deepEqual(writes,[['first','remove'],['next','keep']]);
  sortTarget.value='newest';
@@ -581,4 +566,35 @@ test('viewer swipe gestures cannot start while a workspace reload locks decision
  vm.runInContext(viewerSource.slice(viewerSource.indexOf('  function down('),viewerSource.indexOf('  function move(')),context);
  context.down({button:0,target:{closest:()=>null},currentTarget:context.swipeZone,pointerId:1,clientX:200,clientY:100});
  assert.equal(context.swipe,null);
+});
+
+test('a short pointer fling saves at release and the next gesture does not wait for animation',async()=>{
+ const {context,$,writes,timers}=review({delayed:true});
+ const card=$('card'),throws=[];
+ context.matchMedia=()=>({matches:false});
+ context.throwSwipe=(element,dx,duration)=>{throws.push({element,dx,duration});};
+ card.onpointerdown({...pointer(200),timeStamp:0});
+ card.onpointermove({...pointer(215),timeStamp:20});
+ card.onpointerup({...pointer(240),timeStamp:50});
+ await context.reviewActions;
+ assert.deepEqual(writes,[['first','keep']]);
+ assert.equal(context.animating,false);
+ assert.equal(timers.length,0);
+ card.onpointerdown({...pointer(200),timeStamp:100});
+ card.onpointerup({...pointer(160),timeStamp:150});
+ await context.reviewActions;
+ assert.deepEqual(writes,[['first','keep'],['next','remove']]);
+ assert.equal(throws.length,2);
+ assert.equal(throws[0].duration,252);
+ assert.equal(throws[1].dx,-1);
+});
+
+test('a cancelled pointer fling resets the stamp without writing a decision',async()=>{
+ const {context,$,writes}=review();
+ $('card').onpointerdown({...pointer(200),timeStamp:0});
+ $('card').onpointermove({...pointer(350),timeStamp:20});
+ $('card').onpointercancel({...pointer(350),timeStamp:30});
+ await context.reviewActions;
+ assert.deepEqual(writes,[]);
+ assertReset($);
 });

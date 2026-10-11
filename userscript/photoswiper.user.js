@@ -103,6 +103,42 @@ async function photosOperation(operation,args={},environment=globalThis) {
  }catch(e){return {ok:false,error:e.message||'Google Photos request failed.'};}
 }
 
+function sampleSwipe(samples,event){
+  const time=Number.isFinite(event.timeStamp)?event.timeStamp:0;
+  samples.push({x:event.clientX,time});
+  while(samples.length>1&&samples[0].time<time-100)samples.shift();
+  return samples;
+}
+function releaseSwipe(samples,event,startX,width,cancel=false){
+  sampleSwipe(samples,event);
+  const dx=event.clientX-startX,first=samples[0],last=samples.at(-1),elapsed=last.time-first.time;
+  const velocity=elapsed>0?(last.x-first.x)/elapsed:0;
+  return {dx,velocity,commit:!cancel&&(Math.abs(dx)>width/3||(Math.abs(velocity)>.5&&velocity*dx>0)),duration:Math.round(Math.max(180,Math.min(300,300-Math.abs(velocity)*60)))};
+}
+function animateSwipe(element,dx,commit,duration=320){
+  if(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  const start=element.style.transform||'translateX(0px)',direction=dx>0?1:-1;
+  const distance=(globalThis.innerWidth||1000)+(element.getBoundingClientRect?.().width||350);
+  return element.animate?.([{transform:start,opacity:1},{transform:commit?`translateX(${direction*distance}px) rotate(${direction*18}deg)`:'translateX(0px)',opacity:commit?0:1}],{duration,easing:commit?'ease-out':'cubic-bezier(.2,1.5,.5,1)'});
+}
+function throwSwipe(element,dx,duration){
+  if(!element.cloneNode||!element.ownerDocument?.body)return;
+  const rect=element.getBoundingClientRect(),copy=element.cloneNode(true);
+  if(globalThis.getComputedStyle){
+    const originals=[element,...element.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
+    originals.forEach((original,index)=>{const computed=globalThis.getComputedStyle(original);for(const property of computed)copies[index].style.setProperty(property,computed.getPropertyValue(property));});
+  }
+  copy.removeAttribute('id');
+  for(const child of copy.querySelectorAll('[id]'))child.removeAttribute('id');
+  copy.setAttribute('aria-hidden','true');
+  copy.inert=true;
+  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',transform:'none',pointerEvents:'none',zIndex:'2147483647',transition:'none'});
+  (element.parentNode||element.ownerDocument.body).append(copy);
+  const animation=animateSwipe(copy,dx,true,duration);
+  if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
+  else copy.remove();
+}
+
 function buildPhotosRequest(tokens,location,id,payload) {
  const path=tokens.eptZe;
  if(location.origin!=='https://photos.google.com'||typeof path!=='string'||!/^\/(?:u\/\d+\/|_\/PhotosUi\/(?:u\/\d+\/)?)?$/.test(path)||!tokens.SNlM0e)throw Error('Unsupported Google Photos page tokens.');
@@ -655,9 +691,12 @@ function mountPhotosSwipe(environment) {
  $('trash').onclick=()=>run(async()=>{message('Reading Google Photos Trash\u2026');await save(await reconcileReviewTrash(state,call));message('Trash check complete. Unknown results leave local state unchanged.');});
  let swipeStart=null;
  for(const target of [$('media'),$('swipe')]){
-  target.addEventListener('pointerdown',event=>{if(busy||event.isPrimary===false||event.button!==0||event.target.tagName==='VIDEO'||Number($('zoom').value)>1)return;swipeStart={id:event.pointerId,x:event.clientX,y:event.clientY};target.setPointerCapture(event.pointerId);});
-  target.addEventListener('pointerup',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const dx=event.clientX-swipeStart.x,dy=event.clientY-swipeStart.y;swipeStart=null;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5)decide(dx>0?'keep':'remove');});
-  target.addEventListener('pointercancel',()=>{swipeStart=null;});
+  target.addEventListener('pointerdown',event=>{if(busy||swipeStart||event.isPrimary===false||event.button!==0||event.target.tagName==='VIDEO'||Number($('zoom').value)>1)return;for(const animation of $('card').getAnimations?.()||[])animation.cancel();swipeStart={id:event.pointerId,x:event.clientX,y:event.clientY,samples:sampleSwipe([],event)};target.setPointerCapture(event.pointerId);});
+  target.addEventListener('pointermove',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;sampleSwipe(swipeStart.samples,event);const dx=event.clientX-swipeStart.x;$('card').style.transform=`translateX(${dx}px) rotate(${dx/20}deg)`;});
+  const release=(event,cancel=false)=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const result=releaseSwipe(swipeStart.samples,event,swipeStart.x,$('card').offsetWidth||$('card').getBoundingClientRect?.().width||300,cancel),dy=event.clientY-swipeStart.y;swipeStart=null;const commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.5;if(commit)throwSwipe($('card'),result.dx,result.duration);else animateSwipe($('card'),result.dx,false);$('card').style.transform='';if(commit)decide(result.dx>0?'keep':'remove');};
+  target.addEventListener('pointerup',event=>release(event));
+  target.addEventListener('pointercancel',event=>release(event,true));
+  target.addEventListener('lostpointercapture',event=>release(event,true));
  }
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
  function handleViewerSpace(event){
