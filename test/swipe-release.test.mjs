@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {sampleSwipe,releaseSwipe,animateSwipe} from '../public/swipe.js';
 const event=(clientX,timeStamp)=>({clientX,timeStamp});
 function release(points,width=300,cancel=false){
@@ -61,4 +62,12 @@ test('outgoing visual copies are removed after animation while the original stay
  finish();
  await Promise.resolve();
  assert.equal(removed,true);
+});
+
+test('web card stack contains paint to clip fixed outgoing copies',async()=>{
+ const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+ const rules=[...css.matchAll(/\.card-area\{([^}]*)\}/g)].map(match=>match[1]);
+ assert.ok(rules.length>0);
+ const containment=rules.flatMap(rule=>[...rule.matchAll(/(?:^|;)contain:([^;]+)/g)].map(match=>match[1]));
+ assert.equal(containment.at(-1),'paint');
 });
