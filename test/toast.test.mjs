@@ -91,3 +91,24 @@ test('loading no new fake media shows a notification without shifting the review
  assert.match(rules,/overflow-wrap:anywhere(?:;|$)/);
  assert.match(rules,/max-width:calc\(100vw - 32px\)/);
 });
+
+
+test('fixed notifications stay below the header and mobile tabs even when messages wrap',async()=>{
+ const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+ const declarations=[...css.matchAll(/#toast\s*\{([^}]*)\}/g)].flatMap(match=>match[1].split(';')).filter(Boolean).map(declaration=>declaration.split(':'));
+ const styles=Object.fromEntries(declarations);
+ assert.equal(styles.position,'fixed');
+ assert.equal(styles.bottom,'16px');
+ assert.equal(styles.top,undefined);
+ assert.equal(styles.margin,'0');
+ assert.equal(styles['max-height'],'calc(100dvh - 144px)');
+ assert.equal(styles['overflow-y'],'auto');
+ for(const {width,height} of [{width:393,height:852},{width:320,height:568}]){
+  const bottom=height-parseFloat(styles.bottom);
+  const maximumHeight=height-Number(styles['max-height'].match(/- (\d+)px/)[1]);
+  for(const messageHeight of [44,180,1000]){
+   const top=bottom-Math.min(messageHeight,maximumHeight);
+   assert.ok(top>=128,`${width}×${height}: notification must clear the header and mobile tabs`);
+  }
+ }
+});
