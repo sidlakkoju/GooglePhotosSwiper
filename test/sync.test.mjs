@@ -382,14 +382,15 @@ test('legacy state recovery restores reviewed IDs and Undo revisions before the 
  assert.deepEqual(state.items.filter(item=>!item.decision).map(item=>item.mediaKey),['QA-FRESH']);assert.match(statuses.at(-1),/^Synced/);
 });
 
-test('recovery read failures preserve empty local state and allow a later retry',async()=>{
+test('recovery scan failures save remote state and preserve unseen undo targets',async()=>{
  const statuses=[],client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>new Response(JSON.stringify({decisions:[{id:'QA-KEEP',decision:'keep'}],history:[],progress:{started:true,reviewed:1}}))});
  client.configure({url:'https://sync.example',token:'synthetic-token'});
- const empty={started:false,items:[],history:[],revision:0};let saves=0;
+ const empty={started:false,items:[],history:[],revision:0,cursor:null};let saves=0;
  const save=async value=>{saves++;return value;};
- assert.equal(await client.sync('qa',empty,save,()=>{throw Error('Synthetic preview failure');}),empty);
- assert.equal(saves,0);assert.match(statuses.at(-1),/Synthetic preview failure.*saved locally/);
- const restored=await client.sync('qa',empty,save);assert.equal(saves,1);assert.equal(restored.items[0].decision,'keep');
+ const restored=await client.sync('qa',empty,save,()=>{throw Error('Synthetic preview failure');});
+ assert.equal(saves,1);assert.equal(restored.started,true);assert.equal(restored.items[0].decision,'keep');
+ const loaded=mergeReviewPage(restored,{items:[{mediaKey:'QA-FRESH'}],nextPageId:null},null);
+ const retried=await client.sync('qa',loaded,save);assert.equal(retried.items.find(item=>item.mediaKey==='QA-KEEP').decision,'keep');
 });
 
 test('a partial device checkpoint preserves remote trash rows through a wiped-store restore',async()=>{
@@ -474,3 +475,61 @@ test('item storage migration preserves legacy checkpoints and keeps metadata-onl
  assert.deepEqual(JSON.parse(db.prepare('SELECT progress FROM review_state WHERE scope = ?').get('metadata').progress),{started:true,reviewed:1});
  db.close();
 });
+
+ test('stale and equal checkpoint revisions cannot overwrite newer trash, while newer restores can',async()=>{
+ const e=env(),trash={mediaKey:'synthetic-trash',state:'in_trash',revision:4,spaceTaken:120,queueSent:true};
+ const put=items=>call(e,'progress','PUT',{started:true,reviewed:0,items,lifetimeFreed:120});
+ await put([trash]);
+ for(const revision of [0,3,4]){
+  assert.equal((await put([{...trash,state:'active',revision}])).status,200);
+  assert.deepEqual((await (await call(e,'state')).json()).progress.items,[trash]);
+ }
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const stale={started:true,history:[],items:[{...trash,state:'active',revision:1},{mediaKey:'synthetic-local',state:'active',revision:1}],syncDecisions:{},syncDirty:true};
+ const synced=await client.sync('default',stale,async value=>value);
+ assert.equal(synced.items[0].state,'in_trash');assert.equal(synced.items[0].revision,4);
+ const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
+ assert.equal(restored.items.find(item=>item.mediaKey===trash.mediaKey).state,'in_trash');
+ await put([{...trash,state:'active',revision:5}]);
+ assert.equal((await (await call(e,'state')).json()).progress.items[0].state,'active');
+ });
+
+ test('failed library scans retain trash totals, history and unseen undo eligibility after Load more',async()=>{
+ const entry={key:'synthetic-unseen',previous:null,decision:'keep',revision:3};
+ const remote={decisions:[{id:entry.key,decision:'keep'}],history:[entry],progress:{started:true,lifetimeFreed:120,items:[{mediaKey:'synthetic-trash',state:'in_trash',revision:4,spaceTaken:120},{mediaKey:entry.key,state:'active',revision:3}]}};
+ const client=createSyncClient({fetch:async()=>new Response(JSON.stringify(remote))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let saved;
+ const restored=await client.sync('default',{started:false,items:[],history:[],cursor:null},async value=>{saved=value;return value;},value=>rebuildSyncedReview(value,async()=>{throw Error('Synthetic scan failure');}));
+ assert.equal(restored,saved);assert.deepEqual(restored.history,[entry]);assert.equal(restored.lifetimeFreed,120);
+ const loaded=mergeReviewPage(restored,{items:[{mediaKey:'synthetic-page'}],nextPageId:null},null);
+ const next=await client.sync('default',loaded,async value=>value);
+ assert.equal(next.items.find(item=>item.mediaKey==='synthetic-trash').spaceTaken,120);
+ assert.equal(canUndoReview(next,entry),true);
+ });
+
+ for(const failure of ['timeout',400,500])test(`checkpoint ${failure} preserves pulled decisions and retries the checkpoint`,async()=>{
+ const e=env(),entry={key:'synthetic-remote',previous:null,decision:'keep',revision:2};
+ await call(e,'decisions/synthetic-remote','PUT',{decision:'keep'});await call(e,'undo','PUT',{history:[entry]});
+ let reject=true,writes=0;
+ const client=createSyncClient({fetch:(url,options)=>{
+  if(new URL(url).pathname==='/api/progress'){writes++;if(reject){if(failure==='timeout')throw Error('Synthetic timeout');return new Response('{}',{status:failure});}}
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const state={started:true,items:[{mediaKey:entry.key,decision:null}],history:[],syncDecisions:{}};
+ const pulled=await client.sync('default',state,async value=>value);
+ assert.equal(pulled.items[0].decision,'keep');assert.deepEqual(pulled.history,[entry]);assert.equal(canUndoReview(pulled,entry),true);assert.equal(pulled.syncCheckpoint,undefined);
+ reject=false;const retried=await client.sync('default',pulled,async value=>value);
+ assert.equal(writes,2);assert.ok(retried.syncCheckpoint);
+ });
+
+ test('remote checkpoint revisions retain undo locks when unseen rows join a populated store',async()=>{
+ const entry={key:'synthetic-locked',previous:null,decision:'keep',revision:2};
+ const remote={decisions:[{id:entry.key,decision:'keep'}],history:[entry],progress:{started:true,items:[{mediaKey:entry.key,state:'active',revision:3,queueSent:true}]}};
+ const client=createSyncClient({fetch:async()=>new Response(JSON.stringify(remote))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ const state=await client.sync('default',{started:true,items:[{mediaKey:'synthetic-loaded',state:'active'}],history:[],syncDecisions:{}},async value=>value);
+ assert.equal(state.items.find(item=>item.mediaKey===entry.key).revision,3);assert.equal(canUndoReview(state,entry),false);
+ });

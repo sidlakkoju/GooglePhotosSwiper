@@ -67,7 +67,7 @@ export async function syncRequest(request,env={}) {
    if(route==='/api/progress'){
     if(!value||Object.keys(value).some(key=>!['started','reviewed','items','lifetimeFreed'].includes(key))||typeof value.started!=='boolean'||!Number.isSafeInteger(value.reviewed)||value.reviewed<0||Object.hasOwn(value,'items')&&!progressItemsValid(value.items)||Object.hasOwn(value,'lifetimeFreed')&&(!Number.isSafeInteger(value.lifetimeFreed)||value.lifetimeFreed<0))throw Error('Invalid progress');
     const incoming=JSON.stringify({...value,...(Object.hasOwn(value,'items')?{items:[]}:{})});
-    const statements=(value.items||[]).map(item=>db.prepare('INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data').bind(scope,item.mediaKey,JSON.stringify(item)));
+    const statements=(value.items||[]).map(item=>db.prepare("INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data WHERE COALESCE(json_extract(excluded.data, '$.revision'), 0) > COALESCE(json_extract(review_items.data, '$.revision'), 0)").bind(scope,item.mediaKey,JSON.stringify(item)));
     for(let index=0;index<statements.length;index+=100)await db.batch(statements.slice(index,index+100));
     await db.prepare('UPDATE review_state SET progress = json_patch(progress, ?) WHERE scope = ?').bind(incoming,scope).run();
    }else if(method==='PUT'){
