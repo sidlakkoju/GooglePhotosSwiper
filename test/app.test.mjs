@@ -23,10 +23,10 @@ test('local HTTP flow: login, one-time pairing, import, decisions, album checkpo
   let code=(await request('/api/pair-code',{})).b.code;clock+=300001;assert.equal((await request('/api/bridge/pair',{code,account:'account',label:'Account'})).r.status,401);
   code=(await request('/api/pair-code',{})).b.code;const pair=await request('/api/bridge/pair',{code,account:'account',label:'Account'});bridgeToken=pair.b.token;assert.equal((await request('/api/bridge/pair',{code,account:'account',label:'Account'})).r.status,401);
   assert.equal((await request('/api/bridge/import',{items:[sample()],nextPageId:'page-2'},{bridge:true})).r.status,200);
-  let w=(await request('/api/workspace')).b;assert.equal(w.trimJobs,undefined);assert.equal(w.cropProvider,undefined);assert.equal((await request('/api/trim-jobs',{})).r.status,404);assert.equal((await fetch(base+'/trim-workflow.js')).status,404);assert.equal(w.items.length,1);assert.equal(w.cursor,'page-2');assert.equal(w.account,'account');
+  let w=(await request('/api/workspace')).b;assert.equal(w.trimJobs,undefined);assert.equal(w.cropProvider,undefined);assert.equal((await request('/api/trim-jobs',{})).r.status,404);assert.equal((await fetch(base+'/trim-workflow.js')).status,404);assert.equal(w.items.length,1);assert.equal(w.cursor,'page-2');assert.equal(w.account,'account');assert.equal(w.albumTitle,'Photos Swipe · Review · accoun');
   await request('/api/decisions',{id:w.items[0].id,decision:'remove',revision:0});const job=(await request('/api/album-jobs',{ids:[w.items[0].id]})).b;
   assert.equal((await request(`/api/bridge/jobs/${job.id}`,{status:'completed',albumKey:'album',confirmed:['photoA']},{bridge:true})).r.status,200);
-  w=(await request('/api/workspace')).b;assert.equal(w.items[0].albumKey,'album');assert.equal(w.jobs[0].status,'completed');
+  w=(await request('/api/workspace')).b;assert.equal(w.albumTitle,job.title);assert.equal(w.items[0].albumKey,'album');assert.equal(w.jobs[0].status,'completed');
   // Bad/expired re-pair attempts must not revoke the existing account or jobs.
   assert.equal((await request('/api/bridge/pair',{code:'000000',account:'account',label:'Account'})).r.status,401);
   const stale=(await request('/api/pair-code',{})).b.code;clock+=300001;

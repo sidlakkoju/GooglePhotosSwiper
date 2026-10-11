@@ -21,6 +21,7 @@ function createToastHarness(){
  const context={
   $:id=>elements[id],
   albumCandidates,
+  workspace:{albumTitle:'Photos Swipe review',accountLabel:'Synthetic account'},
   items:[{id:'queued',type:'photo'}],
   decisions:{queued:'remove'},
   setTimeout(callback,delay){assert.equal(delay,2800);timers.set(++timerId,callback);return timerId;},
@@ -38,7 +39,7 @@ test('opening the send dialog clears the Undo toast and timer without reviving i
  assert.equal(timers.size,1);
  elements['send-album'].onclick();
  assert.equal(elements['album-dialog'].open,true);
- assert.equal(elements['album-confirmation'].textContent,'Add 1 removal candidate to your Photos Swipe review album?');
+ assert.equal(elements['album-confirmation'].textContent,'Add 1 removal candidate to “Photos Swipe review” in Google Photos → Albums (Synthetic account)?');
  assert.equal(classes.has('show'),false);
  assert.equal(elements.toast.textContent,'');
  assert.equal(timers.size,0);
