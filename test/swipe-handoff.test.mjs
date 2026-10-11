@@ -2,15 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {throwSwipe} from '../public/swipe.js';
+import {throwSwipe as throwPublicSwipe} from '../public/swipe.js';
+import {throwSwipe as throwUserscriptSwipe} from '../lib/swipe.mjs';
 
-test('a rotated outgoing copy retains the release transform and untransformed border box',()=>{
- const transform='translateX(120px) rotate(6deg)';
+for(const [surface,throwSwipe] of [['deck',throwPublicSwipe],['userscript',throwUserscriptSwipe]])for(const dx of [-120,120])test(`${surface} outgoing copy retains rotated release geometry for dx ${dx}`,()=>{
+ const transform=`translateX(${dx}px) rotate(${dx/20}deg)`;
  let frames;
  const copy={style:{},removeAttribute(){},setAttribute(){},querySelectorAll:()=>[],remove(){},getBoundingClientRect:()=>({width:340}),animate:f=>{frames=f;return {finished:Promise.resolve()};}};
- const original={style:{transform,transition:'none'},ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect(){return this.style.transform==='none'?{left:10,top:20,width:300,height:400}:{left:110,top:5,width:340,height:430};}};
- throwSwipe(original,120,240);
+ const original={style:{transform,transition:'transform .23s ease'},ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect(){assert.equal(this.style.transition,'none');return this.style.transform==='none'?{left:10,top:20,width:300,height:400}:{left:110,top:5,width:340,height:430};}};
+ throwSwipe(original,dx,240);
  assert.equal(original.style.transform,transform);
+ assert.equal(original.style.transition,'transform .23s ease');
+ assert.equal(copy.style.transition,'none');
  assert.equal(copy.style.width,'300px');
  assert.equal(copy.style.height,'400px');
  assert.equal(copy.style.left,'10px');
