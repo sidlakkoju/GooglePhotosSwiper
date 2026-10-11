@@ -1040,3 +1040,34 @@ test('an animation that never settles releases the review task at its deadline',
  assert.equal(cancelled,true);
  assert.equal((await mounted.read()).items[0].decision,'keep');
 });
+
+
+test('revoked userscript shows recovery, keeps local swipes and clears credentials',async()=>{
+ const mounted=await mountedReview([item('synthetic')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.AbortSignal=AbortSignal;
+ let requests=0;reopened.environment.window.fetch=async()=>{requests++;return new Response('{}',{status:401});};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);assert.equal((await db.settings()).token,'');
+ reopened.nodes.get('keep').onclick();await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
+ const saved=await mounted.read();assert.equal(saved.items[0].decision,'keep');assert.equal(saved.syncPending.synthetic,'keep');assert.equal(requests,1);
+ reopened.nodes.get('pair-again').onclick();assert.equal(reopened.nodes.get('enter-pairing-code').open,true);
+ reopened.nodes.get('dismiss-unpaired').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);
+});
+
+
+test('paired devices render names safely and inline rename and confirmed revoke refresh server state',async()=>{
+ const requests=[],prompts=[];let name='<synthetic>',active=true;
+ const mounted=await mountedReview([], {confirm:prompt=>{prompts.push(prompt);return true;},fetch:async(url,options)=>{
+  const path=new URL(url).pathname;requests.push([path,options.method]);
+  if(path==='/api/devices/qa'&&options.method==='PATCH')name=JSON.parse(options.body).name;
+  if(path==='/api/devices/qa'&&options.method==='DELETE')active=false;
+  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:active?[{id:'qa',name,platform:'Browser',created_at:1,last_seen_at:1,revoked_at:null,is_legacy:1}]:[]}:{decisions:[],history:[],progress:{}}};
+ }});
+ mounted.environment.AbortSignal=AbortSignal;mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';await mounted.click('sync-save');await mounted.click('refresh-devices');
+ const list=mounted.nodes.get('devices-list'),row=list.childNodes[0];assert.match(row.childNodes[0].textContent,/<synthetic>.*Legacy shared token/);
+ row.childNodes[1].onclick();row.childNodes[3].value='  QA phone  ';await row.childNodes[4].onclick();assert.equal(name,'QA phone');
+ await list.childNodes[0].childNodes[2].onclick();assert.equal(list.childNodes.length,0);assert.equal(prompts[0],'Revoke QA phone? It will stop syncing immediately.');
+ assert.ok(requests.some(([path,method])=>path==='/api/devices/qa'&&method==='PATCH'));
+});

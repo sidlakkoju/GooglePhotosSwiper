@@ -72,7 +72,7 @@ test('HTTP rejection preserves pending changes and settings reject insecure or c
  client.configure({url:'https://sync.example',token:'wrong'});
  const state={items:[],history:[],syncPending:{item:'remove'},syncDirty:true};
  assert.equal(await client.sync('account',state,()=>{throw Error('Unexpected save');}),state);
- assert.match(statuses.at(-1),/401.*saved locally/);
+ assert.equal(statuses.at(-1),'This device was unpaired.');
  for(const url of ['http://sync.example','https://user:pass@sync.example','https://sync.example/api/','https://sync.example/?token=secret'])assert.throws(()=>validateSyncSettings(url,'secret'));
  assert.deepEqual(validateSyncSettings('',''),{url:'',token:''});
 });
@@ -311,4 +311,26 @@ test('device mutations report unknown IDs and revocation remains idempotent',asy
   assert.equal((await call(e,`devices/${device.deviceId}`,'DELETE')).status,200);
   assert.equal(e.DB.sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(device.deviceId).revoked_at,revoked);
  }finally{Date.now=original;}
+});
+
+
+test('device names are trimmed plain text of 1–40 characters and lists are newest first',async()=>{
+ const e=env(),device=await (await claim(e,{code:(await start(e)).code})).json();
+ for(const name of ['', ' ', 'x'.repeat(41), '<img>', 'line\nname', 'hidden\u202ename'])assert.equal((await call(e,`devices/${device.deviceId}`,'PATCH',{name})).status,400);
+ assert.equal((await call(e,`devices/${device.deviceId}`,'PATCH',{name:"  QA's phone  "})).status,200);
+ e.DB.sqlite.prepare('UPDATE devices SET created_at = 1 WHERE id = ?').run('legacy');
+ const list=await (await call(e,'devices')).json();assert.equal(list.devices[0].id,device.deviceId);assert.equal(list.devices[0].name,"QA's phone");
+ await call(e,`devices/${device.deviceId}`,'DELETE');
+ for(const [path,method,value] of [['devices','GET'],['devices/legacy','PATCH',{name:'Guess'}],['devices/legacy','DELETE'],['devices/revoke-others','POST']])assert.equal((await call(e,path,method,value,withToken(device.token))).status,401);
+});
+
+test('401 at a pending write stops further requests and re-pairing merges retained decisions',async()=>{
+ const e=env();let requests=0,revocations=0,reject=true;
+ const client=createSyncClient({unpaired:()=>{revocations++;},fetch:(url,options)=>{requests++;if(reject&&options.method==='PUT')return new Response('{}',{status:401});return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ let state={started:true,items:[{mediaKey:'synthetic',decision:'remove'}],history:[],syncPending:{synthetic:'remove'},syncDirty:true};
+ assert.equal(await client.sync('qa',state,async()=>{throw Error('Unexpected save');}),state);
+ const count=requests;await client.sync('qa',state,async value=>value);assert.equal(requests,count);assert.equal(revocations,1);assert.equal(state.syncPending.synthetic,'remove');
+ reject=false;client.configure({url:'https://sync.example',token:'test-secret'});state=await client.sync('qa',state,async value=>value);
+ assert.deepEqual(state.syncPending,{});assert.equal((await (await call(e,'state?scope=qa')).json()).decisions[0].decision,'remove');
 });
