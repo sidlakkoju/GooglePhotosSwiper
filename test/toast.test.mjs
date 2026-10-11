@@ -70,7 +70,7 @@ test('toast replacement and click dismissal cancel the previous timer',()=>{
  assert.equal(timers.size,0);
 });
 
-test('loading no new fake media shows a notification in its own flow space before the empty-state queue button',async()=>{
+test('loading no new fake media shows a notification without shifting the review controls before the empty-state queue button',async()=>{
  const items=[{id:'synthetic-photo',type:'photo',decision:'remove'}];
  const result=await loadReviewBatch({initial:{items,cursor:'older'},fetchPage:async()=>({count:0}),readWorkspace:async()=>({items,cursor:null,exhausted:true})});
  assert.equal(result.added,0);
@@ -85,9 +85,30 @@ test('loading no new fake media shows a notification in its own flow space befor
  assert.ok(main.indexOf('id="toast"')<main.indexOf('id="empty-queue"'));
  assert.equal((html.match(/id="toast"/g)||[]).length,1);
  const rules=[...css.matchAll(/#toast(?:\.show)?\s*\{([^}]*)\}/g)].map(match=>match[1]).join(';');
- assert.match(rules,/position:static(?:;|$)/);
+ assert.match(rules,/position:fixed(?:;|$)/);
  assert.match(rules,/display:none(?:;|$)/);
  assert.match(rules,/display:block(?:;|$)/);
  assert.match(rules,/overflow-wrap:anywhere(?:;|$)/);
- assert.doesNotMatch(rules,/(?:position\s*:\s*(?:fixed|absolute|sticky)|(?:top|bottom|left|right|transform)\s*:)/);
+ assert.match(rules,/max-width:calc\(100vw - 32px\)/);
+});
+
+
+test('fixed notifications stay below the header and mobile tabs even when messages wrap',async()=>{
+ const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+ const declarations=[...css.matchAll(/#toast\s*\{([^}]*)\}/g)].flatMap(match=>match[1].split(';')).filter(Boolean).map(declaration=>declaration.split(':'));
+ const styles=Object.fromEntries(declarations);
+ assert.equal(styles.position,'fixed');
+ assert.equal(styles.bottom,'16px');
+ assert.equal(styles.top,undefined);
+ assert.equal(styles.margin,'0');
+ assert.equal(styles['max-height'],'calc(100dvh - 144px)');
+ assert.equal(styles['overflow-y'],'auto');
+ for(const {width,height} of [{width:393,height:852},{width:320,height:568}]){
+  const bottom=height-parseFloat(styles.bottom);
+  const maximumHeight=height-Number(styles['max-height'].match(/- (\d+)px/)[1]);
+  for(const messageHeight of [44,180,1000]){
+   const top=bottom-Math.min(messageHeight,maximumHeight);
+   assert.ok(top>=128,`${width}×${height}: notification must clear the header and mobile tabs`);
+  }
+ }
 });
