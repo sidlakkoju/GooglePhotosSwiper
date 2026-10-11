@@ -906,7 +906,9 @@ test('GM pairing migrates once, removes page credentials and survives page stora
  await store.saveSettings({url:'https://sync.example',token:'replacement-token',deviceName:'New phone',onboardingDismissed:true,items:['excluded']});
  const replacement=await store.settings();assert.equal(replacement.token,'replacement-token');assert.ok(replacement.deviceId);assert.equal(writes.at(-1).items,undefined);assert.equal(writes.at(-1).onboardingDismissed,undefined);assert.deepEqual(await db.settings(),{onboardingDismissed:true});
  await store.saveSettings({...replacement,token:'',unpaired:true,onboardingDismissed:true});
- assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);assert.equal((await store.settings()).unpaired,true);assert.deepEqual(await db.settings(),{onboardingDismissed:true,unpaired:true});
+ assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);assert.equal((await store.settings()).unpaired,true);assert.deepEqual(await db.settings(),{url:replacement.url,deviceId:replacement.deviceId,deviceName:replacement.deviceName,onboardingDismissed:true,unpaired:true});
+ assert.equal((await store.settings()).url,replacement.url);assert.equal((await store.settings()).deviceId,replacement.deviceId);assert.equal((await store.settings()).deviceName,replacement.deviceName);
+ await store.saveSettings({...await store.settings(),onboardingDismissed:true});assert.equal((await store.settings()).url,replacement.url);
  await store.saveSettings({url:'https://sync.example',token:'synthetic-repaired-token',onboardingDismissed:true});
  assert.equal((await store.settings()).unpaired,undefined);assert.equal((await store.settings()).token,'synthetic-repaired-token');
  await store.saveSettings({url:'',token:''});assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);
@@ -1376,4 +1378,23 @@ test('device actions are disabled before configuration and after revoking this d
  for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
  assert.equal(mounted.nodes.get('devices-list').childNodes.length,0);
  assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
+});
+
+
+test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const first=bundleEnvironment(),indexedDB=first.environment.window.indexedDB;
+ let pairing={url:'https://sync.example',token:'synthetic-revoked-token',deviceId:'synthetic-device',deviceName:'Synthetic phone'},reject=true;
+ const GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ const mount=async()=>{
+  const mounted=bundleEnvironment();mounted.environment.window.indexedDB=indexedDB;mounted.environment.GM=GM;mounted.environment.AbortSignal=AbortSignal;
+  mounted.environment.window.fetch=async()=>reject?new Response('{}',{status:401}):new Response(JSON.stringify({decisions:[],history:[],progress:{}}));
+  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();return mounted;
+ };
+ const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);revoked.nodes.get('close').onclick();
+ const reopened=await mount();assert.equal(reopened.nodes.get('sync-url').value,'https://sync.example');assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);
+ reject=false;reopened.nodes.get('sync-token').value='synthetic-new-token';reopened.nodes.get('sync-save').onclick();await waitForReview(()=>reopened.nodes.get('overlay')['aria-busy']==='false');
+ assert.equal(pairing.token,'synthetic-new-token');assert.equal(pairing.deviceId,'synthetic-device');assert.equal(pairing.deviceName,'Synthetic phone');assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);assert.match(reopened.nodes.get('sync-status').textContent,/Synced/);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.equal((await (await openReviewDatabase(indexedDB)).settings()).unpaired,undefined);
+ reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
 });
