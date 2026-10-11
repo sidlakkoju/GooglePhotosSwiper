@@ -14,6 +14,7 @@ function review(){
   return elements.get(id);
  };
  const context=vm.createContext({$,items,decisions,history,busy:false,animating:false,mode:'fake',workspace:{},active:()=>items.find(item=>!decisions[item.id]),pending:()=>items.filter(item=>!decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},toast(){},updateDecision:async(item,decision)=>{if(decision)decisions[item.id]=decision;else delete decisions[item.id];},matchMedia:()=>({matches:true}),setTimeout:fn=>fn()});
+ vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  for(const name of ['render','choose','undo']){
   const line=source.split('\n').find(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));
   vm.runInContext(line,context);
