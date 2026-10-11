@@ -775,6 +775,28 @@ test('photo viewer consumes Space without scrolling, closing or recording decisi
  }
 });
 
+test('pairing settings failure after sign-in preserves the loaded review session',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const saved=await db.save(account,{...emptyReview(),items:[item('synthetic-photo')]});
+ let reads=0;
+ mounted.environment.GM={getValue:async()=>{if(++reads>1)throw Error('Synthetic pairing read failure');},setValue:async()=>{},deleteValue:async()=>{}};
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ assert.equal(reads,2);
+ assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);
+ assert.match(mounted.nodes.get('caption').textContent,/^synthetic-photo · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal(mounted.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>node.textContent==='Pairing storage unavailable: Synthetic pairing read failure'));
+ assert.deepEqual(await db.read(account),saved);
+ mounted.nodes.get('keep').onclick();
+ for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal((await db.read(account)).items[0].decision,'keep');
+ assert.equal(mounted.nodes.get('status').textContent,'Kept synthetic-photo.');
+});
+
 test('first-use sync setup is above the card and local dismissal survives reopening',async()=>{
  const mounted=await mountedReview([item('a')]);
  const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
