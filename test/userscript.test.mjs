@@ -521,6 +521,46 @@ test('swipes lock direction after slop and cancellation releases capture without
   assert.equal((await mounted.read()).items[0].decision,null);
  }
 });
+test('video capture transfer preserves the swipe until media capture ends',async()=>{
+ for(const cancel of [false,true]){
+  const mounted=await mountedReview([item('video',{type:'video'})]),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  let captured=false;
+  media.setPointerCapture=()=>{captured=true;};
+  media.hasPointerCapture=()=>captured;
+  media.releasePointerCapture=()=>{captured=false;};
+  media.listeners.pointerdown(swipeEvent({target:video,pointerType:'touch'}));
+  media.listeners.pointermove(swipeEvent({target:video,clientX:120}));
+  media.listeners.lostpointercapture(swipeEvent({target:video}));
+  assert.equal(captured,true);assert.equal(media.style.transform,'translateX(100px)');
+  if(cancel){
+   captured=false;
+   media.listeners.lostpointercapture(swipeEvent({target:media}));
+   assert.equal(media.style.transform,'');
+  }
+  media.listeners.pointerup(swipeEvent({target:media,clientX:120}));
+  for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal((await mounted.read()).items[0].decision,cancel?null:'keep');
+ }
+});
+test('mouse capture delivers release outside either swipe surface during slop and allows the next swipe',async()=>{
+ for(const surface of ['media','swipe']){
+  const mounted=await mountedReview([item('mouse')]),target=mounted.nodes.get(surface);
+  let captured=false;
+  target.setPointerCapture=()=>{captured=true;};
+  target.hasPointerCapture=()=>captured;
+  target.releasePointerCapture=()=>{captured=false;};
+  target.listeners.pointerdown(swipeEvent({target,pointerType:'mouse'}));
+  assert.equal(captured,true);
+  target.listeners.pointermove(swipeEvent({target,clientX:25,clientY:24}));
+  if(captured)target.listeners.pointerup(swipeEvent({target,clientX:25,clientY:24}));
+  assert.equal(captured,false);assert.equal((await mounted.read()).items[0].decision,null);
+  target.listeners.pointerdown(swipeEvent({target,pointerType:'mouse'}));
+  target.listeners.pointermove(swipeEvent({target,clientX:120}));
+  target.listeners.pointerup(swipeEvent({target,clientX:120}));
+  for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+ }
+});
 test('deck videos support tap playback and swiping with native controls only when enlarged',async()=>{
  const mounted=await mountedReview([item('synthetic-video',{type:'video'}),item('next')],{fetch:async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])})});
  const media=mounted.nodes.get('media'),video=media.querySelector('video');
@@ -546,6 +586,8 @@ test('overlay isolates pointer touch wheel and all key events while preserving n
  const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
  const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
  assert.match(source,/\.card\{touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media\{touch-action:pan-y;[^}]*overflow:auto/);
+ assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
  assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
 
