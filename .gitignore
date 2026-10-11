@@ -5,3 +5,8 @@ node_modules/
 test-results/
 
 diagrams/**/.grok/
+
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env.*

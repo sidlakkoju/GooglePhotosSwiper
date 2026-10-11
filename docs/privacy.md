@@ -31,3 +31,7 @@ Use **Revoke extension pairing** in the app to invalidate the backend grant. **F
 The core bridge creates/finds a review album and adds selected candidates to it. It performs no sharing, Trash mutation or permanent deletion. Deletion checks read state only. A library/album API format change can interrupt an operation; failed/unknown checks do not justify discarding data or treating absent items as permanently deleted.
 
 The cropping feature branch may upload replacement videos and contains optional OAuth setup. Those providers are absent from active core. Its private jobs and media are retained locally, and pending originals remain protected until that feature is revisited.
+
+## Optional userscript sync
+
+The standalone userscript can sync to a personally configured Worker. Its D1 database holds account-scoped item IDs, keep/remove decisions, review counts and bounded undo history. It receives no image data, preview URLs, Google tokens or cookies. The sync bearer token is stored per device in IndexedDB and as a Worker secret. See [sync setup](sync.md) for deployment, token rotation and offline behavior.

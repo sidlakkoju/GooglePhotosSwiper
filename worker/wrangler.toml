@@ -1,0 +1,15 @@
+name = "photoswiper-sync"
+main = "src/index.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[[rules]]
+type = "Text"
+globs = ["**/photoswiper.user.js"]
+fallthrough = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "photoswiper-sync"
+database_id = "REPLACE_DATABASE_ID"
+migrations_dir = "migrations"
