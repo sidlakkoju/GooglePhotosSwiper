@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {albumCandidates} from '../public/model.js';
+import {loadReviewBatch,importMessage} from '../public/import-review.js';
 
 const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 
@@ -67,4 +68,26 @@ test('toast replacement and click dismissal cancel the previous timer',()=>{
  assert.equal(classes.has('show'),false);
  assert.equal(elements.toast.textContent,'');
  assert.equal(timers.size,0);
+});
+
+test('loading no new fake media shows a notification in its own flow space before the empty-state queue button',async()=>{
+ const items=[{id:'synthetic-photo',type:'photo',decision:'remove'}];
+ const result=await loadReviewBatch({initial:{items,cursor:'older'},fetchPage:async()=>({count:0}),readWorkspace:async()=>({items,cursor:null,exhausted:true})});
+ assert.equal(result.added,0);
+ const {elements,classes,notify}=createToastHarness();
+ notify(importMessage(result));
+ assert.match(elements.toast.textContent,/0 new items to review/);
+ assert.equal(classes.has('show'),true);
+ const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+ const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+ const main=html.match(/<main>([\s\S]*?)<\/main>/)[1];
+ assert.match(main,/<div id="toast" role="status" aria-live="polite"><\/div><section id="review-view">/);
+ assert.ok(main.indexOf('id="toast"')<main.indexOf('id="empty-queue"'));
+ assert.equal((html.match(/id="toast"/g)||[]).length,1);
+ const rules=[...css.matchAll(/#toast(?:\.show)?\s*\{([^}]*)\}/g)].map(match=>match[1]).join(';');
+ assert.match(rules,/position:static(?:;|$)/);
+ assert.match(rules,/display:none(?:;|$)/);
+ assert.match(rules,/display:block(?:;|$)/);
+ assert.match(rules,/overflow-wrap:anywhere(?:;|$)/);
+ assert.doesNotMatch(rules,/(?:position\s*:\s*(?:fixed|absolute|sticky)|(?:top|bottom|left|right|transform)\s*:)/);
 });
