@@ -57,6 +57,57 @@ test('sync uses authenticated page fetch, merges remote IDs, and retries local o
  assert.equal(requests[0].options.credentials,'omit');assert.equal(statuses.at(-1),'Synced · 2 reviewed IDs');
  client.configure({});const count=requests.length;await client.sync('account',state,save);assert.equal(requests.length,count);
 });
+test('sync timeouts show a friendly status and only the first sync retries',async()=>{
+ const statuses=[];let requests=0;
+ const client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>{requests++;throw new DOMException('signal timed out','TimeoutError');}});
+ const settings={url:'https://sync.example',token:'synthetic-token'},state={items:[],history:[],syncPending:{synthetic:'keep'}};
+ client.configure(settings);
+ const save=async()=>{throw Error('Unexpected save');};
+ assert.equal(await client.sync('qa',state,save),state);
+ assert.equal(requests,2);
+ assert.match(statuses.at(-1),/^Sync timed out.*saved locally/);
+ assert.doesNotMatch(statuses.join(' '),/signal timed out/);
+ await client.sync('qa',state,save);
+ assert.equal(requests,3);
+ client.configure(settings);
+ await client.sync('qa',state,save);
+ assert.equal(requests,5);
+});
+test('first sync retries a timed-out request and saves the successful response',async()=>{
+ const statuses=[],signals=[];let requests=0;
+ const client=createSyncClient({status:value=>statuses.push(value),fetch:async(url,options)=>{
+  signals.push(options.signal);
+  if(++requests===1)throw new DOMException('signal timed out','TimeoutError');
+  return Response.json({decisions:[{id:'synthetic',decision:'keep'}],history:[],progress:{}});
+ }});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let saves=0;
+ const result=await client.sync('qa',{items:[{mediaKey:'synthetic',decision:null}],history:[]},async value=>{saves++;return value;});
+ assert.equal(requests,2);
+ assert.equal(saves,1);
+ assert.notEqual(signals[0],signals[1]);
+ assert.equal(result.items[0].decision,'keep');
+ assert.equal(statuses.at(-1),'Synced · 1 reviewed IDs');
+ assert.equal(statuses.some(value=>value.includes('timed out')),false);
+});
+test('an expired request signal normalizes browser AbortError text',async t=>{
+ t.mock.method(AbortSignal,'timeout',()=>AbortSignal.abort(new DOMException('signal timed out','TimeoutError')));
+ const statuses=[];
+ const client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>{throw new DOMException('The operation was aborted','AbortError');}});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ await client.sync('qa',{items:[],history:[]},async value=>value);
+ assert.equal(statuses.at(-1),'Sync timed out · saved locally; retry on next action');
+});
+test('non-timeout sync failures do not retry and preserve clear error messages',async()=>{
+ for(const [error,message] of [[Error('Offline'),'Offline'],[new DOMException('The operation was aborted','AbortError'),'Sync cancelled']]){
+  const statuses=[];let requests=0;
+  const client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>{requests++;throw error;}});
+  client.configure({url:'https://sync.example',token:'synthetic-token'});
+  await client.sync('qa',{items:[],history:[]},async value=>value);
+  assert.equal(requests,1);
+  assert.equal(statuses.at(-1),`${message} · saved locally; retry on next action`);
+ }
+});
 test('remote undo clears a previously synced decision on another device',async()=>{
  const e=env(),client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
  client.configure({url:'https://sync.example',token:'test-secret'});

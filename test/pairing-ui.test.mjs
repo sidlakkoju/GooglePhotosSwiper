@@ -20,7 +20,24 @@ test('manual fallback sends only the six-digit short code in the claim body',asy
 test('countdown keeps updating while a status request is slow',async()=>{const elements=dom(),timers=[];let time=10000,resolve;const f=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'token'}),fetch:async url=>url.includes('status')?new Promise(done=>resolve=done):{ok:true,json:async()=>({id:'id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:20000})},now:()=>time,setTimeout:callback=>{timers.push(callback);return callback;},clearTimeout:callback=>{const index=timers.indexOf(callback);if(index>=0)timers.splice(index,1);},renderQR:document=>document.createElement('canvas')});await f.open();time=12500;const pending=timers.shift()();time=14000;await timers.shift()();assert.equal(f.modal.children[3].textContent,'00:06');resolve({ok:true,json:async()=>({claimed:true,name:'Phone'})});await pending;assert.equal(timers.length,0);});
 
 test('QR renderer includes a four-module white quiet zone',()=>{const elements=dom(),fills=[];const create=elements.document.createElement;elements.document.createElement=tag=>{const canvas=create(tag);canvas.getContext=()=>({fillRect:(...args)=>fills.push(args)});return canvas;};const canvas=renderPairingQR(elements.document,'https://photoswiper-sync.sidlakkoju.workers.dev/pair#abcdefghijklmnopqrstuv');assert.equal(canvas.width,270);assert.equal(canvas.height,270);assert.deepEqual(fills[0],[0,0,270,270]);for(const [x,y,width,height] of fills.slice(1)){assert.ok(x>=24&&y>=24&&x+width<=246&&y+height<=246);}});
-test('pairing bundle stays within the 15 KB growth budget without runtime dependencies',async()=>{const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));const performanceGrowth=76764-58137;const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);assert.ok(source.length<=83032+performanceGrowth+isolationBytes+15*1024);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);});
+const prePairingMainBytes=83032;
+const photoURLRefreshGrowthBytes=3194;
+const themeGrowthBytes=3078;
+const performanceGrowthBytes=76764-58137;
+const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
+const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
+const prePairingCurrentBytes=prePairingMainBytes+performanceGrowthBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+isolationBytes;
+const pairingGrowthBudgetBytes=15*1024;
+function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
+test('pairing bundle stays within the 15 KB growth budget without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
+test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
+ const boundary=Buffer.alloc(prePairingCurrentBytes+pairingGrowthBudgetBytes,32);
+ assertPairingBundleBudget(boundary);
+ assert.throws(()=>assertPairingBundleBudget(Buffer.concat([boundary,Buffer.from(' ')])),assert.AssertionError);
+});
+test('pairing budget rejects runtime dependencies even below the size limit',()=>{
+ for(const directive of ['require','connect'])assert.throws(()=>assertPairingBundleBudget(Buffer.from(`// @${directive} https://synthetic.example/dependency.js`)),assert.AssertionError);
+});
 
 test('custom Worker hand-off and manual codes claim and save the issuing origin',async()=>{
  for(const manual of [false,true]){
