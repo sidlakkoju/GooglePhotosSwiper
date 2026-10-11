@@ -79,6 +79,6 @@ dialog.photo-viewer{width:calc(100vw - 40px);max-width:1600px;height:calc(100dvh
 }
 #album-confirmation{overflow-wrap:anywhere}
 
-@media(pointer:coarse),(hover:none){
+@media(pointer:coarse){
   .keyboard-hint{display:none}
 }
