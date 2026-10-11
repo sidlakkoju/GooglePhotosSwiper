@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createReviewPreloader} from '../lib/userscript-preload.mjs';
+import {createReviewPreloader,reviewURLStale} from '../lib/userscript-preload.mjs';
 const photo=key=>({mediaKey:key,type:'photo',thumbUrl:`https://fixture.invalid/${key}`});
 const video=key=>({...photo(key),type:'video'});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
@@ -49,4 +49,11 @@ test('failed decode and video requests are swallowed and may be retried on later
  assert.ok(photos.images[0].removed.includes('src'));
  decodeFails=false;photos.buffer.update([photo('a'),photo('b')],photo('a'),size);await tick();
  assert.equal(photos.images.length,2);assert.equal(photos.images[1].decodeCalls,1);
+});
+
+test('saved URL freshness expires at forty minutes and treats legacy batches as stale',()=>{
+ const now=50*60*1000;
+ assert.equal(reviewURLStale({},now),true);
+ assert.equal(reviewURLStale({urlFetchedAt:now-40*60*1000},now),true);
+ assert.equal(reviewURLStale({urlFetchedAt:now-40*60*1000+1},now),false);
 });

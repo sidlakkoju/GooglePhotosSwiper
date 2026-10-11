@@ -11,7 +11,7 @@ import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndo
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
-const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
+const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',urlFetchedAt:Date.now(),thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
 function fixture(responder){
  const calls=[],window={WIZ_global_data:{...tokens}};
  const api=createPhotosAPI({window,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,fetch:async(url,options)=>{
@@ -255,9 +255,9 @@ function bundleEnvironment(fault={}) {
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
+ const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
- result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
 test('library sightings restore active state and retain local album membership on load and refresh',()=>{
@@ -1143,4 +1143,58 @@ test('device actions are disabled before configuration and after revoking this d
  for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
  assert.equal(mounted.nodes.get('devices-list').childNodes.length,0);
  assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
+});
+
+const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
+
+test('stale saved previews refresh only the current and preload window on open and resume',async()=>{
+ const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
+ const mounted=await mountedReview(items,async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key],`https://lh3.googleusercontent.com/fresh-${key}`])};
+ });
+ await settlePreviews();
+ assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
+ assert.equal(calls.length,4);
+ assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
+ assert.equal((await mounted.read()).items.filter(row=>row.decision).length,0);
+ calls.length=0;
+ mounted.environment.document.visibilityState='visible';
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();
+ assert.equal(calls.length,0);
+ const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
+ try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+ assert.equal(calls.length,4);
+ mounted.nodes.get('close').onclick();calls.length=0;
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();assert.equal(calls.length,0);
+});
+
+test('photo and video errors refresh once then replace failed media with an explicit Retry card',async()=>{
+ for(const type of ['photo','video']){
+  const calls=[];
+  const mounted=await mountedReview([item('expired',{type})],async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];calls.push(entry[0]);
+   return {ok:true,text:async()=>envelope('VrseUb',[['expired'],`https://lh3.googleusercontent.com/fresh-${calls.length}`])};
+  });
+  await settlePreviews();calls.length=0;
+  const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
+  await first.onerror();await settlePreviews();
+  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,/fresh-/);
+  assert.equal(calls.length,type==='video'?2:1);
+  await retried.onerror();assert.equal(container.querySelector(tag),null);
+  const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
+  const count=calls.length;retry.onclick();await settlePreviews();
+  assert.ok(container.querySelector(tag));assert.ok(calls.length>count);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+
+test('late expired preview responses cannot replace a newly selected card',async()=>{
+ const response=Promise.withResolvers();
+ const mounted=await mountedReview([item('old'),item('next')],async()=>{await response.promise;return {ok:true,text:async()=>envelope('VrseUb',[['old'],'https://lh3.googleusercontent.com/fresh-old'])};});
+ const failed=mounted.nodes.get('media').querySelector('img').onerror();
+ await mounted.click('keep');const next=mounted.nodes.get('media').querySelector('img');
+ response.resolve();await failed;await settlePreviews();
+ assert.equal(mounted.nodes.get('media').querySelector('img'),next);
+ assert.match(mounted.nodes.get('caption').textContent,/^next/);
 });
