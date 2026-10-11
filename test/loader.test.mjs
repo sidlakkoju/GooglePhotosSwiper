@@ -117,3 +117,61 @@ test('loader refuses page injection when private GM storage is unavailable',asyn
  const {env,scripts}=environment(null,signed());delete env.GM.deleteValue;
  assert.equal(await startLoader(env,key),false);assert.equal(scripts.length,0);assert.equal(env.window.appRuns,undefined);
 });
+
+test('Trusted Types execution keeps GM private and reuses its policy',async()=>{
+ const release=signed('1.2.3',"if(!GM.privateToken)throw Error('Missing private GM');window.appRuns=(window.appRuns||0)+1;");
+ const {env,scripts}=environment(null,release);
+ env.GM.privateToken='private-sync-token';
+ const trustedScripts=new WeakMap(),sources=[],names=[];
+ delete env.trustedTypes;
+ env.window.trustedTypes={createPolicy(name,rules){
+  names.push(name);
+  return {createScript(input){sources.push(input);const trusted={};trustedScripts.set(trusted,rules.createScript(input));return trusted;}};
+ }};
+ const context=vm.createContext({Function(){throw new EvalError('Function constructor unavailable');}});
+ env.eval=value=>{
+  assert.ok(trustedScripts.has(value),'eval requires a TrustedScript');
+  return vm.runInContext(trustedScripts.get(value),context);
+ };
+ assert.equal(await startLoader(env,key),true);
+ assert.equal(env.window.appRuns,1);
+ delete env.document.documentElement.dataset.psLoaderInjected;
+ assert.equal(await startLoader(env,key),true);
+ assert.equal(env.window.appRuns,2);
+ assert.equal(names.length,1);assert.match(names[0],/^photoswiper-loader-/);
+ assert.equal(sources.length,2);assert.equal(scripts.length,0);
+ for(const value of [env.window,env.document,env.unsafeWindow])assert.ok(!JSON.stringify(value)?.includes('private-sync-token'));
+ assert.ok(!Object.values(env.window).includes(env.GM));
+});
+
+test('unverified and modified releases never reach Trusted Types or eval',async()=>{
+ for(const release of [{...signed(),code:'window.tampered=true;'},{version:'1.2.3',code:'window.unsigned=true;'}]){
+  const {env}=environment(null,release);
+  env.trustedTypes={createPolicy(){assert.fail('Unverified code created a policy');}};
+  env.eval=()=>assert.fail('Unverified code executed');
+  assert.equal(await startLoader(env,key),false);
+  assert.equal(injectRelease(env,release),false);
+ }
+ const release=signed(),{env}=environment(null,null);
+ assert.equal(await verifyRelease(release,webcrypto,key),true);
+ release.code+='window.tampered=true;';
+ env.trustedTypes={createPolicy(){return {createScript(){assert.fail('Modified code reached createScript');}};}};
+ env.eval=()=>assert.fail('Modified code executed');
+ assert.equal(injectRelease(env,release),false);
+});
+
+test('Trusted Types policy failure returns false and clears the injection marker',async()=>{
+ const {env,scripts}=environment(null,signed());
+ env.trustedTypes={createPolicy(){throw new TypeError('Policy denied');}};
+ env.eval=()=>assert.fail('Policy failure executed code');
+ assert.equal(await startLoader(env,key),false);
+ assert.equal(env.document.documentElement.dataset.psLoaderInjected,undefined);
+ assert.equal(env.window.appRuns,undefined);assert.equal(scripts.length,0);
+});
+
+test('loader sources never use the Function constructor',async()=>{
+ for(const path of ['../lib/userscript-loader.mjs','../userscript/photoswiper-loader.user.js']){
+  const source=await readFile(new URL(path,import.meta.url),'utf8');
+  assert.doesNotMatch(source,/new\s+Function\b|\bFunction\s*\(/);
+ }
+});
