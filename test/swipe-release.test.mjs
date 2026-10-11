@@ -57,6 +57,11 @@ test('outgoing visual copies are removed after animation while the original stay
  assert.ok(throwSwipe(original,1,240));
  assert.equal(appended,copy);
  assert.equal(removed,false);
+ assert.equal(copy.style.position,'fixed');
+ assert.equal(copy.style.left,'10px');
+ assert.equal(copy.style.top,'20px');
+ assert.equal(copy.style.width,'300px');
+ assert.equal(copy.style.height,'400px');
  assert.equal(copy.inert,true);
  assert.equal(copy.style.pointerEvents,'none');
  finish();
@@ -64,10 +69,23 @@ test('outgoing visual copies are removed after animation while the original stay
  assert.equal(removed,true);
 });
 
-test('web card stack contains paint to clip fixed outgoing copies',async()=>{
+test('web card stack preserves the viewport containing block for fixed outgoing copies',async()=>{
  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
  const rules=[...css.matchAll(/\.card-area\{([^}]*)\}/g)].map(match=>match[1]);
  assert.ok(rules.length>0);
- const containment=rules.flatMap(rule=>[...rule.matchAll(/(?:^|;)contain:([^;]+)/g)].map(match=>match[1]));
- assert.equal(containment.at(-1),'paint');
+ for(const rule of rules){
+  assert.doesNotMatch(rule,/(?:^|;)contain:[^;]*(?:paint|layout|strict|content)/);
+  assert.doesNotMatch(rule,/(?:^|;)(?:transform|filter|perspective):(?!(?:none)(?:;|$))/);
+ }
+});
+
+test('web card stack leaves backs, card shadows and keyboard focus outlines unclipped',async()=>{
+ const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+ const rules=[...css.matchAll(/\.card-area\{([^}]*)\}/g)].map(match=>match[1]);
+ assert.ok(rules.length>0);
+ for(const rule of rules){
+  assert.doesNotMatch(rule,/(?:^|;)contain:[^;]*(?:paint|strict|content)/);
+  assert.doesNotMatch(rule,/(?:^|;)overflow(?:-x|-y)?:[^;]*(?:hidden|clip|auto|scroll)/);
+  assert.doesNotMatch(rule,/(?:^|;)(?:clip|clip-path):(?!(?:auto|none)(?:;|$))/);
+ }
 });
