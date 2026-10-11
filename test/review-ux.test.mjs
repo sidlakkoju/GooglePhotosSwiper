@@ -9,6 +9,7 @@ const element=()=>({children:[],hidden:false,append(...children){this.children.p
 function queueContext(){
  const elements=Object.fromEntries(['queue-list','export','operations','album-link','send-album','album-confirmation','album-dialog','cancel-album','confirm-album'].map(id=>[id,element()]));
  const notices=[],item={id:'photo',name:'Synthetic photo.jpg',type:'photo',url:'/fake.jpg'},context={$:id=>elements[id],document:{createElement:element},IntersectionObserver:class{disconnect(){} observe(){}},queueObserver:null,queueGeneration:0,thumbnailTasks:[],items:[item],decisions:{photo:'remove'},history:[{id:'photo'}],workspace:{albumKey:'fake album',albumTitle:'Photos Swipe · Review · synthetic-account',accountLabel:'Synthetic account',jobs:[]},mode:'google',busy:false,animating:false,bridgeConnected:true,date:()=>'',formatBytes:()=>'',googleLink:()=>'',render(){},dismissToast(){},toast:message=>notices.push(message),updateDecision:async(i,d)=>context.decisions[i.id]=d,albumCandidates:()=>[item],removalQueue:()=>context.decisions.photo==='remove'?[item]:[],loadQueueThumbnail(){}};
+ context.setHistory=entries=>{context.history=entries;};
  vm.createContext(context);
  vm.runInContext(app.slice(app.indexOf('function renderQueue('),app.indexOf('function renderReconciliation(')),context);
  return {context,elements,notices,item};

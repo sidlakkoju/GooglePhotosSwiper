@@ -47,6 +47,6 @@ The queue estimate sums the same items shown in the current removal queue. The s
 
 ## Persistence
 
-Private runtime files live in `.data/`. SQLite owns imported metadata, decisions, session/pair hashes, album checkpoints, settings and reconciliation reports. Compatibility tables preserve crop jobs and generated-copy exclusions without running crop logic in core. Chrome extension storage retains its pairing credential; browser IndexedDB retains image previews. These stores are local and excluded from Git where applicable.
+Private runtime files live in `.data/`. SQLite owns imported metadata, decisions, session/pair hashes, album checkpoints, settings and reconciliation reports. Compatibility tables preserve crop jobs and generated-copy exclusions without running crop logic in core. Chrome extension storage retains its pairing credential; browser IndexedDB retains image previews. Tab-local session storage retains the last 100 swipes for Undo across reloads and imports. Entries are checked against current item decisions, revisions and eligibility before reuse; signing out or successfully sending an album clears this history. These stores are local and excluded from Git where applicable.
 
 See [privacy.md](privacy.md) for backup boundaries, [development.md](development.md) for tests, and [core-review-status.md](core-review-status.md) for verification history.

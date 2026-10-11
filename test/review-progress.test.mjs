@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {pending,summarize,removalQueue} from '../public/model.js';
+import {loadUndoHistory,validUndoHistory} from '../public/undo-history.js';
 
 test('workspace loading updates guide copy and progress while preserving guide dismissal',async()=>{
  const [html,css,app]=await Promise.all(['index.html','styles.css','app.js'].map(name=>readFile(new URL('../public/'+name,import.meta.url),'utf8')));
@@ -16,7 +17,8 @@ test('workspace loading updates guide copy and progress while preserving guide d
   return elements.get(id);
  };
  const saved=new Map();
- const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue,authenticated:true,history:[],localStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)}};
+ const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue,authenticated:true,history:[],historyRestored:false,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},localStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)}};
+ context.setHistory=entries=>{context.history=entries;};
  context.active=()=>pending(context.items,context.decisions)[0];
  for(const name of ['resetCardGesture','renderStorage','renderCard','renderQueue','renderOperations','renderReconciliation','renderControls','prefetchReview'])context[name]=()=>{};
  const renderSource=app.match(/^function render\(\)\{.*\}$/m)?.[0];

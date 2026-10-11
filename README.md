@@ -36,7 +36,7 @@ See the [setup and troubleshooting guide](docs/setup.md), or open the human-read
 | --- | --- |
 | Swipe right, right arrow, or ✓ | Keep the item and advance |
 | Swipe left, left arrow, or × | Queue the item for removal and advance |
-| Z or Undo | Undo the last decision made in this tab |
+| Z or Undo | Undo one of the last 100 swipes in this tab, including after reload |
 | F, double-click a photo, or enlarge button | Open the enlarged viewer |
 | F or Escape in the viewer | Close the enlarged viewer |
 | Space on a video | Play or pause |

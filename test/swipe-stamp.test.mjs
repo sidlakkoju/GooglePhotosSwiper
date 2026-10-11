@@ -16,6 +16,7 @@ function review(){
   return elements.get(id);
  };
  const context=vm.createContext({$,items,decisions,history,busy:false,animating:false,mode:'fake',workspace:{},active:()=>items.find(item=>!decisions[item.id]),pending:()=>items.filter(item=>!decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{if(decision)decisions[item.id]=decision;else delete decisions[item.id];},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){timers.set(++timerId,fn);return timerId;}fn();},clearTimeout:id=>timers.delete(id)});
+ context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
  for(const name of ['render','choose','undo']){

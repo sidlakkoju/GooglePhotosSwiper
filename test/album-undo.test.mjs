@@ -23,6 +23,7 @@ function harness({fail=false}={}){
   api:async()=>({id:'job',ids:['sent'],status:'queued'}),refreshWorkspace:async()=>{},
   setBusy:value=>{context.busy=value;context.renderControls();},render:()=>context.renderControls()
  };
+ context.setHistory=entries=>{context.history=entries;};
  vm.runInNewContext(functions,context);
  context.renderControls();
  return {context,writes,messages};

@@ -10,6 +10,7 @@ Photos Swipe is a personal local workspace. The backend listens on loopback only
 | `.data/access-code`, `.data/local-login-url`, `.env` | Local sign-in credentials/configuration | No |
 | Chrome extension local storage | Pairing bearer credential; experimental branch can hold crop upload/download checkpoints | No |
 | App browser IndexedDB | Cached image previews | No |
+| App browser session storage | Last 100 tab-local swipes for Undo after reload; cleared on app sign-out, tab close, or successful album send | No |
 | Browser memory | Object URLs and buffered video previews | No |
 | `.data/trim-jobs` and other experimental media | Original/export/recovery files and optional OAuth credentials on the crop branch | No |
 | `test-results/` | Live verification screenshots and recordings/artifacts | No |
