@@ -3,7 +3,7 @@
 export function describeConnection(state,checkedAt=new Date()) {
  if(!state?.installed)throw Error('The desktop bridge returned an invalid status. Reload the extension and this app tab.');
  if(!state.paired)return {phase:'pairing',connected:false,reconciliationSupported:false,summary:'Extension needs pairing',detail:`Extension ${state.version||'(older version)'} is installed. Generate a fresh code, pair in Google Photos, then check again.`};
- return {phase:'connected',connected:true,reconciliationSupported:!!state.reconciliationSupported,summary:'Desktop connected',detail:`Connection verified${state.recoveredTab?' in the open Google Photos tab':''} with ${state.label||'your Google account'} at ${checkedAt.toLocaleTimeString()}. Ready to import.${state.version?` Bridge ${state.version}.`:''}`};
+ return {phase:'connected',connected:true,reconciliationSupported:!!state.reconciliationSupported,summary:'Google Photos connected via Chrome extension · Keep the Photos tab open',detail:`Connection verified${state.recoveredTab?' in the open Google Photos tab':''} with ${state.label||'your Google account'} at ${checkedAt.toLocaleTimeString()}. Ready to import.${state.version?` Bridge ${state.version}.`:''}`};
 }
 export function createConnectionCheck({refresh,bridge,change,now=()=>new Date()}) {
  let running=null;
