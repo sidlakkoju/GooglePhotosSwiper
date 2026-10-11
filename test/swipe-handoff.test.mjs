@@ -32,6 +32,21 @@ for(const surface of ['userscript','viewer']){
   vm.runInContext(source.slice(start,end),context);
   return {context,card,throws,writes,finish};
  }
+ test(`${surface} cancels a live spring before a button decision or outgoing measurement`,async()=>{
+  for(const swipeResult of [null,{dx:120,duration:240}]){
+   const {context,card,finish}=fixture();
+   let running=true;
+   card.getAnimations=()=>running?[{cancel(){running=false;}}]:[];
+   context.throwSwipe=()=>assert.equal(running,false);
+   context.render=()=>assert.equal(running,false);
+   context.show=async()=>assert.equal(running,false);
+   const result=context.decide('keep',swipeResult);
+   assert.equal(running,false);
+   finish();
+   await result;
+   await new Promise(resolve=>setImmediate(resolve));
+  }
+ });
  for(const fail of [false,true])test(`${surface} hides the old photo through a delayed ${fail?'failed':'successful'} save and restores visibility`,async()=>{
   const {context,card,throws,writes,finish}=fixture({fail});
   const result=context.decide('keep',{dx:120,duration:240});
@@ -49,6 +64,15 @@ for(const surface of ['userscript','viewer']){
   assert.equal(throws.length,0);
   assert.equal(writes.length,0);
   assert.equal(card.style.visibility,'');
+ });
+ if(surface==='viewer')test('viewer cancels a spring when replacing or closing its media',()=>{
+  let running=true;
+  const stage={style:{},getAnimations:()=>running?[{cancel(){running=false;}}]:[],classList:{remove(){}}};
+  const media={pause(){},removeAttribute(){assert.equal(running,false);},load(){}};
+  const context=vm.createContext({stage,video:media,image:media,pointers:new Map(),clearSwipe(){}});
+  vm.runInContext(source.split('\n').find(line=>line.includes('function clearMedia(')),context);
+  context.clearMedia();
+  assert.equal(running,false);
  });
  if(surface==='userscript')test('leaving candidate inspection does not fly off or save a decision',()=>{
   const {context,throws,writes}=fixture({inspection:true});

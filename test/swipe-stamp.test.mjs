@@ -598,3 +598,21 @@ test('a cancelled pointer fling resets the stamp without writing a decision',asy
  assert.deepEqual(writes,[]);
  assertReset($);
 });
+
+for(const action of ['decision','render'])test(`deck cancels a running snap-back before ${action}`,async()=>{
+ const {context,$}=review();
+ const card=$('card');
+ let running=false,cancelled=0;
+ card.animate=()=>{running=true;};
+ card.getAnimations=()=>running?[{cancel(){running=false;cancelled++;}}]:[];
+ card.onpointerdown({...pointer(200),timeStamp:0});
+ card.onpointermove({...pointer(230),timeStamp:200});
+ card.onpointerup({...pointer(230),timeStamp:400});
+ assert.equal(running,true);
+ context.updateDecision=async()=>{assert.equal(running,false);return true;};
+ context.renderCard=()=>assert.equal(running,false);
+ if(action==='decision')await context.choose('keep');
+ else context.render();
+ assert.equal(running,false);
+ assert.equal(cancelled,1);
+});

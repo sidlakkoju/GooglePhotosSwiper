@@ -862,3 +862,18 @@ test('release metadata names the author and install guide explains Chrome script
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });
+
+test('userscript cancels the live snap-back before a filter renders another photo',async()=>{
+ const mounted=await mountedReview([item('a'),item('b',{type:'video'})]);
+ const card=mounted.nodes.get('card'),media=mounted.nodes.get('media');
+ let running=false,cancelled=0;
+ card.animate=()=>{running=true;};
+ card.getAnimations=()=>running?[{cancel(){running=false;cancelled++;}}]:[];
+ media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20,timeStamp:0});
+ media.listeners.pointerup({pointerId:1,clientX:40,clientY:20,timeStamp:200});
+ assert.equal(running,true);
+ mounted.nodes.get('filter').value='video';
+ mounted.nodes.get('filter').onchange();
+ assert.equal(running,false);
+ assert.equal(cancelled,1);
+});
