@@ -1,14 +1,6 @@
+import {authenticate,pairingRequest} from './pairing.mjs';
 const origin = 'https://photos.google.com';
-const methods = 'GET, PUT, DELETE, POST, OPTIONS';
-const encoder = new TextEncoder();
-async function authorized(header, secret) {
- const candidate = header?.startsWith('Bearer ') ? header.slice(7) : '';
- const digest = async value => new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
- const [left,right] = await Promise.all([digest(candidate),digest(secret)]);
- let difference = 0;
- for(let index=0;index<left.length;index++)difference |= left[index]^right[index];
- return difference===0;
-}
+const methods = 'GET, PUT, DELETE, POST, PATCH, OPTIONS';
 const identifier = value => typeof value==='string' && /^[A-Za-z0-9_-]{1,256}$/.test(value);
 const decision = value => value===null || value==='keep' || value==='remove';
 function historyValid(entries) {
@@ -26,25 +18,33 @@ async function body(request) {
 export async function syncRequest(request,env={}) {
  const headers={'Content-Type':'application/json','Cache-Control':'no-store',Vary:'Origin'};
  if(request.headers.get('Origin')===origin)headers['Access-Control-Allow-Origin']=origin;
- const respond=(value,status=200)=>new Response(value===null?null:JSON.stringify(value),{status,headers});
+ const respond=(value,status=200,extra={})=>new Response(value===null?null:JSON.stringify(value),{status,headers:{...headers,...extra}});
  if(request.method==='OPTIONS'){
   if(request.headers.get('Origin')!==origin)return respond({error:'Origin forbidden'},403);
   headers['Access-Control-Allow-Methods']=methods;headers['Access-Control-Allow-Headers']='Authorization, Content-Type';
   return respond(null,204);
  }
- if(!env.SYNC_TOKEN)return respond({error:'Sync secret unset'},500);
- if(!await authorized(request.headers.get('Authorization'),env.SYNC_TOKEN))return respond({error:'Unauthorized'},401);
- const url=new URL(request.url),scope=url.searchParams.get('scope')||'default';
- if(!identifier(scope))return respond({error:'Invalid scope'},400);
  const db=env.DB;
  try {
+  if(!db)return respond({error:'Sync database unset'},500);
+  const url=new URL(request.url),scope=url.searchParams.get('scope')||'default';
+  const claim=url.pathname==='/api/pair/claim'&&request.method==='POST';
+  const device=claim?null:await authenticate(request,env);
+  if(!claim&&!device)return respond({error:'Unauthorized'},401);
+  const paired=await pairingRequest(request,env,device,body,respond);
+  if(paired)return paired;
+  if(!identifier(scope))return respond({error:'Invalid scope'},400);
   const route=url.pathname,method=request.method;
   const read=async()=>{
    const rows=await db.prepare('SELECT id, decision FROM decisions WHERE scope = ?').bind(scope).all();
    const record=await db.prepare('SELECT progress, history FROM review_state WHERE scope = ?').bind(scope).first();
    return {decisions:rows.results,progress:record?JSON.parse(record.progress):{},history:record?JSON.parse(record.history):[]};
   };
-  if(route==='/api/state'&&method==='GET')return respond(await read());
+  if(route==='/api/state'&&method==='GET'){
+   const state=await read();
+   const migration=await db.prepare('SELECT id FROM devices WHERE is_legacy = 1 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM devices WHERE is_legacy = 0 AND revoked_at IS NULL)').first();
+   return respond({...state,...(migration?{suggestRevokeLegacy:true}:{})});
+  }
   const match=route.match(/^\/api\/decisions\/([^/]+)$/);
   if(match&&['PUT','DELETE'].includes(method)){
    const id=decodeURIComponent(match[1]);if(!identifier(id))return respond({error:'Invalid item ID'},400);

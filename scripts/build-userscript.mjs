@@ -4,7 +4,7 @@ const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.4
+// @version 1.2.9
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -19,8 +19,13 @@ const metadata=`// ==UserScript==
 // @license MIT
 // ==/UserScript==
 `;
-const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-settings','userscript-bridge','userscript-ui'];
+const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-settings','userscript-bridge','userscript-qr','userscript-pairing','userscript-preload','userscript-ui'];
 const sources=await Promise.all(modules.map(name=>readFile(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8')));
+const swipeSource=await readFile(new URL('../lib/swipe.mjs',import.meta.url),'utf8');
+sources.unshift(swipeSource);
+const browserSwipe=new URL('../public/swipe.js',import.meta.url);
+if(process.argv.includes('--check')){if(await readFile(browserSwipe,'utf8')!==swipeSource)throw Error('Browser swipe module is stale. Run node scripts/build-userscript.mjs.');}
+else await writeFile(browserSwipe,swipeSource);
 const sharedAPI=await readFile(new URL('../extension/photos-api.js',import.meta.url),'utf8');
 const bundled=[sharedAPI,...sources].map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n').replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`);
 const output=`${metadata}\n(function () {\n'use strict';\n${bundled}\nconst pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;\nconst environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};\nif(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);\nmountPhotosSwipe(environment);\n})();\n`;

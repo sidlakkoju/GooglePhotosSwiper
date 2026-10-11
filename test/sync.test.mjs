@@ -1,27 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage} from '../lib/userscript-core.mjs';
+import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
 import {createSyncClient,markSyncChanges,validateSyncSettings} from '../lib/userscript-sync.mjs';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync} from 'node:fs';
 class FakeD1 {
- decisions=new Map();records=new Map();
- prepare(sql){return {bind:(...args)=>{
- const execute=()=>{
- const [a,b,c,d]=args;
- if(sql.startsWith('SELECT id'))return {results:[...this.decisions.values()].filter(row=>row.scope===a).map(({id,decision})=>({id,decision}))};
- if(sql.startsWith('SELECT progress'))return this.records.get(a)||null;
- if(sql.startsWith('INSERT INTO decisions'))this.decisions.set(`${a}:${b}`,{scope:a,id:b,decision:c});
- if(sql.startsWith('DELETE'))this.decisions.delete(`${a}:${b}`);
- if(sql.startsWith('INSERT OR IGNORE')){if(!this.records.has(a))this.records.set(a,{progress:'{}',history:'[]'});}
- if(sql.startsWith('UPDATE review_state SET progress'))this.records.get(b).progress=a;
- if(sql.startsWith('UPDATE review_state SET history = ?'))this.records.get(b).history=a;
- if(sql.includes('CASE WHEN')){const record=this.records.get(c),history=JSON.parse(record.history);if(a==='push'){if(history.length>=2000)return null;history.push(JSON.parse(b));}else history.pop();record.history=JSON.stringify(history);return record;}
- return {success:true};
- };
- return {all:async()=>execute(),first:async()=>execute(),run:async()=>execute()};
- }};}
+ constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
+ prepare(sql){
+  const statement=this.sqlite.prepare(sql);
+  const bound=args=>({all:async()=>({results:statement.all(...args)}),first:async()=>statement.get(...args)||null,run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:Number(this.sqlite.prepare('SELECT changes() AS n').get().n)}})});
+  return {...bound([]),bind:(...args)=>{if(args.some(Array.isArray))throw Error('D1_TYPE_ERROR');return bound(args);}};
+ }
+ async batch(statements){this.sqlite.exec('BEGIN');try{const results=statements.map(statement=>statement.execute());this.sqlite.exec('COMMIT');return results;}catch(error){this.sqlite.exec('ROLLBACK');throw error;}}
 }
-const env=()=>({SYNC_TOKEN:'test-secret',DB:new FakeD1()});
+const env=()=>({SYNC_TOKEN:'test-secret',PAIRING_IP_KEY:'qa-ip-key',DB:new FakeD1()});
 const call=(environment,path,method='GET',value,headers={})=>syncRequest(new Request(`https://sync.example/api/${path}`,{method,headers:{Authorization:'Bearer test-secret',Origin:'https://photos.google.com',...headers},...(value!==undefined?{body:JSON.stringify(value)}:{})}),environment);
 test('API requires configured secret and exact bearer authentication',async()=>{
  assert.equal((await call({},'state')).status,500);
@@ -78,7 +72,7 @@ test('HTTP rejection preserves pending changes and settings reject insecure or c
  client.configure({url:'https://sync.example',token:'wrong'});
  const state={items:[],history:[],syncPending:{item:'remove'},syncDirty:true};
  assert.equal(await client.sync('account',state,()=>{throw Error('Unexpected save');}),state);
- assert.match(statuses.at(-1),/401.*saved locally/);
+ assert.equal(statuses.at(-1),'This device was unpaired.');
  for(const url of ['http://sync.example','https://user:pass@sync.example','https://sync.example/api/','https://sync.example/?token=secret'])assert.throws(()=>validateSyncSettings(url,'secret'));
  assert.deepEqual(validateSyncSettings('',''),{url:'',token:''});
 });
@@ -152,4 +146,213 @@ test('empty pending maps after offline cursor saves still backfill existing deci
  state=await client.sync('default',state,async value=>value);
  assert.equal(state.syncDecisions.item,'keep');
  assert.equal(state.items[0].decision,'keep');
+});
+
+const claim=(e,value,ip='192.0.2.1')=>call(e,'pair/claim','POST',{name:'QA phone',platform:'test',...value},{Authorization:'','CF-Connecting-IP':ip});
+const start=async e=>{const response=await call(e,'pair/start','POST');assert.equal(response.status,200);return response.json();};
+const withToken=token=>({Authorization:`Bearer ${token}`});
+test('pairing hashes bind as D1 blobs and plain arrays are rejected',async()=>{
+ const db=new FakeD1(),digest=await hash('abc');
+ assert.ok(digest instanceof Uint8Array);
+ assert.equal(Buffer.from(digest).toString('hex'),'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+ assert.throws(()=>db.prepare('SELECT ?').bind(Array.from(digest)),/D1_TYPE_ERROR/);
+ const row=await db.prepare('SELECT typeof(?) AS type, hex(?) AS digest').bind(digest,digest).first();
+ assert.equal(row.type,'blob');
+ assert.equal(row.digest,Buffer.from(digest).toString('hex').toUpperCase());
+});
+test('pairing round trip, status ownership, replay and hash-only storage',async()=>{
+ const e=env();await call(e,'decisions/preserved','PUT',{decision:'keep'});
+ const pairing=await start(e);
+ assert.match(pairing.code,/^[A-Za-z0-9_-]{22}$/);assert.match(pairing.short,/^\d{6}$/);
+ const response=await claim(e,{code:pairing.code});assert.equal(response.status,200);
+ const device=await response.json();assert.match(device.token,/^[A-Za-z0-9_-]{43}$/);
+ assert.equal((await call(e,'state','GET',undefined,withToken(device.token))).status,200);
+ assert.deepEqual(await (await call(e,`pair/status?id=${pairing.id}`)).json(),{claimed:true,name:'QA phone'});
+ assert.equal((await call(e,`pair/status?id=${pairing.id}`,'GET',undefined,withToken(device.token))).status,404);
+ assert.deepEqual(await (await claim(e,{code:pairing.code})).json(),{error:'expired_or_used'});
+ const stored=e.DB.sqlite.prepare('SELECT hex(code_hash) AS code,hex(short_hash) AS short FROM pairing_codes').get();
+ assert.equal(stored.code.length,64);assert.equal(stored.short.length,64);
+ const tokenRow=e.DB.sqlite.prepare('SELECT hex(token_hash) AS token FROM devices WHERE id = ?').get(device.deviceId);assert.equal(tokenRow.token.length,64);
+ assert.equal(JSON.stringify([stored,tokenRow]).includes(device.token),false);
+ assert.equal((await (await call(e,'state')).json()).decisions[0].id,'preserved');
+});
+test('pairing stores code, token and IP HMAC digests as D1 blobs',async()=>{
+ const e=env(),pairing=await start(e),ip='203.0.113.42';
+ const response=await claim(e,{code:pairing.code},ip);
+ assert.equal(response.status,200);
+ const device=await response.json();
+ const stored=e.DB.sqlite.prepare('SELECT typeof(code_hash) AS codeType, typeof(short_hash) AS shortType, hex(code_hash) AS code, hex(short_hash) AS short FROM pairing_codes WHERE id = ?').get(pairing.id);
+ assert.equal(stored.codeType,'blob');
+ assert.equal(stored.shortType,'blob');
+ assert.equal(stored.code,Buffer.from(await hash(pairing.code)).toString('hex').toUpperCase());
+ assert.equal(stored.short,Buffer.from(await hash(pairing.short)).toString('hex').toUpperCase());
+ const token=e.DB.sqlite.prepare('SELECT typeof(token_hash) AS type, hex(token_hash) AS digest FROM devices WHERE id = ?').get(device.deviceId);
+ assert.equal(token.type,'blob');
+ assert.equal(token.digest,Buffer.from(await hash(device.token)).toString('hex').toUpperCase());
+ const encoder=new TextEncoder(),key=await crypto.subtle.importKey('raw',encoder.encode(e.PAIRING_IP_KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+ const ipDigest=new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(ip)));
+ const attempt=e.DB.sqlite.prepare('SELECT typeof(ip_hash) AS type, count FROM pair_attempts WHERE ip_hash = ?').get(ipDigest);
+ assert.equal(attempt.type,'blob');
+ assert.equal(attempt.count,1);
+ assert.equal((await call(e,'state','GET',undefined,withToken(device.token))).status,200);
+});
+test('50 concurrent claims create exactly one device',async()=>{
+ const e=env(),pairing=await start(e);
+ const responses=await Promise.all(Array.from({length:50},(_,index)=>claim(e,{code:pairing.code},`192.0.2.${index+1}`)));
+ assert.equal(responses.filter(response=>response.status===200).length,1);
+ assert.equal(responses.filter(response=>response.status===400).length,49);
+ assert.equal(e.DB.sqlite.prepare('SELECT count(*) AS n FROM devices WHERE is_legacy = 0').get().n,1);
+});
+test('expiry, replacement and five wrong short guesses burn codes without an existence oracle',async()=>{
+ const e=env();const old=await start(e),pairing=await start(e);
+ assert.equal((await (await claim(e,{code:old.code})).json()).error,'expired_or_used');
+ const wrong=pairing.short==='000000'?'000001':'000000';
+ for(let index=0;index<5;index++)assert.deepEqual(await (await claim(e,{short:wrong})).json(),{error:'invalid'});
+ assert.deepEqual(await (await claim(e,{short:pairing.short})).json(),{error:'invalid'});
+ assert.equal((await (await claim(e,{code:pairing.code})).json()).error,'expired_or_used');
+ const expired=await start(e);const original=Date.now;
+ try{Date.now=()=>original()+300001;assert.equal((await (await claim(e,{code:expired.code})).json()).error,'expired_or_used');}finally{Date.now=original;}
+});
+test('short claim works and per-IP, global short and start limits return Retry-After',async()=>{
+ const e=env(),pairing=await start(e);
+ assert.equal((await claim(e,{short:pairing.short})).status,200);
+ for(let index=1;index<30;index++)await claim(e,{code:'a'.repeat(22)});
+ const ipLimited=await claim(e,{code:'a'.repeat(22)});assert.equal(ipLimited.status,429);assert.ok(Number(ipLimited.headers.get('Retry-After'))>0);
+ const g=env();
+ for(let index=0;index<100;index++)assert.equal((await claim(g,{short:'999999'},`192.0.2.${index}`)).status,400);
+ const live=await start(g);assert.equal((await claim(g,{short:live.short},'198.51.100.1')).status,429);
+ assert.equal((await claim(g,{code:live.code},'198.51.100.1')).status,200);
+ const s=env();for(let index=0;index<10;index++)await start(s);
+ assert.equal((await call(s,'pair/start','POST')).status,429);
+ const serialized=JSON.stringify(g.DB.sqlite.prepare('SELECT hex(ip_hash) AS key FROM pair_attempts').all());assert.equal(serialized.includes('192.0.2.'),false);
+ g.DB.sqlite.prepare('INSERT INTO pair_attempts VALUES (?,0,1)').run(new Uint8Array([1]));await claim(g,{code:'a'.repeat(22)},'203.0.113.1');assert.equal(g.DB.sqlite.prepare('SELECT count(*) AS n FROM pair_attempts WHERE window_start = 0').get().n,0);
+});
+test('device management revokes immediately, legacy stays revoked and last_seen is throttled',async()=>{
+ const e=env(),pairing=await start(e),device=await (await claim(e,{code:pairing.code})).json(),headers=withToken(device.token);
+ const list=await (await call(e,'devices')).json();assert.equal(list.suggestRevokeLegacy,true);assert.equal(list.devices.find(row=>row.id==='legacy').is_legacy,1);assert.equal(JSON.stringify(list).includes('token_hash'),false);
+ await call(e,`devices/${device.deviceId}`,'PATCH',{name:'Renamed'});
+ assert.equal((await (await call(e,'devices')).json()).devices.find(row=>row.id===device.deviceId).name,'Renamed');
+ const initial=e.DB.sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(device.deviceId).last_seen_at;
+ await call(e,'state','GET',undefined,headers);assert.equal(e.DB.sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(device.deviceId).last_seen_at,initial);
+ const original=Date.now;try{Date.now=()=>original()+61000;await call(e,'state','GET',undefined,headers);assert.ok(e.DB.sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(device.deviceId).last_seen_at>initial);}finally{Date.now=original;}
+ await call(e,'devices/legacy','DELETE',undefined,headers);assert.equal((await call(e,'state')).status,401);
+ assert.equal((await call(e,'state','GET',undefined,headers)).status,200);
+ delete e.SYNC_TOKEN;assert.equal((await call(e,'state','GET',undefined,headers)).status,200);
+ await call(e,`devices/${device.deviceId}`,'DELETE',undefined,headers);assert.equal((await call(e,'state','GET',undefined,headers)).status,401);
+});
+test('revoke others preserves current device and pairing CORS supports PATCH',async()=>{
+ const e=env(),device=await (await claim(e,{code:(await start(e)).code})).json(),headers=withToken(device.token);
+ assert.equal((await call(e,'devices/revoke-others','POST',undefined,headers)).status,200);
+ assert.equal((await call(e,'state')).status,401);assert.equal((await call(e,'state','GET',undefined,headers)).status,200);
+ const preflight=await call(e,'pair/claim','OPTIONS');assert.match(preflight.headers.get('Access-Control-Allow-Methods'),/PATCH/);
+ assert.equal((await claim(e,{code:'a'.repeat(22)})).headers.get('Access-Control-Allow-Origin'),'https://photos.google.com');
+});
+
+test('pairing migration preserves populated sync tables and Worker never logs secrets',()=>{
+ const db=new DatabaseSync(':memory:');
+ db.exec(readFileSync(new URL('../worker/migrations/0001_init.sql',import.meta.url),'utf8'));
+ db.exec("INSERT INTO decisions VALUES ('qa','item','keep'); INSERT INTO review_state VALUES ('qa','{\"started\":true}','[]');");
+ const before=[db.prepare('SELECT * FROM decisions').all(),db.prepare('SELECT * FROM review_state').all()];
+ db.exec(readFileSync(new URL('../worker/migrations/0002_pairing.sql',import.meta.url),'utf8'));
+ assert.deepEqual([db.prepare('SELECT * FROM decisions').all(),db.prepare('SELECT * FROM review_state').all()],before);
+ for(const file of ['sync.mjs','pairing.mjs','index.mjs'])assert.doesNotMatch(readFileSync(new URL(`../worker/src/${file}`,import.meta.url),'utf8'),/console\s*\./);
+});
+test('revoking an issuer prevents outstanding pairing claims',async()=>{
+ const e=env(),device=await (await claim(e,{code:(await start(e)).code})).json();
+ const pending=await start(e);
+ await call(e,'devices/legacy','DELETE',undefined,withToken(device.token));
+ assert.equal((await claim(e,{code:pending.code})).status,400);
+});
+
+test('concurrent short failures at the global cap burn live codes only once',async()=>{
+ const e=env(),pairing=await start(e),window=Math.floor(Date.now()/3600000)*3600;
+ e.DB.sqlite.prepare('INSERT INTO pair_attempts VALUES (?,?,99)').run(new Uint8Array(await hash('global-short-failures')),window);
+ const prepare=e.DB.prepare.bind(e.DB),claimCount=8;
+ let reads=0,release;
+ const allRead=new Promise(resolve=>release=resolve);
+ e.DB.prepare=sql=>{
+  const statement=prepare(sql);
+  if(sql!=='SELECT count FROM pair_attempts WHERE ip_hash = ? AND window_start = ?')return statement;
+  return {...statement,bind:(...args)=>{
+   const bound=statement.bind(...args);
+   return {...bound,first:async()=>{
+    const result=await bound.first();
+    if(++reads===claimCount)release();
+    await allRead;
+    return result;
+   }};
+  }};
+ };
+ const wrong=pairing.short==='000000'?'000001':'000000';
+ const responses=await Promise.all(Array.from({length:claimCount},(_,index)=>claim(e,{short:wrong},`198.51.100.${index+1}`)));
+ assert.equal(reads,claimCount);
+ assert.equal(responses.filter(response=>response.status===400).length,1);
+ assert.equal(responses.filter(response=>response.status===429).length,7);
+ for(const response of responses.filter(response=>response.status===429))assert.ok(Number(response.headers.get('Retry-After'))>0);
+ const stored=e.DB.sqlite.prepare('SELECT failed_attempts,used_at FROM pairing_codes WHERE id = ?').get(pairing.id);
+ assert.equal(stored.failed_attempts,1);
+ assert.equal(stored.used_at,null);
+ assert.equal(e.DB.sqlite.prepare('SELECT count FROM pair_attempts WHERE ip_hash = ? AND window_start = ?').get(new Uint8Array(await hash('global-short-failures')),window).count,100);
+ assert.equal((await claim(e,{code:pairing.code},'203.0.113.1')).status,200);
+});
+test('device mutations report unknown IDs and revocation remains idempotent',async()=>{
+ const e=env(),device=await (await claim(e,{code:(await start(e)).code})).json();
+ for(const method of ['PATCH','DELETE']){
+  const response=await call(e,'devices/missing',method,method==='PATCH'?{name:'Renamed'}:undefined);
+  assert.equal(response.status,404);
+  assert.deepEqual(await response.json(),{error:'Not found'});
+ }
+ assert.equal((await call(e,`devices/${device.deviceId}`,'PATCH',{name:'QA phone'})).status,200);
+ assert.equal((await call(e,`devices/${device.deviceId}`,'DELETE')).status,200);
+ const revoked=e.DB.sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(device.deviceId).revoked_at;
+ const original=Date.now;
+ try{
+  Date.now=()=>original()+61000;
+  assert.equal((await call(e,`devices/${device.deviceId}`,'DELETE')).status,200);
+  assert.equal(e.DB.sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(device.deviceId).revoked_at,revoked);
+ }finally{Date.now=original;}
+});
+test('pairing cancellation burns both codes and respects device ownership',async()=>{
+ const e=env(),pairing=await start(e);
+ const other=await start(e),device=await (await claim(e,{code:other.code})).json();
+ const active=await start(e);
+ assert.equal((await call(e,'pair/start','DELETE',{id:active.id},withToken(device.token))).status,200);
+ assert.equal((await claim(e,{code:active.code})).status,200);
+ const cancelled=await start(e);
+ assert.equal((await call(e,'pair/start','DELETE',{id:cancelled.id})).status,200);
+ assert.equal((await claim(e,{code:cancelled.code})).status,400);
+ assert.equal((await claim(e,{short:cancelled.short})).status,400);
+ assert.equal((await claim(e,{code:pairing.code})).status,400);
+});
+
+
+test('device names are trimmed plain text of 1–40 characters and lists are newest first',async()=>{
+ const e=env(),device=await (await claim(e,{code:(await start(e)).code})).json();
+ for(const name of ['', ' ', 'x'.repeat(41), '<img>', 'line\nname', 'hidden\u202ename'])assert.equal((await call(e,`devices/${device.deviceId}`,'PATCH',{name})).status,400);
+ assert.equal((await call(e,`devices/${device.deviceId}`,'PATCH',{name:"  QA's phone  "})).status,200);
+ e.DB.sqlite.prepare('UPDATE devices SET created_at = 1 WHERE id = ?').run('legacy');
+ const list=await (await call(e,'devices')).json();assert.equal(list.devices[0].id,device.deviceId);assert.equal(list.devices[0].name,"QA's phone");
+ await call(e,`devices/${device.deviceId}`,'DELETE');
+ for(const [path,method,value] of [['devices','GET'],['devices/legacy','PATCH',{name:'Guess'}],['devices/legacy','DELETE'],['devices/revoke-others','POST']])assert.equal((await call(e,path,method,value,withToken(device.token))).status,401);
+});
+
+test('401 at a pending write stops further requests and re-pairing merges retained decisions',async()=>{
+ const e=env();let requests=0,revocations=0,reject=true;
+ const client=createSyncClient({unpaired:()=>{revocations++;},fetch:(url,options)=>{requests++;if(reject&&options.method==='PUT')return new Response('{}',{status:401});return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ let state={started:true,items:[{mediaKey:'synthetic',decision:'remove'}],history:[],syncPending:{synthetic:'remove'},syncDirty:true};
+ assert.equal(await client.sync('qa',state,async()=>{throw Error('Unexpected save');}),state);
+ const count=requests;await client.sync('qa',state,async value=>value);assert.equal(requests,count);assert.equal(revocations,1);assert.equal(state.syncPending.synthetic,'remove');
+ reject=false;client.configure({url:'https://sync.example',token:'test-secret'});state=await client.sync('qa',state,async value=>value);
+ assert.deepEqual(state.syncPending,{});assert.equal((await (await call(e,'state?scope=qa')).json()).decisions[0].decision,'remove');
+});
+
+test('device management rejects missing credentials without making requests',async()=>{
+ let requests=0;
+ const client=createSyncClient({fetch:async()=>{requests++;throw Error('Unexpected request');}});
+ for(const settings of [{},{url:'https://sync.example'},{token:'synthetic-token'}]){
+  client.configure(settings);
+  for(const action of [()=>client.devices(),()=>client.rename('caller','Browser'),()=>client.revoke('caller'),()=>client.revokeOthers()])await assert.rejects(action,/Configure sync to manage paired devices/);
+ }
+ assert.equal(requests,0);
 });

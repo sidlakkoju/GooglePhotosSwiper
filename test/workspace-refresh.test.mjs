@@ -1,3 +1,4 @@
+import {sampleSwipe,releaseSwipe,animateSwipe,throwSwipe} from '../public/swipe.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -19,7 +20,7 @@ async function browser(t,previous=null){
  const snapshot=()=>({items:store.listItems().map(item=>({...item,url:'data:image/png;base64,fake'})),jobs:[]});
  const sessionStorage={getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)};
  const context=vm.createContext({
-  ...model,...undoHistory,createConnectionCheck,sessionStorage,localStorage:sessionStorage,
+  sampleSwipe,releaseSwipe,animateSwipe,throwSwipe,...model,...undoHistory,createConnectionCheck,sessionStorage,localStorage:sessionStorage,
   document:{getElementById:getElement,querySelectorAll:()=>[],querySelector:()=>null,createElement:element,addEventListener(){}},
   window:{addEventListener:(name,fn)=>listeners.set(name,fn)},location:{hash:'',pathname:'/'},
   createPhotoViewer:()=>({refreshControls(){}}),bridge:async()=>({installed:true,paired:false}),
@@ -43,7 +44,7 @@ async function browser(t,previous=null){
   expireRequest(path){unauthorizedPath=path;},
   delayWorkspace(){workspaceWait=deferred();return workspaceWait;},
   delayDecision(){decisionWait=deferred();return decisionWait;},
-  async finishSwipe(){await settle();const animation=[...timers].find(([,timer])=>timer.delay===230);assert.ok(animation,'swipe animation started');timers.delete(animation[0]);animation[1].fn();await settle();},
+  async finishSwipe(){await settle();assert.equal([...timers.values()].some(timer=>timer.delay===230),false,'decision must not wait for animation');await settle();},
   focus:()=>listeners.get('focus')()
  };
 }
