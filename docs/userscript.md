@@ -53,6 +53,6 @@ npm test
 node scripts/check.mjs
 ```
 
-The dependency-free build bundles `extension/photos-api.js` and `lib/userscript-*.mjs` into the installable file. Include that generated file whenever distributing changes, and increase the metadata version in the build script for a release. Unit tests cover request envelopes, fake responses, pagination, decisions, quota estimates, partial album retries and read-only Trash reconciliation. The artifact test checks metadata, absence of privileged APIs and reproducibility.
+The dependency-free build bundles `extension/photos-api.js` and `lib/userscript-*.mjs` into the installable file. The bundle uses ASCII Unicode escapes so labels retain their symbols even when an install endpoint omits a UTF-8 charset. Include that generated file whenever distributing changes, and increase the metadata version in the build script for a release. Unit tests cover request envelopes, fake responses, pagination, decisions, quota estimates, partial album retries and read-only Trash reconciliation. The artifact test checks metadata, absence of privileged APIs and reproducibility.
 
 RPC mappings are adapted from Google Photos Toolkit by xob0t, revision `6db9ab355e4797327e4078cf87a2b6994d36cf73`. The upstream MIT license is retained in [the license notice](../extension/LICENSE-GPTK), with [third-party attribution](../extension/THIRD_PARTY_NOTICES.md).

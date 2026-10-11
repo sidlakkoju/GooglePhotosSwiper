@@ -136,6 +136,16 @@ test('built userscript metadata, page isolation, no privileged APIs and reproduc
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
 });
+test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
+ const bytes=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));
+ assert.ok(bytes.every(byte=>byte<128),'Installable userscript must contain only ASCII bytes');
+ const mounted=bundleEnvironment();
+ vm.runInNewContext(bytes.toString('latin1'),mounted.environment);
+ await mounted.nodes.get('launcher').onclick();
+ assert.equal(mounted.nodes.get('remove').textContent,'\u00d7 Queue');
+ assert.equal(mounted.nodes.get('keep').textContent,'\u2713 Keep');
+ assert.match(mounted.nodes.get('stats').textContent,/ to review \u00b7 /);
+});
 test('unavailable saved albums can be replaced without resetting sent decisions',async()=>{
  const workspace=albumWorkspace([item('a',{decision:'remove'}),item('sent',{decision:'remove',queueSent:true})]);
  await workspace.save({...workspace.state(),albumKey:'old-album'});const writes=[];
