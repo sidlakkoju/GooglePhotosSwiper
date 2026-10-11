@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.0
+// @version 1.2.1
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -559,6 +559,7 @@ function mountPhotosSwipe(environment) {
   }
  }
  const bytes=value=>value>=1e9?`${(value/1e9).toFixed(1)} GB`:value>=1e6?`${(value/1e6).toFixed(1)} MB`:`${Math.round(value/1e3)} KB`;
+ const itemSize=item=>Number.isFinite(item.size)&&item.size>=0?bytes(item.size):'Unknown size';
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
  function deck(){const items=reviewDeck(state).filter(item=>$('filter').value==='all'||item.type===$('filter').value);if($('sort').value==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if($('sort').value==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));return items;}
  function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):reviewDeck(state).find(item=>item.mediaKey===focused)||deck()[0];}
@@ -581,9 +582,9 @@ function mountPhotosSwipe(environment) {
  }
  function render() {
   const item=current(),queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
-  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'}`:'No unreviewed items in this batch.';
+  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:'No unreviewed items in this batch.';
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
-  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} \u00b7 estimated savings ${estimate(queue)} \u00b7 In Trash \u00b7 running total \u00b7 estimated savings: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))}`;
+  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
   moveTrash.textContent=`Move ${candidates.length} items to Trash`;
   trashCandidates.hidden=!trashOptIn.checked;moveTrash.hidden=!trashOptIn.checked;
   trashTitle.textContent=`Move to Trash candidates (${candidates.length})`;
@@ -615,7 +616,7 @@ function mountPhotosSwipe(environment) {
   if(busy)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
-  run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':'Kept.');});
+  run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});
  }
  function undo(){if(busy)return;run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});const restored=state.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;message(`Decision undone for ${restored.name}.`);});}
  async function load(refresh=false) {
