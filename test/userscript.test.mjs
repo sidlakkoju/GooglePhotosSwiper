@@ -11,7 +11,7 @@ import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndo
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
-const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
+const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',urlFetchedAt:Date.now(),thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
 function fixture(responder){
  const calls=[],window={WIZ_global_data:{...tokens}};
  const api=createPhotosAPI({window,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,fetch:async(url,options)=>{
@@ -70,6 +70,18 @@ test('video and Trash reads use page-session RPCs and refuse direct deletion com
  assert.deepEqual((await call(f,'trashPage')).items,[{mediaKey:'photo',dedupKey:'stable'}]);
  const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
  const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
+});
+test('media URL refresh selects the preview tuple while video keeps the playback URL',async()=>{
+ const preview='https://photos.fife.usercontent.google.com/preview',playback='https://lh3.googleusercontent.com/playback';
+ const f=fixture(()=>[['photo',[preview,800,600]],playback]);
+ assert.deepEqual(await call(f,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ assert.deepEqual(await call(f,'video',{mediaKey:'photo'}),{url:playback});
+ assert.deepEqual(f.calls[0].args,['photo',null,null,null,null]);
+ const download=fixture(()=>[['photo',[preview,800,600]],'https://video-downloads.google.com/download']);
+ assert.deepEqual(await call(download,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ for(const data of [[['other',[preview,800,600]],playback],[['photo'],playback],[['photo',['https://invalid.test/preview',800,600]],playback]]){
+  assert.equal((await fixture(()=>data).api('mediaURL',{mediaKey:'photo'})).ok,false);
+ }
 });
 test('page merges preserve decisions, sent markers and older progress through latest refresh',()=>{
  let state={...emptyReview(),items:[item('old',{decision:'remove',queueSent:true})]};
@@ -256,9 +268,9 @@ function bundleEnvironment(fault={}) {
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
+ const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
- result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
 test('library sightings restore active state and retain local album membership on load and refresh',()=>{
@@ -1103,13 +1115,29 @@ test('signed-in privileged bundle uses page AbortSignals for library, album and 
  test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
  const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');
- assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');
+ assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');preview.complete=true;preview.naturalWidth=800;
  await mounted.click('keep');
- assert.equal(mounted.nodes.get('media').querySelector('img'),preview);
+ assert.equal(mounted.nodes.get('media').querySelector('img'),preview);assert.equal(preview.hidden,false);
  assert.equal(under.querySelector('img').dataset.key,'c');
  mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
  assert.equal(under.hidden,true);
  });
+
+test('a failed reused under-card preview refreshes and exposes Retry on another failure',async()=>{
+ const calls=[],mounted=await mountedReview([item('a'),item('b'),item('c')],async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://video-downloads.google.com/download'])};
+ });
+ const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');preview.complete=true;preview.naturalWidth=0;
+ await mounted.click('keep');await settlePreviews();
+ assert.deepEqual(calls,['b']);
+ const media=mounted.nodes.get('media'),refreshed=media.querySelector('img');assert.ok(refreshed);assert.notEqual(refreshed,preview);
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+ await refreshed.onerror();assert.equal(media.querySelector('button').textContent,'Retry');
+ media.querySelector('button').onclick();await settlePreviews();
+ assert.deepEqual(calls,['b','b']);assert.ok(media.querySelector('img'));
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+});
 
 test('an unresolved fly animation never blocks the next decision',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
@@ -1482,6 +1510,61 @@ test('device actions are disabled before configuration and after revoking this d
  assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
 });
 
+const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
+
+test('stale saved previews refresh only the current and preload window on open and resume',async()=>{
+ const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
+ const mounted=await mountedReview(items,async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
+ });
+ await settlePreviews();
+ assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
+ assert.equal(calls.length,4);
+ assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
+ assert.equal((await mounted.read()).items.filter(row=>row.decision).length,0);
+ calls.length=0;
+ mounted.environment.document.visibilityState='visible';
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();
+ assert.equal(calls.length,0);
+ const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
+ try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+ assert.equal(calls.length,4);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
+ mounted.nodes.get('close').onclick();calls.length=0;
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();assert.equal(calls.length,0);
+});
+
+test('photo and video errors refresh once then replace failed media with an explicit Retry card',async()=>{
+ for(const type of ['photo','video']){
+  const calls=[];
+  const mounted=await mountedReview([item('expired',{type})],async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];calls.push(entry[0]);
+   return {ok:true,text:async()=>envelope('VrseUb',[['expired',[`https://photos.fife.usercontent.google.com/fresh-preview-${calls.length}`,800,600]],`https://lh3.googleusercontent.com/fresh-playback-${calls.length}`])};
+  });
+  await settlePreviews();calls.length=0;
+  const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
+  await first.onerror();await settlePreviews();
+  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-playback-/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
+  assert.equal(calls.length,type==='video'?2:1);
+  await retried.onerror();assert.equal(container.querySelector(tag),null);
+  const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
+  const count=calls.length;retry.onclick();await settlePreviews();
+  assert.ok(container.querySelector(tag));assert.ok(calls.length>count);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+
+test('late expired preview responses cannot replace a newly selected card',async()=>{
+ const response=Promise.withResolvers();
+ const mounted=await mountedReview([item('old'),item('next')],async()=>{await response.promise;return {ok:true,text:async()=>envelope('VrseUb',[['old',['https://photos.fife.usercontent.google.com/fresh-old',800,600]],'https://video-downloads.google.com/download'])};});
+ const failed=mounted.nodes.get('media').querySelector('img').onerror();
+ await mounted.click('keep');const next=mounted.nodes.get('media').querySelector('img');
+ response.resolve();await failed;await settlePreviews();
+ assert.equal(mounted.nodes.get('media').querySelector('img'),next);
+ assert.match(mounted.nodes.get('caption').textContent,/^next/);
+});
 
 test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');

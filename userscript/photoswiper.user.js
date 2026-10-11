@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.14
+// @version 1.2.15
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -100,9 +100,10 @@ async function photosOperation(operation,args={},environment=globalThis) {
    if(args.confirmed!==true||!Array.isArray(args.dedupKeys)||!args.dedupKeys.length||args.dedupKeys.length>25||new Set(args.dedupKeys).size!==args.dedupKeys.length||args.dedupKeys.some(key=>!validKey(key)))throw Error('Invalid confirmed Trash batch.');
    await rpc('XwAOJf',[null,1,args.dedupKeys,3]);return {ok:true,data:{requested:args.dedupKeys.length}};
   }
-  if(operation==='video') {
-   if(!validKey(args.mediaKey))throw Error('Invalid video.');const data=await rpc('VrseUb',[args.mediaKey,null,null,null,null]);
-   if(data?.[0]?.[0]!==args.mediaKey||!safeMediaUrl(data[1]))throw Error('Video preview unavailable. Open it in Google Photos.');return {ok:true,data:{url:data[1]}};
+  if(operation==='video'||operation==='mediaURL') {
+   if(!validKey(args.mediaKey))throw Error('Invalid media identifier.');const data=await rpc('VrseUb',[args.mediaKey,null,null,null,null]);
+   const url=operation==='mediaURL'?data?.[0]?.[1]?.[0]:data?.[1];
+   if(data?.[0]?.[0]!==args.mediaKey||!safeMediaUrl(url))throw Error('Media preview unavailable. Open it in Google Photos.');return {ok:true,data:{url}};
   }
   throw Error('Unsupported Google Photos operation.');
  }catch(e){return {ok:false,error:e.message||'Google Photos request failed.'};}
@@ -188,7 +189,7 @@ function mergeReviewPage(state,page,requestCursor,refresh=false) {
  if(!refresh&&state.cursor!==requestCursor)throw Error('Library progress changed. Retry Load more.');
  if(page.nextPageId&&page.nextPageId===requestCursor)throw Error('Google repeated a page. Reload before retrying.');
  const items=new Map(state.items.map(item=>[item.mediaKey,item]));
- for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
+ for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,urlFetchedAt:Date.now(),decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
  const progress=!refresh||!state.started?{cursor:page.nextPageId,exhausted:!page.nextPageId,started:true}:{};
  return {...state,...progress,items:[...items.values()]};
 }
@@ -633,6 +634,11 @@ function receivePairingLink({document,parent,location,window,fetch,saveSettings,
  return panel;
 }
 
+function reviewPreviewWindow(items,current,compact=false) {
+ const index=items.findIndex(item=>item.mediaKey===current?.mediaKey),ahead=index<0?[]:items.slice(index+1);
+ return [...(current?[current]:[]),...ahead.filter(item=>item.type!=='video').slice(0,compact?2:3),...ahead.filter(item=>item.type==='video').slice(0,compact?1:2)];
+}
+const reviewURLStale = (item,now=Date.now()) => !item.urlFetchedAt||now-item.urlFetchedAt>=40*60*1000;
 function createReviewPreloader({createImage,createVideo,videoURL,previewURL,playbackURL}) {
  const entries=new Map();
  const active=entry=>entries.get(entry.key)===entry;
@@ -641,8 +647,8 @@ function createReviewPreloader({createImage,createVideo,videoURL,previewURL,play
   if(entry.video){entry.video.pause();entry.video.removeAttribute('src');entry.video.removeAttribute('poster');entry.video.load();}
  }
  function update(items,current,{width,height,compact=false}={}) {
-  const index=items.findIndex(item=>item.mediaKey===current?.mediaKey),ahead=index<0?[]:items.slice(index+1);
-  const photos=ahead.filter(item=>item.type!=='video').slice(0,compact?2:3),videos=ahead.filter(item=>item.type==='video').slice(0,compact?1:2);
+  const windowItems=reviewPreviewWindow(items,current,compact),ahead=windowItems.filter(item=>item.mediaKey!==current?.mediaKey);
+  const photos=ahead.filter(item=>item.type!=='video'),videos=ahead.filter(item=>item.type==='video');
   const wanted=new Map();
   for(const item of [...(current?[current]:[]),...photos,...videos]){
    try{const url=previewURL(item.thumbUrl,{width,height});wanted.set(item.mediaKey,{item,url});}catch{}
@@ -966,18 +972,60 @@ function mountPhotosSwipe(environment) {
  }
  const preloader=createReviewPreloader({createImage:()=>document.createElement('img'),createVideo:()=>document.createElement('video'),videoURL:async mediaKey=>{const result=await rawCall('video',{mediaKey,account:identity.account});if(!result.ok)throw Error(result.error);return result.data;},previewURL:(url,size)=>mediaURL(url,false,size),playbackURL:url=>mediaURL(url,true)});
  function previewSize(){const {width,height}=$('media').getBoundingClientRect();return {width:width||1,height:height||1,compact:!!window.matchMedia?.('(max-width:760px), (pointer:coarse)').matches};}
- function preloadReview(item){preloader.update($('overlay').hidden||inspected?[]:deck(),$('overlay').hidden?null:item,previewSize());}
- function stopMedia(){swipeFeedback.reset();underCard.replaceChildren();underCard.hidden=true;generation++;const video=$('media').querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
- async function display(item) {
+ function preloadReview(item){const size=previewSize(),items=reviewPreviewWindow(deck(),item,size.compact).filter(candidate=>candidate.mediaKey===item?.mediaKey||!reviewURLStale(candidate));preloader.update($('overlay').hidden||inspected?[]:items,$('overlay').hidden?null:item,size);}
+ const urlRefreshes=new Map();
+ async function refreshItemURL(item) {
+  const account=identity?.account,key=`${account}:${item.mediaKey}`;
+  if(urlRefreshes.has(key))return urlRefreshes.get(key);
+  const request=(async()=>{
+   const response=await rawCall('mediaURL',{mediaKey:item.mediaKey,account});
+   if(!response.ok)throw Error(response.error);
+   const result=response.data;mediaURL(result.url);
+   if(identity?.account!==account)return item;
+   const fresh={...item,thumbUrl:result.url,urlFetchedAt:Date.now()};
+   state={...state,items:state.items.map(saved=>saved.mediaKey===item.mediaKey?{...saved,thumbUrl:fresh.thumbUrl,urlFetchedAt:fresh.urlFetchedAt}:saved)};
+   return fresh;
+  })();
+  urlRefreshes.set(key,request);
+  try{return await request;}finally{urlRefreshes.delete(key);}
+ }
+ async function refreshStalePreviews() {
+  if($('overlay').hidden||!identity)return;
+  const item=current(),account=identity.account;
+  const windowItems=reviewPreviewWindow(inspected?[]:deck(),item,previewSize().compact);
+  const results=await Promise.allSettled(windowItems.filter(item=>reviewURLStale(item)).map(refreshItemURL));
+  if($('overlay').hidden||identity?.account!==account)return;
+  if(results.some(result=>result.status==='fulfilled')){preloader.clear();if(current()?.mediaKey===item?.mediaKey)display(current());preloadReview(current());}
+ }
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshStalePreviews();});
+ function stopMedia(clearUnderCard=true){swipeFeedback.reset();if(clearUnderCard){underCard.replaceChildren();underCard.hidden=true;}generation++;const video=$('media').querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
+ async function display(item,retried=false,forceRefresh=false) {
   const preview=underCard.querySelector('img'),preloaded=preview?.dataset?.key===item?.mediaKey?preview:null;
-  stopMedia();$('zoom').value='1';mediaElement.style.touchAction='pan-y pinch-zoom';shown=item?.mediaKey||null;const token=generation;
-  if(!item){$('media').textContent='No items to review. Load more or refresh latest.';$('media').style.color='white';return;}
+  stopMedia(shown!==(item?.mediaKey||null));$('zoom').value='1';mediaElement.style.touchAction='pan-y pinch-zoom';shown=item?.mediaKey||null;const token=generation;
+  $('media').style.color='white';
+  if(!item){$('media').textContent='No items to review. Load more or refresh latest.';return;}
+  let handlingError=false;
+  const failed=async()=>{
+   if(token!==generation||handlingError)return;
+   handlingError=true;$('media').replaceChildren();
+   if(!retried){$('media').textContent='Refreshing preview\u2026';try{const fresh=await refreshItemURL(item);if(token===generation){preloader.clear();display(fresh,true);preloadReview(fresh);}return;}catch{}}
+   if(token!==generation)return;
+   const label=document.createElement('p'),retry=document.createElement('button');
+   label.textContent='Preview unavailable.';retry.textContent='Retry';retry.onclick=()=>display(current(),false,true);
+   $('media').replaceChildren(label,retry);
+  };
   try {
-   const media=(item.type==='photo'?preloaded:null)||document.createElement(item.type==='video'?'video':'img');
-   if(item.type==='video'){media.controls=$('card').classList.contains('expanded');media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=mediaURL(item.thumbUrl,false,previewSize());$('media').append(media);addVideoControls(media);const cached=preloader.videoSource(item.mediaKey),prefetched=await Promise.resolve(cached).catch(()=>null);if(token!==generation)return;const source=prefetched||mediaURL((await call('video',{mediaKey:item.mediaKey})).url,true);if(token!==generation)return;media.src=source;media.play().catch(()=>{});}
-   else {media.alt=item.name;media.draggable=false;media.src=mediaURL(item.thumbUrl,false,previewSize());mediaElement.ondblclick=()=>{if($('media').querySelector('img'))toggleEnlarge();};$('media').append(media);}
-   media.onerror=()=>{if(token===generation)message('Preview unavailable. Reload Google Photos and try again.');};
-  }catch(error){if(token===generation)message(error.message);}
+   if(forceRefresh||reviewURLStale(item)){
+    $('media').textContent='Refreshing preview\u2026';
+    try{item=await refreshItemURL(item);if(forceRefresh)retried=true;}catch{if(forceRefresh){retried=true;await failed();return;}}
+    if(token!==generation)return;
+    $('media').replaceChildren();
+   }
+   const media=(item.type==='photo'&&!retried&&!forceRefresh?preloaded:null)||document.createElement(item.type==='video'?'video':'img');
+   media.onerror=failed;
+   if(item.type==='video'){media.controls=$('card').classList.contains('expanded');media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=mediaURL(item.thumbUrl,false,previewSize());$('media').append(media);addVideoControls(media);const cached=retried?null:preloader.videoSource(item.mediaKey),prefetched=await Promise.resolve(cached).catch(()=>null);if(token!==generation)return;const source=prefetched||mediaURL((await call('video',{mediaKey:item.mediaKey})).url,true);if(token!==generation)return;media.src=source;media.play().catch(()=>{});}
+   else {media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation)media.hidden=false;};mediaElement.ondblclick=()=>{if($('media').querySelector('img'))toggleEnlarge();};$('media').append(media);const source=mediaURL(item.thumbUrl,false,previewSize()),reused=media===preloaded&&media.src===source;if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0)media.hidden=false;else await failed();}}
+  }catch{await failed();}
  }
  function updateVideoControls(){
   const video=mediaElement.querySelector('video');
@@ -1026,7 +1074,7 @@ function mountPhotosSwipe(environment) {
   trashList.replaceChildren();
   for(const candidate of candidates){
    const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');
-   image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
+   image.onerror=()=>image.remove();image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
    label.textContent=`${candidate.name} \u00b7 ${candidate.type} \u00b7 ${candidate.date?new Date(candidate.date).toLocaleDateString():'Unknown date'} \u00b7 ${candidate.queueSent?'Sent to review album':'Queued'} \u00b7 ID: ${candidate.mediaKey}`;
    label.style.cssText='white-space:normal;overflow-wrap:anywhere';
    button.append(image,label);button.setAttribute('aria-label',`Inspect ${label.textContent}`);
@@ -1034,7 +1082,7 @@ function mountPhotosSwipe(environment) {
   }
   $('queue-title').textContent=`Removal queue (${queue.length})`;
   $('queue').replaceChildren();
-  for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
+  for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.onerror=()=>image.remove();image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
   $('remove').textContent=inspected?'Back to review':'\u00d7 Queue';$('keep').textContent=inspected?'Keep instead':'\u2713 Keep';
   $('send').textContent=state.job?'Retry saved album operation':'Send to review album';
   $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/album/${encodeURIComponent(state.albumKey)}`;
@@ -1045,7 +1093,7 @@ function mountPhotosSwipe(environment) {
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
   busy=true;controls();
   try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);let settings={};try{settings=await (await pairingPromise).settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}unpairedBanner.hidden=!settings.unpaired;$('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;if(syncEnabled)await withAccountLease(synchronize);message(idleMessage());}
-  catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
+  catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();refreshStalePreviews();}
  }
  function close(){preloader.clear();finishCardAnimation();clearCardAnimation();$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
  const deferredReviewInputs=[];let reviewingUndo=false,cardAnimation=null;
