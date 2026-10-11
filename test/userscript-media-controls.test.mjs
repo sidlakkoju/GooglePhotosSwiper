@@ -13,7 +13,7 @@ function fixture(){
  const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,querySelector:tag=>tag==='video'?video:image,append:button=>buttons.push(button),addEventListener:(type,fn)=>handlers[type]=fn};
  const card={style:{},classList:{contains:name=>classes.has(name),remove:name=>classes.delete(name),toggle(name,on){const value=on??!classes.has(name);if(value)classes.add(name);else classes.delete(name);return value;}}};
  const nodes={card,media:mediaElement,zoom:{value:'1'},enlarge:{}};
- const context=vm.createContext({mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector==='button'?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0});
+ const context=vm.createContext({mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector==='button'?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
  vm.runInContext(source.slice(source.indexOf(' function updateVideoControls()'),source.indexOf(' function render()')),context);
  createSwipeFeedback({window:{},targets:[mediaElement],card,under:{style:{}},keep:{style:{}},remove:{style:{}},canSwipe:()=>false,onDecide(){},playbackOnClick:true});
  const click=target=>{target.onclick?.();handlers.click({target});};
@@ -36,7 +36,7 @@ test('Play and Mute button clicks bubble without toggling media playback again',
 
 test('display and zoom reset leave touch actions to expanded CSS, while zoom above one allows pan and pinch',async()=>{
  const f=fixture();
- vm.runInContext(source.slice(source.indexOf(' async function display(item)'),source.indexOf(' function updateVideoControls()')),f.context);
+ vm.runInContext(source.slice(source.indexOf(' async function display(item,'),source.indexOf(' function updateVideoControls()')),f.context);
  f.mediaElement.style.color='';
  await f.context.display(null);
  assert.equal(f.mediaElement.style.touchAction,'');

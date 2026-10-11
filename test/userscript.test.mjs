@@ -1,6 +1,7 @@
+import {injectRelease} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,access,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {readFile,access,mkdtemp,writeFile,rm,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -11,7 +12,7 @@ import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndo
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
-const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
+const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',urlFetchedAt:Date.now(),thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
 function fixture(responder){
  const calls=[],window={WIZ_global_data:{...tokens}};
  const api=createPhotosAPI({window,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,fetch:async(url,options)=>{
@@ -70,6 +71,18 @@ test('video and Trash reads use page-session RPCs and refuse direct deletion com
  assert.deepEqual((await call(f,'trashPage')).items,[{mediaKey:'photo',dedupKey:'stable'}]);
  const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
  const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
+});
+test('media URL refresh selects the preview tuple while video keeps the playback URL',async()=>{
+ const preview='https://photos.fife.usercontent.google.com/preview',playback='https://lh3.googleusercontent.com/playback';
+ const f=fixture(()=>[['photo',[preview,800,600]],playback]);
+ assert.deepEqual(await call(f,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ assert.deepEqual(await call(f,'video',{mediaKey:'photo'}),{url:playback});
+ assert.deepEqual(f.calls[0].args,['photo',null,null,null,null]);
+ const download=fixture(()=>[['photo',[preview,800,600]],'https://video-downloads.google.com/download']);
+ assert.deepEqual(await call(download,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ for(const data of [[['other',[preview,800,600]],playback],[['photo'],playback],[['photo',['https://invalid.test/preview',800,600]],playback]]){
+  assert.equal((await fixture(()=>data).api('mediaURL',{mediaKey:'photo'})).ok,false);
+ }
 });
 test('page merges preserve decisions, sent markers and older progress through latest refresh',()=>{
  let state={...emptyReview(),items:[item('old',{decision:'remove',queueSent:true})]};
@@ -130,6 +143,8 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  const mounted=bundleEnvironment();
  vm.runInNewContext(source,mounted.environment);
  assert.equal(mounted.hosts.length,1);assert.equal(mounted.shadowMode,'open');
+ assert.equal(mounted.nodes.get('running-version').textContent,'v'+/^\/\/ @version (\S+)$/m.exec(source)[1]);
+ for(const field of ['updateURL','downloadURL'])assert.deepEqual([...source.slice(0,source.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),[url]);
  assert.equal(typeof mounted.nodes.get('launcher').onclick,'function');
  assert.match(mounted.root.childNodes[0].childNodes[0].textContent,/#zoom\{[^}]*min-height:44px/);
  assert.doesNotMatch(source,/innerHTML|outerHTML|insertAdjacentHTML/);
@@ -137,6 +152,24 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  for(const line of metadata.trim().split('\n').slice(1))assert.match(line,/^\/\/ @/);
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+});
+test('rebuilt panel version follows a metadata version bump',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'photos-version-'));
+ try{
+  for(const name of ['scripts','lib','extension','public'])await cp(new URL('../'+name,import.meta.url),join(directory,name),{recursive:true});
+  const builderPath=join(directory,'scripts/build-userscript.mjs');
+  const builder=await readFile(builderPath,'utf8');
+  const version='9.8.7';
+  await writeFile(builderPath,builder.replace(/^\/\/ @version .*$/gm,'// @version '+version));
+  const result=spawnSync(process.execPath,[builderPath],{cwd:directory,encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  const source=await readFile(join(directory,'userscript/photoswiper.user.js'),'utf8');
+  const metadataVersion=/^\/\/ @version (\S+)$/m.exec(source)[1];
+  assert.equal(metadataVersion,version);
+  const mounted=bundleEnvironment();
+  vm.runInNewContext(source,mounted.environment);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+metadataVersion);
+ }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
  const bytes=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));
@@ -257,9 +290,9 @@ function bundleEnvironment(fault={}) {
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
+ const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
- result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
 test('library sightings restore active state and retain local album membership on load and refresh',()=>{
@@ -744,7 +777,7 @@ test('mounted album send creates a readable title and saves the verified album',
  assert.ok(requests.includes('E1Cajb'));
 });
 
-test('phone layout keeps library controls clear and Trash text inside its cell in Chrome',async t=>{
+test('phone layout stacks sync fields and keeps library controls and Trash text clear in Chrome',async t=>{
  const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
  if(!browser){t.skip('Chrome is unavailable');return;}
  const mounted=await mountedReview([item('a')]);
@@ -761,7 +794,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true]]){
+  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true],[390,844,false]]){
    const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
@@ -782,8 +815,18 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const explanationVisible=inside(explanation,footer)&&inside(explanation,overlay)&&textInside(explanation);
    const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
    const checkFits=inside(check,footer)&&textInside(check);
+   const settings=root.getElementById('sync-settings');settings.open=true;
+   const settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
+   const buttons=Array.from(settings.querySelectorAll('button')).filter(button=>button.getClientRects().length);
+   const syncFields=['sync-url','sync-token'].map(id=>{
+    const input=root.getElementById(id),field=input.parentElement;
+    range.selectNodeContents(field.firstChild);const text=range.getBoundingClientRect(),box=bounds(input),fieldBox=bounds(field);
+    return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
+   });
+   const local=bounds(root.getElementById('sync-local'));
+   const localOwnRow=Array.from(settings.children).filter(element=>element!==root.getElementById('sync-local')&&element.getClientRects().length).every(element=>bounds(element).bottom<=local.top||bounds(element).top>=local.bottom);
    const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   results.push({width,height,syncFields,localOwnRow,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -791,8 +834,10 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
   if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
   assert.equal(result.status,0,result.stderr);
-  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
+  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,4,result.stdout);
   for(const measurement of measurements){
+   assert.equal(measurement.localOwnRow,true,JSON.stringify(measurement));
+   for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    assert.equal(measurement.initialClear,true,JSON.stringify(measurement));assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
    assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
    for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
@@ -1276,13 +1321,29 @@ test('signed-in privileged bundle uses page AbortSignals for library, album and 
  test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
  const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');
- assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');
+ assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');preview.complete=true;preview.naturalWidth=800;
  await mounted.click('keep');
- assert.equal(mounted.nodes.get('media').querySelector('img'),preview);
+ assert.equal(mounted.nodes.get('media').querySelector('img'),preview);assert.equal(preview.hidden,false);
  assert.equal(under.querySelector('img').dataset.key,'c');
  mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
  assert.equal(under.hidden,true);
  });
+
+test('a failed reused under-card preview refreshes and exposes Retry on another failure',async()=>{
+ const calls=[],mounted=await mountedReview([item('a'),item('b'),item('c')],async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://video-downloads.google.com/download'])};
+ });
+ const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');preview.complete=true;preview.naturalWidth=0;
+ await mounted.click('keep');await settlePreviews();
+ assert.deepEqual(calls,['b']);
+ const media=mounted.nodes.get('media'),refreshed=media.querySelector('img');assert.ok(refreshed);assert.notEqual(refreshed,preview);
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+ await refreshed.onerror();assert.equal(media.querySelector('button').textContent,'Retry');
+ media.querySelector('button').onclick();await settlePreviews();
+ assert.deepEqual(calls,['b','b']);assert.ok(media.querySelector('img'));
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+});
 
 test('an unresolved fly animation never blocks the next decision',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
@@ -1655,6 +1716,61 @@ test('device actions are disabled before configuration and after revoking this d
  assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
 });
 
+const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
+
+test('stale saved previews refresh only the current and preload window on open and resume',async()=>{
+ const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
+ const mounted=await mountedReview(items,async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
+ });
+ await settlePreviews();
+ assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
+ assert.equal(calls.length,4);
+ assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
+ assert.equal((await mounted.read()).items.filter(row=>row.decision).length,0);
+ calls.length=0;
+ mounted.environment.document.visibilityState='visible';
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();
+ assert.equal(calls.length,0);
+ const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
+ try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+ assert.equal(calls.length,4);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
+ mounted.nodes.get('close').onclick();calls.length=0;
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();assert.equal(calls.length,0);
+});
+
+test('photo and video errors refresh once then replace failed media with an explicit Retry card',async()=>{
+ for(const type of ['photo','video']){
+  const calls=[];
+  const mounted=await mountedReview([item('expired',{type})],async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];calls.push(entry[0]);
+   return {ok:true,text:async()=>envelope('VrseUb',[['expired',[`https://photos.fife.usercontent.google.com/fresh-preview-${calls.length}`,800,600]],`https://lh3.googleusercontent.com/fresh-playback-${calls.length}`])};
+  });
+  await settlePreviews();calls.length=0;
+  const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
+  await first.onerror();await settlePreviews();
+  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-playback-/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
+  assert.equal(calls.length,type==='video'?2:1);
+  await retried.onerror();assert.equal(container.querySelector(tag),null);
+  const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
+  const count=calls.length;retry.onclick();await settlePreviews();
+  assert.ok(container.querySelector(tag));assert.ok(calls.length>count);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+
+test('late expired preview responses cannot replace a newly selected card',async()=>{
+ const response=Promise.withResolvers();
+ const mounted=await mountedReview([item('old'),item('next')],async()=>{await response.promise;return {ok:true,text:async()=>envelope('VrseUb',[['old',['https://photos.fife.usercontent.google.com/fresh-old',800,600]],'https://video-downloads.google.com/download'])};});
+ const failed=mounted.nodes.get('media').querySelector('img').onerror();
+ await mounted.click('keep');const next=mounted.nodes.get('media').querySelector('img');
+ response.resolve();await failed;await settlePreviews();
+ assert.equal(mounted.nodes.get('media').querySelector('img'),next);
+ assert.match(mounted.nodes.get('caption').textContent,/^next/);
+});
 
 test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
@@ -1697,4 +1813,14 @@ test('decision history caps visible rows while retaining all Undo entries',async
  assert.equal(rows[100].textContent,'Showing the latest 100 of 105 decisions.');
  assert.match(rows[0].textContent,/synthetic-104-/);
  assert.equal((await mounted.read()).history.length,105);
+});
+
+test('loader panel displays the selected signed release version instead of the bundled version',async()=>{
+ const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ for(const version of ['1.2.99','1.2.8']){
+  const mounted=bundleEnvironment();
+  const document={documentElement:{dataset:{}},querySelector:()=>null,createElement:()=>({remove(){}}),head:{appendChild:script=>vm.runInNewContext(script.textContent,mounted.environment)}};
+  assert.equal(injectRelease({document},{version,code}),true);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
+ }
 });
