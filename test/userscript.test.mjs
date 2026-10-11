@@ -224,7 +224,7 @@ function fakeIndexedDB(fault={}) {
    const staged=new Map(stores.get(name));let aborted=false;
    const tx={objectStore:()=>({
     get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
+    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -954,4 +954,54 @@ test('revision conflicts stay visible and do not retry the stale snapshot',async
  await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('status').textContent,/Unsaved decisions remain visible.*Reload/);
  assert.match(mounted.nodes.get('caption').textContent,/^b ·/);assert.equal((await db.read(account)).cursor,'other-tab');
+});
+
+test('lease recovery saves pending decisions and resumes input through visibility, reopen and close',async()=>{
+ for(const recovery of ['visibility','reopen','close']){
+  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')]);
+  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+  const transaction=database.transaction;
+  database.transaction=function(name,...args){if(name==='accounts'&&fault.failSave)throw Error('Synthetic save failure');if(name==='leases'&&fault.failLease)throw Error('Synthetic lease failure');return transaction.call(this,name,...args);};
+  fault.failSave=true;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+  fault.failLease=true;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+  assert.match(mounted.nodes.get('status').textContent,/lease failure/);
+  mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
+  await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);
+  fault.failLease=false;fault.failSave=false;
+  if(recovery==='visibility'){mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
+  else if(recovery==='reopen')await mounted.nodes.get('launcher').onclick();
+  else {await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);await mounted.nodes.get('launcher').onclick();}
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+  await mounted.click('keep');assert.equal((await mounted.read()).items[1].decision,'keep');
+  await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ }
+});
+test('bfcache reopen waits for pagehide sync before reading progress and accepting another swipe',async()=>{
+ let release,started;const pushing=new Promise(resolve=>{started=resolve;});let blocked=true;
+ const mounted=await mountedReview([item('a'),item('b'),item('c')],{fetch:async(url,options)=>{
+  if(new URL(url).pathname==='/api/decisions'&&blocked){started();await new Promise(resolve=>{release=resolve;});blocked=false;}
+  return {ok:true,json:async()=>({decisions:blocked?[]:[{id:'a',decision:'keep'}],history:blocked?[]:[{key:'a',previous:null,decision:'keep',revision:1}],progress:{}})};
+ }},{url:'https://sync.example',token:'test-secret'});
+ await mounted.click('keep');mounted.environment.window.listeners.pagehide();await pushing;
+ let reopened=false;const opening=mounted.environment.window.listeners.pageshow({persisted:true}).then(()=>{reopened=true;});
+ await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened,false);
+ release();await opening;
+ assert.deepEqual((await mounted.read()).syncPending,{});
+ await mounted.click('keep');
+ const saved=await mounted.read();assert.deepEqual(saved.items.map(row=>row.decision),['keep','keep',null]);
+ assert.equal(saved.syncDecisions.a,'keep');assert.deepEqual(saved.syncPending,{b:'keep'});
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/conflict/);
+ await mounted.nodes.get('close').onclick();
+});
+test('a failed video RPC does not reject the next visible video waiting for it',async()=>{
+ let fail,started;const pending=new Promise(resolve=>{started=resolve;}),requests=[];
+ const mounted=await mountedReview([item('first',{type:'video'}),item('second',{type:'video'})],{fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(JSON.parse(entry[1]));
+  if(requests.length===1){started();await new Promise(resolve=>{fail=resolve;});throw Error('Synthetic video failure');}
+  return {ok:true,text:async()=>envelope('VrseUb',[['second'],'https://lh3.googleusercontent.com/second-video'])};
+ }});
+ await pending;mounted.nodes.get('keep').onclick();const video=mounted.nodes.get('media').querySelector('video');
+ fail();await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(requests.length,2);assert.match(video.src,/second-video/);assert.equal(video.paused,false);
+ await mounted.nodes.get('close').onclick();
 });
