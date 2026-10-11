@@ -61,7 +61,14 @@ export async function syncRequest(request,env={}) {
    await db.prepare("INSERT OR IGNORE INTO review_state (scope, progress, history) VALUES (?, '{}', '[]')").bind(scope).run();
    if(route==='/api/progress'){
     if(!value||Object.keys(value).some(key=>!['started','reviewed','items','lifetimeFreed'].includes(key))||typeof value.started!=='boolean'||!Number.isSafeInteger(value.reviewed)||value.reviewed<0||Object.hasOwn(value,'items')&&!progressItemsValid(value.items)||Object.hasOwn(value,'lifetimeFreed')&&(!Number.isSafeInteger(value.lifetimeFreed)||value.lifetimeFreed<0))throw Error('Invalid progress');
-    await db.prepare('UPDATE review_state SET progress = ? WHERE scope = ?').bind(JSON.stringify(value),scope).run();
+    const incoming=JSON.stringify(value),items=JSON.stringify(Object.fromEntries((value.items||[]).map(item=>[item.mediaKey,item])));
+    await db.prepare(`UPDATE review_state SET progress =
+     CASE WHEN json_type(?, '$.items') IS NULL THEN json_patch(progress, ?)
+     ELSE json_set(json_patch(progress, ?), '$.items', json((
+      SELECT json_group_array(json(value)) FROM json_each(json_patch(
+       (SELECT json_group_object(json_extract(value, '$.mediaKey'), json(value)) FROM json_each(review_state.progress, '$.items')), ?
+      ))
+     ))) END WHERE scope = ?`).bind(incoming,incoming,incoming,items,scope).run();
    }else if(method==='PUT'){
     if(!historyValid(value.history)||Object.keys(value).length!==1)throw Error('Invalid undo history');
     await db.prepare('UPDATE review_state SET history = ? WHERE scope = ?').bind(JSON.stringify(value.history),scope).run();

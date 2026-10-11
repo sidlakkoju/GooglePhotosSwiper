@@ -352,7 +352,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    if(dirty){
     await request(scope,'api/undo','PUT',{history});
    }
-   if(progressDirty)await request(scope,'api/progress','PUT',progress);
+   if(progressDirty)for(const batch of progressBatches(progress))await request(scope,'api/progress','PUT',batch);
    next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress,syncCheckpoint:progress});
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return state;}
@@ -381,6 +381,20 @@ function validateSyncSettings(url,token) {
  return {url:parsed.origin,token};
 }
 
+function progressBatches(progress) {
+ const {items,...metadata}=progress,encoder=new TextEncoder(),batches=[];
+ let batch=[],bytes=encoder.encode(JSON.stringify({...metadata,items:[]})).length;
+ const baseBytes=bytes;
+ for(const item of items){
+  const itemBytes=encoder.encode(JSON.stringify(item)).length;
+  if(batch.length&&(batch.length===2000||bytes+itemBytes+1>262144)){
+   batches.push({...metadata,items:batch});batch=[];bytes=baseBytes;
+  }
+  bytes+=itemBytes+(batch.length?1:0);batch.push(item);
+ }
+ if(batch.length||!batches.length)batches.push({...metadata,items:batch});
+ return batches;
+}
 function reviewSyncProgress(state,decisions=state.syncDecisions||{}) {
  const fields=['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent'];
  return {started:!!state.started,reviewed:Object.keys(decisions).length,items:state.items.map(item=>Object.fromEntries(fields.filter(field=>item[field]!==undefined).map(field=>[field,item[field]]))),lifetimeFreed:state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes};

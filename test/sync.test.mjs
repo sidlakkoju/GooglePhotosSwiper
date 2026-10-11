@@ -391,3 +391,46 @@ test('recovery read failures preserve empty local state and allow a later retry'
  assert.equal(saves,0);assert.match(statuses.at(-1),/Synthetic preview failure.*saved locally/);
  const restored=await client.sync('qa',empty,save);assert.equal(saves,1);assert.equal(restored.items[0].decision,'keep');
 });
+
+test('a partial device checkpoint preserves remote trash rows through a wiped-store restore',async()=>{
+ const e=env(),trash={mediaKey:'remote-trash',state:'in_trash',spaceTaken:112000,revision:2,queueSent:true};
+ await call(e,'decisions/remote-trash','PUT',{decision:'remove'});
+ await call(e,'progress','PUT',{started:true,reviewed:1,items:[trash],lifetimeFreed:112000});
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const local={started:true,items:[{mediaKey:'local',state:'active',revision:0}],history:[],syncDecisions:{},syncPending:{}};
+ const synced=await client.sync('default',local,async value=>value);
+ assert.ok(synced.syncCheckpoint);
+ const restored=await client.sync('default',{started:false,items:[],history:[]},async value=>value);
+ assert.deepEqual(restored.items.find(item=>item.mediaKey===trash.mediaKey),{...trash,name:trash.mediaKey,type:'photo',decision:'remove',needsPreview:true});
+ assert.equal(restored.lifetimeFreed,112000);
+ assert.equal((await call(e,'progress','PUT',{started:true,reviewed:0,items:[{...trash,state:'active',revision:3,queueSent:false}],lifetimeFreed:112000})).status,200);
+ const progress=await (await call(e,'progress')).json();
+ assert.equal(progress.items.length,2);
+ assert.equal(progress.items.find(item=>item.mediaKey===trash.mediaKey).state,'active');
+});
+
+for(const [name,count,keyLength] of [['row limit',2101,10],['byte limit',1200,256]])test(`large checkpoints batch within the ${name} and restore all rows`,async()=>{
+ const e=env(),writes=[],statuses=[];
+ const client=createSyncClient({status:value=>statuses.push(value),fetch:async(url,options)=>{
+  if(new URL(url).pathname==='/api/progress')writes.push(options.body);
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const items=Array.from({length:count},(_,index)=>({mediaKey:String(index).padStart(keyLength,'x'),state:'in_trash',type:'photo',revision:1,spaceTaken:1000,queueSent:true}));
+ items[0]={...items[0],state:'active',queueSent:false};
+ const history=[{key:items[0].mediaKey,previous:null,decision:'remove',revision:1}];
+ const state={started:true,items,history,syncDirty:true,syncDecisions:{},syncPending:{[items[0].mediaKey]:'remove'},lifetimeFreed:count*1000};
+ const saved=await client.sync('default',state,async value=>value);
+ assert.notEqual(saved,state);assert.equal(saved.syncDirty,false);assert.deepEqual(saved.syncPending,{});
+ assert.match(statuses.at(-1),/^Synced/);assert.ok(writes.length>1);
+ for(const body of writes){assert.ok(new TextEncoder().encode(body).length<=262144);assert.ok(JSON.parse(body).items.length<=2000);}
+ assert.equal(saved.syncCheckpoint.items.length,count);
+ const restored=await client.sync('default',{started:false,items:[],history:[]},async value=>value);
+ assert.equal(restored.items.length,count);assert.deepEqual(restored.history,history);
+ assert.equal(canUndoReview(restored,history[0]),true);
+ assert.equal(restored.lifetimeFreed,count*1000);
+ const writeCount=writes.length;
+ await client.sync('default',saved,async value=>value);
+ assert.equal(writes.length,writeCount);
+});
