@@ -143,6 +143,7 @@ function throwSwipe(element,dx,duration){
   const animation=animateSwipe(copy,dx,true,duration);
   if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
   else copy.remove();
+  return animation;
 }
 
 function buildPhotosRequest(tokens,location,id,payload) {
@@ -680,7 +681,7 @@ function mountPhotosSwipe(environment) {
   const item=current();if(!item)return;
   const card=$('card'),visibility=card.style.visibility;
   for(const animation of card.getAnimations?.()||[])animation.cancel();
-  if(swipeResult){throwSwipe(card,swipeResult.dx,swipeResult.duration);card.style.visibility='hidden';}
+  if(swipeResult&&throwSwipe(card,swipeResult.dx,swipeResult.duration))card.style.visibility='hidden';
   const operation=run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});
   if(swipeResult)operation.finally(()=>{card.style.visibility=visibility;});
  }

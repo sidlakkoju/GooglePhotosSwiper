@@ -53,7 +53,7 @@ test('outgoing visual copies are removed after animation while the original stay
  const child={removeAttribute(){}};
  const copy={style:{},removeAttribute(){},querySelectorAll:()=>[child],setAttribute(){},remove(){removed=true;},getBoundingClientRect:()=>({width:300}),animate:()=>({finished:new Promise(resolve=>{finish=resolve;})})};
  const original={style:{},ownerDocument:{body:{}},parentNode:{append:element=>{appended=element;}},cloneNode:()=>copy,getBoundingClientRect:()=>({left:10,top:20,width:300,height:400})};
- assert.equal(throwSwipe(original,1,240),undefined);
+ assert.ok(throwSwipe(original,1,240));
  assert.equal(appended,copy);
  assert.equal(removed,false);
  assert.equal(copy.inert,true);

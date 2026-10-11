@@ -38,4 +38,5 @@ export function throwSwipe(element,dx,duration){
   const animation=animateSwipe(copy,dx,true,duration);
   if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
   else copy.remove();
+  return animation;
 }

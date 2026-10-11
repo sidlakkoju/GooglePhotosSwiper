@@ -29,7 +29,7 @@ for(const surface of ['userscript','viewer']){
   let finish;
   const waiting=new Promise(resolve=>{finish=resolve;});
   const save=async()=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');};
-  const context=vm.createContext({busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>throws.push({element,dx,duration}),run:async task=>{try{await task();}catch{}finally{context.render();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
+  const context=vm.createContext({busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting};},run:async task=>{try{await task();}catch{}finally{context.render();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
   const start=source.indexOf(surface==='userscript'?' function decide(':'  async function decide(');
   const end=source.indexOf(surface==='userscript'?' function undo(':'  async function undo(',start);
   vm.runInContext(source.slice(start,end),context);
@@ -60,6 +60,31 @@ for(const surface of ['userscript','viewer']){
   await result;
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(card.style.visibility,'');
+ });
+ for(const fallback of ['reduced motion','missing animate'])for(const fail of [false,true])test(`${surface} stays visible during a delayed ${fail?'failed':'successful'} save with ${fallback}`,async()=>{
+  const {context,card,writes,finish}=fixture({fail});
+  let removed=false;
+  const copy={style:{},removeAttribute(){},setAttribute(){},querySelectorAll:()=>[],remove(){removed=true;},getBoundingClientRect:()=>({width:300})};
+  if(fallback==='reduced motion')copy.animate=()=>assert.fail('Reduced motion must skip animation');
+  Object.assign(card,{ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect:()=>({left:0,top:0,width:300,height:400})});
+  const matchMedia=globalThis.matchMedia;
+  globalThis.matchMedia=()=>({matches:fallback==='reduced motion'});
+  context.throwSwipe=surface==='userscript'?throwUserscriptSwipe:throwPublicSwipe;
+  context.render=()=>assert.equal(card.style.visibility,'');
+  context.show=async()=>assert.equal(card.style.visibility,'');
+  try{
+   const result=context.decide('keep',{dx:120,duration:240});
+   assert.equal(removed,true);
+   assert.equal(card.style.visibility,'');
+   assert.deepEqual(writes,['save']);
+   finish();
+   await result;
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(card.style.visibility,'');
+  }finally{
+   if(matchMedia===undefined)delete globalThis.matchMedia;
+   else globalThis.matchMedia=matchMedia;
+  }
  });
  test(`${surface} does not fly off a gesture rejected by busy state`,async()=>{
   const {context,card,throws,writes}=fixture({busy:true});
