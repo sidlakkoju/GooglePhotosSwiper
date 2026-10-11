@@ -26,4 +26,7 @@ npx --yes wrangler@4 d1 migrations apply photoswiper-sync --remote --config "$co
 if [[ -n "${SYNC_TOKEN:-}" ]]; then
   printf '%s' "$SYNC_TOKEN" | npx --yes wrangler@4 secret put SYNC_TOKEN --config "$config_path"
 fi
+if [[ -n "${PAIRING_IP_KEY:-}" ]]; then
+  printf '%s' "$PAIRING_IP_KEY" | npx --yes wrangler@4 secret put PAIRING_IP_KEY --config "$config_path"
+fi
 npx --yes wrangler@4 deploy --config "$config_path"

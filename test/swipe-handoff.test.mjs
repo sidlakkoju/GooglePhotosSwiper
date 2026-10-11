@@ -25,13 +25,13 @@ for(const [surface,throwSwipe] of [['deck',throwPublicSwipe],['userscript',throw
 for(const surface of ['userscript','viewer']){
  const source=await readFile(new URL(surface==='userscript'?'../lib/userscript-ui.mjs':'../public/viewer.js',import.meta.url),'utf8');
  function fixture({busy=false,inspection=false,fail=false}={}){
-  const card={style:{visibility:'',transform:'translateX(120px) rotate(6deg)'}},throws=[],writes=[];
+  const card={hidden:false,style:{visibility:'',transform:'translateX(120px) rotate(6deg)'}},throws=[],writes=[];
   let finish;
   const waiting=new Promise(resolve=>{finish=resolve;});
   const save=async()=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');};
-  const context=vm.createContext({busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting};},run:async task=>{try{await task();}catch{}finally{context.render();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
-  const start=source.indexOf(surface==='userscript'?' function decide(':'  async function decide(');
-  const end=source.indexOf(surface==='userscript'?' function undo(':'  async function undo(',start);
+  const context=vm.createContext({identity:{account:'synthetic'},window:{setTimeout,clearTimeout,matchMedia:()=>globalThis.matchMedia?.()||{matches:false}},busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting,finish(){},cancel(){}};},run:async task=>{try{await task();}catch{}finally{context.render();if(surface==='userscript')context.clearCardAnimation();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
+  const start=source.indexOf(surface==='userscript'?' let reviewActions=':'  async function decide(');
+  const end=source.indexOf(surface==='userscript'?' async function applyUndo(':'  async function undo(',start);
   vm.runInContext(source.slice(start,end),context);
   return {context,card,throws,writes,finish};
  }
