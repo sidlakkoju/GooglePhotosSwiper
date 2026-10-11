@@ -6,13 +6,13 @@ import vm from 'node:vm';
 import {compareVersions,releaseMessage,verifyRelease,startLoader,injectRelease} from '../lib/userscript-loader.mjs';
 const pair=generateKeyPairSync('ed25519');
 const key=Buffer.from(pair.publicKey.export({format:'jwk'}).x,'base64url').toString('base64');
-const signed=(version='1.2.3',code='globalThis.appRuns=(globalThis.appRuns||0)+1;')=>{
+const signed=(version='1.2.3',code='window.appRuns=(window.appRuns||0)+1;')=>{
  const release={version,code};
  return {...release,signature:sign(null,Buffer.from(releaseMessage(release)),pair.privateKey).toString('base64')};
 };
 function environment(cached,latest){
  const scripts=[],dataset={},writes=[];
- const env={crypto:webcrypto,setTimeout,clearTimeout,document:{documentElement:{dataset},querySelector:()=>({nonce:'page-nonce'}),createElement:()=>({remove(){}}),head:{appendChild(script){scripts.push(script);}}},trustedTypes:{createPolicy(name,rules){return rules;}},GM:{getValue:async()=>cached,setValue:async(name,value)=>writes.push(value),xmlHttpRequest(options){env.request=options;queueMicrotask(()=>latest==='timeout'?options.ontimeout():options.onload({status:200,responseText:JSON.stringify(latest)}));}}};
+ const env={window:{},crypto:webcrypto,setTimeout,clearTimeout,document:{documentElement:{dataset},querySelector:()=>({nonce:'page-nonce'}),createElement:()=>({remove(){}}),head:{appendChild(script){scripts.push(script);}}},trustedTypes:{createPolicy(name,rules){return rules;}},GM:{getValue:async()=>cached,setValue:async(name,value)=>writes.push(value),deleteValue:async()=>{},xmlHttpRequest(options){env.request=options;queueMicrotask(()=>latest==='timeout'?options.ontimeout():options.onload({status:200,responseText:JSON.stringify(latest)}));}}};
  return {env,scripts,writes};
 }
 test('release signatures bind code and version and reject a wrong key',async()=>{
@@ -30,9 +30,7 @@ test('rollback and timeout fall back to verified cache',async()=>{
  for(const latest of [signed('1.0.0'),'timeout',{...signed(),code:'tampered'}]){
   const {env,scripts,writes}=environment(signed('2.0.0'),latest);
   assert.equal(await startLoader(env,key),true);
-  const context={};vm.runInNewContext(scripts[0].textContent,context);assert.equal(context.appRuns,1);
-  assert.match(scripts[0].textContent,/\}\)\("2\.0\.0"\);$/);
-  assert.equal(scripts[0].nonce,'page-nonce');
+  assert.equal(env.window.appRuns,1);assert.equal(scripts.length,0);
   assert.equal(env.request.timeout,1500);
   assert.match(env.request.url,/photoswiper-release.json\?t=\d+/);
   assert.equal(writes.length,0);
@@ -40,11 +38,20 @@ test('rollback and timeout fall back to verified cache',async()=>{
  const {env,scripts}=environment({...signed(),code:'bad'},'timeout');
  assert.equal(await startLoader(env,key),false);assert.equal(scripts.length,0);
 });
+
+test('verified releases receive their signed version in the private execution context',async()=>{
+ for(const version of ['2.0.0','2.1.0-rc.1']){
+  const {env,scripts}=environment(null,signed(version,'window.releaseVersion=photosSwipeReleaseVersion;window.privateStore=GM;'));
+  assert.equal(await startLoader(env,key),true);
+  assert.equal(env.window.releaseVersion,version);assert.equal(env.window.privateStore,env.GM);assert.equal(scripts.length,0);
+ }
+});
+
 test('valid newer and equal releases are cached and injected once',async()=>{
  for(const version of ['1.2.3','1.2.4']){
   const {env,scripts,writes}=environment(signed(),signed(version));
   await Promise.all([startLoader(env,key),startLoader(env,key)]);
-  assert.equal(scripts.length,1);assert.equal(writes[0].version,version);
+  assert.equal(env.window.appRuns,1);assert.equal(scripts.length,0);assert.equal(writes[0].version,version);
   assert.equal(injectRelease(env,signed()),false);
  }
  const {env,scripts}=environment(null,signed());env.document.documentElement.dataset.psLoaded='1';
@@ -52,9 +59,9 @@ test('valid newer and equal releases are cached and injected once',async()=>{
 });
 test('legacy GM APIs and no Trusted Types are supported',async()=>{
  const {env,scripts}=environment(null,signed());
- env.GM_getValue=env.GM.getValue;env.GM_setValue=env.GM.setValue;env.GM_xmlhttpRequest=env.GM.xmlHttpRequest;
+ env.GM_deleteValue=env.GM.deleteValue;env.GM_getValue=env.GM.getValue;env.GM_setValue=env.GM.setValue;env.GM_xmlhttpRequest=env.GM.xmlHttpRequest;
  delete env.GM;delete env.trustedTypes;
- assert.equal(await startLoader(env,key),true);assert.equal(scripts.length,1);
+ assert.equal(await startLoader(env,key),true);assert.equal(env.window.appRuns,1);assert.equal(scripts.length,0);
 });
 test('full app skips when the shared app marker is set',async()=>{
  const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
@@ -63,7 +70,7 @@ test('full app skips when the shared app marker is set',async()=>{
 });
 test('loader metadata declares separate install URL and required grants',async()=>{
  const code=await readFile(new URL('../userscript/photoswiper-loader.user.js',import.meta.url),'utf8');
- for(const line of ['@match https://photos.google.com/*','@inject-into content','@grant GM.xmlHttpRequest','@grant GM.getValue','@grant GM.setValue','@grant GM_xmlhttpRequest','@grant GM_getValue','@grant GM_setValue','@connect photoswiper-sync.sidlakkoju.workers.dev'])assert.ok(code.includes(line));
+ for(const line of ['@match https://photos.google.com/*','@inject-into content','@grant GM.xmlHttpRequest','@grant GM.getValue','@grant GM.setValue','@grant GM.deleteValue','@grant unsafeWindow','@grant GM_deleteValue','@grant GM_xmlhttpRequest','@grant GM_getValue','@grant GM_setValue','@connect photoswiper-sync.sidlakkoju.workers.dev'])assert.ok(code.includes(line));
  for(const field of ['downloadURL','updateURL'])assert.deepEqual([...code.slice(0,code.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),['https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js']);
 });
 
@@ -72,5 +79,41 @@ test('loader watchdog falls back when the GM request never calls back',async()=>
  env.GM.xmlHttpRequest=()=>{};
  let delay;
  env.setTimeout=(callback,ms)=>{delay=ms;return setTimeout(callback,0);};
- assert.equal(await startLoader(env,key),true);assert.equal(delay,1500);assert.equal(scripts.length,1);
+ assert.equal(await startLoader(env,key),true);assert.equal(delay,1500);assert.equal(env.window.appRuns,1);assert.equal(scripts.length,0);
+});
+
+test('verified loader pairing stays in its GM store and restores server state after claiming',async()=>{
+ const modules=await Promise.all(['settings','pairing','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
+ const code=modules.map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n')+`
+ window.completed=(async()=>{
+  const store=await createPairingStore({GM,database:window.database,crypto:window.crypto});
+  const panel=receivePairingLink({document,parent:window.parent,location:{hash:''},window,fetch,manual:true,saveSettings:store.saveSettings,onPaired:async()=>{
+   const client=createSyncClient({fetch});client.configure(await store.settings());
+   window.restored=await client.sync('synthetic-account',{items:[],history:[]},async value=>value);
+  }});
+  panel.children[3].value='123456';await panel.children[1].onclick();
+ })();`;
+ const {env,scripts}=environment(null,signed('1.2.3',code));
+ const storage=new Map(),pageWorld={localStorage:{},indexedDB:{}},persisted=[];
+ let settings={};
+ env.GM.getValue=async name=>storage.get(name);env.GM.setValue=async(name,value)=>storage.set(name,value);
+ env.GM.deleteValue=async name=>storage.delete(name);
+ env.document.createElement=tag=>({tag,children:[],style:{},setAttribute(){},append(...nodes){this.children.push(...nodes);},focus(){}});
+ env.window={crypto:webcrypto,navigator:{},parent:{children:[],append(node){this.children.push(node);}},database:async()=>({settings:async()=>settings,deleteSettings:async()=>{settings={};},saveSettings:async value=>{settings=value;persisted.push(value);}})};
+ env.unsafeWindow=pageWorld;
+ const calls=[],remote={decisions:[{id:'photo',decision:'keep'}],history:[{key:'photo',decision:'keep',previous:null,revision:1}],progress:{started:true,reviewed:1}};
+ env.fetch=async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>url.endsWith('/api/pair/claim')?{token:'loader-private-token'}:remote};};
+ assert.equal(await startLoader(env,key),true);await env.window.completed;
+ assert.equal(storage.get('photos-swipe-pairing').token,'loader-private-token');
+ assert.deepEqual(env.window.restored.history,remote.history);assert.deepEqual(env.window.restored.syncProgress,remote.progress);assert.deepEqual(env.window.restored.syncDecisions,{photo:'keep'});
+ assert.equal(calls.length,2);assert.match(calls[1].url,/\/api\/state\?scope=synthetic-account$/);assert.equal(calls[1].options.headers.Authorization,'Bearer loader-private-token');
+ for(const value of [pageWorld,env.document.documentElement,env.window.parent,persisted])assert.ok(!JSON.stringify(value).includes('loader-private-token'));
+ assert.equal(scripts.length,0);
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const reloaded=await createPairingStore({GM:env.GM,database:env.window.database,crypto:webcrypto});assert.equal((await reloaded.settings()).token,'loader-private-token');
+});
+
+test('loader refuses page injection when private GM storage is unavailable',async()=>{
+ const {env,scripts}=environment(null,signed());delete env.GM.deleteValue;
+ assert.equal(await startLoader(env,key),false);assert.equal(scripts.length,0);assert.equal(env.window.appRuns,undefined);
 });
