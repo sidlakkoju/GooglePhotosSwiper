@@ -1031,14 +1031,32 @@ test('incomplete GM values migrate complete legacy pairing and preserve partial 
  }
 });
 
+test('failed GM migration preserves legacy pairing until a durable write succeeds',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(fakeIndexedDB());
+ const legacy={url:'https://sync.example',token:'legacy-token',deviceId:'device',deviceName:'Phone',onboardingDismissed:true};
+ await db.saveSettings(legacy);
+ let value=null,fail=true;
+ const GM={getValue:async()=>value,setValue:async(key,next)=>{if(fail)throw Error('Storage unavailable');value=next;},deleteValue:async()=>{}};
+ const store=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ await assert.rejects(store.settings(),/Storage unavailable/);
+ assert.deepEqual(await db.settings(),legacy);
+ fail=false;
+ assert.equal((await store.settings()).token,legacy.token);
+ assert.equal(value.token,legacy.token);
+ assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+});
+
 test('signed-in privileged bundle uses page AbortSignals for library, album and Trash requests',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const mounted=bundleEnvironment(),pageWindow=mounted.environment.window,requests=[];
- class PageAbortController extends AbortController {}
+ const pageSignals=new WeakSet();
+ class PageAbortController extends AbortController {constructor(){super();pageSignals.add(this.signal);}}
  class ContentAbortController {constructor(){throw Error('Content AbortController used for page fetch');}}
  pageWindow.AbortController=PageAbortController;
  pageWindow.fetch=async(url,options)=>{
-  assert.ok(options.signal instanceof AbortSignal);
+  assert.ok(pageSignals.has(options.signal));
   const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
   return {ok:true,text:async()=>envelope(id,id==='OXvT9d'?[['album']]:[[],null])};
  };
