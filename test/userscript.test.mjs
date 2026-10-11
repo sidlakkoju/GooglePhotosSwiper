@@ -122,14 +122,17 @@ test('built userscript metadata, page isolation, no privileged APIs and reproduc
  const url='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js';
  for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant none','@inject-into page',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
  assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/\bGM[_\.]|chrome\.|localhost|photos-swipe-request/);
- assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('id="card"')<source.indexOf('id="stats"'));
+ assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('const cardElement=')<source.indexOf('const statsElement='));
  const body=source.slice(source.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);assert.doesNotMatch(body,/^\s*\/\/|\/\*/m);
  new vm.Script(source);
  const mounted=bundleEnvironment();
  vm.runInNewContext(source,mounted.environment);
  assert.equal(mounted.hosts.length,1);assert.equal(mounted.shadowMode,'open');
  assert.equal(typeof mounted.nodes.get('launcher').onclick,'function');
- assert.match(mounted.root.innerHTML,/#zoom\{[^}]*min-height:44px/);
+ assert.match(mounted.root.childNodes[0].childNodes[0].textContent,/#zoom\{[^}]*min-height:44px/);
+ assert.doesNotMatch(source,/innerHTML|outerHTML|insertAdjacentHTML/);
+ const metadata=source.slice(0,source.indexOf('// ==/UserScript=='));
+ for(const line of metadata.trim().split('\n').slice(1))assert.match(line,/^\/\/ @/);
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
 });
@@ -198,11 +201,11 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{toggle(){},contains(){return false;}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(){return null;},setAttribute(){},addEventListener(){},focus(){}});
- const root={getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
- Object.defineProperty(root,'innerHTML',{get:()=>root.markup,set:value=>{root.markup=value;for(const match of value.matchAll(/<(\w+)[^>]*\bid="([^"]+)"[^>]*>/g)){const node=element(match[1]);node.id=match[2];node.hidden=match[0].includes(' hidden');nodes.set(node.id,node);}nodes.get('filter').value='all';nodes.get('sort').value='original';}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{toggle(){},contains(){return false;}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(){return null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},addEventListener(){},focus(){}});
+ const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
+ Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
+ const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
  const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,addEventListener(){}};window.top=window;
  result.environment={window,document,location:{...page},URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
@@ -242,4 +245,36 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');assert.equal((await db.read(account)).items[0].decision,'keep');
  fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
  const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone.');
+});
+async function mountedReview(items) {
+ const source=await readFile(new URL('../userscript/photos-swipe.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items});
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ return {...mounted,click,read:()=>db.read(account)};
+}
+test('mounted undo restores undecided after queue, keep instead, and two undos',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ await mounted.click('remove');
+ mounted.nodes.get('queue').childNodes[0].onclick();
+ await mounted.click('keep');
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ await mounted.click('undo');
+ assert.equal((await mounted.read()).items[0].decision,'remove');
+ assert.equal(mounted.nodes.get('queue').childNodes.length,1);
+ await mounted.click('undo');
+ const state=await mounted.read();
+ assert.equal(state.items[0].decision,null);assert.equal(state.items[0].revision,4);
+ assert.equal(mounted.nodes.get('queue').childNodes.length,0);
+ assert.equal(mounted.nodes.get('status').textContent,'Decision undone.');
+});
+test('mounted oldest-first puts missing dates at the epoch before dated media',async()=>{
+ const mounted=await mountedReview([item('dated',{date:'1990-01-01T00:00:00.000Z'}),item('missing')]);
+ mounted.nodes.get('sort').value='oldest';mounted.nodes.get('sort').onchange();
+ assert.match(mounted.nodes.get('caption').textContent,/^missing · Unknown date$/);
+ await mounted.click('keep');
+ assert.match(mounted.nodes.get('caption').textContent,/^dated · /);
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,'keep']);
 });

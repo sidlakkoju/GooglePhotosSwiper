@@ -1,6 +1,5 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 const installURL='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js';
-const license=await readFile(new URL('../extension/LICENSE-GPTK',import.meta.url),'utf8');
 const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
@@ -14,7 +13,6 @@ const metadata=`// ==UserScript==
 // @updateURL ${installURL}
 // @downloadURL ${installURL}
 // @license MIT
-${license.trim().split('\n').map(line=>`// ${line}`).join('\n')}
 // ==/UserScript==
 `;
 const modules=['userscript-api','userscript-core','userscript-db','userscript-ui'];

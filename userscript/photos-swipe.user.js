@@ -11,27 +11,6 @@
 // @updateURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js
 // @downloadURL https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js
 // @license MIT
-// MIT License
-// 
-// Copyright (c) 2024 xob0t
-// 
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-// 
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-// 
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
 // ==/UserScript==
 
 (function () {
@@ -274,24 +253,173 @@ function mountPhotosSwipe(environment) {
  const host=document.createElement('div');host.id='photos-swipe-userscript-host';
  host.style.cssText='all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none';
  const root=host.attachShadow({mode:'open'});
- root.innerHTML=`<style>
- :host{font:16px system-ui;color:#193426}*{box-sizing:border-box}button,select,input{font:inherit}button,a,select{touch-action:manipulation}button{min-height:44px;border:0;border-radius:12px;background:#e3ebdf;color:#193426;padding:10px 16px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #0075ff;outline-offset:2px}a{color:#236541}p{margin:8px 0;overflow-wrap:anywhere}[hidden]{display:none!important}
- .launcher{pointer-events:auto;position:absolute;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#245b3d;color:white;box-shadow:0 3px 20px #0005}
- .overlay{pointer-events:auto;position:absolute;inset:0;background:#f4f7f1;overflow:auto;overscroll-behavior:contain;padding:calc(12px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom))}
- .content{max-width:850px;margin:auto}header,.actions,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:22px;margin:0}.account{font-size:13px}.card{margin-top:12px;background:#13281f;border-radius:18px;overflow:hidden;position:relative}.media{height:48vh;height:48dvh;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:auto}.media img,.media video{display:block;max-width:100%;max-height:100%;object-fit:contain}.media img{touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-drag:none}.card.expanded .media{height:72vh;height:72dvh}.caption{color:white;padding:10px 14px}.swipe{color:white;text-align:center;padding:12px;touch-action:pan-y pinch-zoom;background:#264638}.actions{justify-content:center;margin:12px 0}.keep{background:#245b3d;color:white}.remove{background:#8c3535;color:white}.stats{padding:12px;background:#e3ebdf;border-radius:12px;margin:12px 0}.toolbar{margin:10px 0}select{max-width:100%;min-height:44px;border-radius:8px}details{margin:16px 0}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}.queue button{padding:6px;overflow:hidden}.queue img{width:100%;height:75px;object-fit:cover}.queue span{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{min-height:24px}#zoom{width:120px;min-height:44px} @media(min-width:800px){.media{height:55vh}.overlay{padding:24px}}
- </style>
- <button class="launcher" id="launcher">Photos Swipe</button>
- <section class="overlay" id="overlay" hidden role="dialog" aria-modal="true" aria-label="Photos Swipe"><div class="content">
- <header><h1>Photos Swipe</h1><button id="close">Close</button></header><p class="account" id="account"></p>
- <div class="card" id="card"><div class="media" id="media"></div><div class="swipe" id="swipe">Swipe left to queue · right to keep</div><p class="caption" id="caption">Load a batch to start reviewing.</p></div>
- <div class="actions"><button class="remove" id="remove">× Queue</button><button id="undo">Undo</button><button class="keep" id="keep">✓ Keep</button><button id="enlarge">Enlarge</button><label>Zoom <input id="zoom" type="range" min="1" max="3" step="0.25" value="1"></label></div>
- <div class="stats" id="stats"></div>
- <div class="toolbar"><button id="load">Load 50 more</button><button id="refresh">Refresh latest</button><select id="filter" aria-label="Media filter"><option value="all">All media</option><option value="photo">Photos</option><option value="video">Videos</option></select><select id="sort" aria-label="Review order"><option value="original">Library order</option><option value="oldest">Oldest first</option><option value="largest">Largest first</option></select></div>
- <p role="status" aria-live="polite" class="status" id="status"></p>
- <details id="queue-details"><summary id="queue-title">Removal queue</summary><div class="queue" id="queue"></div></details>
- <div class="toolbar"><button id="send">Send to review album</button><button id="trash">Check deleted items</button><a id="album" target="_blank" rel="noopener" hidden>Open review album ↗</a></div>
- <p>Swipes never delete media. Send candidates to a review album, then move them to Trash yourself in Google Photos.</p>
- </div></section>`;
+ const styleElement1=document.createElement('style');
+ root.append(styleElement1);
+ styleElement1.append(document.createTextNode("\n :host{font:16px system-ui;color:#193426}*{box-sizing:border-box}button,select,input{font:inherit}button,a,select{touch-action:manipulation}button{min-height:44px;border:0;border-radius:12px;background:#e3ebdf;color:#193426;padding:10px 16px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #0075ff;outline-offset:2px}a{color:#236541}p{margin:8px 0;overflow-wrap:anywhere}[hidden]{display:none!important}\n .launcher{pointer-events:auto;position:absolute;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#245b3d;color:white;box-shadow:0 3px 20px #0005}\n .overlay{pointer-events:auto;position:absolute;inset:0;background:#f4f7f1;overflow:auto;overscroll-behavior:contain;padding:calc(12px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom))}\n .content{max-width:850px;margin:auto}header,.actions,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:22px;margin:0}.account{font-size:13px}.card{margin-top:12px;background:#13281f;border-radius:18px;overflow:hidden;position:relative}.media{height:48vh;height:48dvh;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:auto}.media img,.media video{display:block;max-width:100%;max-height:100%;object-fit:contain}.media img{touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-drag:none}.card.expanded .media{height:72vh;height:72dvh}.caption{color:white;padding:10px 14px}.swipe{color:white;text-align:center;padding:12px;touch-action:pan-y pinch-zoom;background:#264638}.actions{justify-content:center;margin:12px 0}.keep{background:#245b3d;color:white}.remove{background:#8c3535;color:white}.stats{padding:12px;background:#e3ebdf;border-radius:12px;margin:12px 0}.toolbar{margin:10px 0}select{max-width:100%;min-height:44px;border-radius:8px}details{margin:16px 0}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}.queue button{padding:6px;overflow:hidden}.queue img{width:100%;height:75px;object-fit:cover}.queue span{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{min-height:24px}#zoom{width:120px;min-height:44px} @media(min-width:800px){.media{height:55vh}.overlay{padding:24px}}\n "));
+ const launcherElement=document.createElement('button');
+ launcherElement.setAttribute("class","launcher");
+ launcherElement.setAttribute("id","launcher");
+ root.append(launcherElement);
+ launcherElement.append(document.createTextNode("Photos Swipe"));
+ const overlayElement=document.createElement('section');
+ overlayElement.setAttribute("class","overlay");
+ overlayElement.setAttribute("id","overlay");
+ overlayElement.hidden=true;
+ overlayElement.setAttribute("role","dialog");
+ overlayElement.setAttribute("aria-modal","true");
+ overlayElement.setAttribute("aria-label","Photos Swipe");
+ root.append(overlayElement);
+ const divElement4=document.createElement('div');
+ divElement4.setAttribute("class","content");
+ overlayElement.append(divElement4);
+ const headerElement5=document.createElement('header');
+ divElement4.append(headerElement5);
+ const h1Element6=document.createElement('h1');
+ headerElement5.append(h1Element6);
+ h1Element6.append(document.createTextNode("Photos Swipe"));
+ const closeElement=document.createElement('button');
+ closeElement.setAttribute("id","close");
+ headerElement5.append(closeElement);
+ closeElement.append(document.createTextNode("Close"));
+ const accountElement=document.createElement('p');
+ accountElement.setAttribute("class","account");
+ accountElement.setAttribute("id","account");
+ divElement4.append(accountElement);
+ const cardElement=document.createElement('div');
+ cardElement.setAttribute("class","card");
+ cardElement.setAttribute("id","card");
+ divElement4.append(cardElement);
+ const mediaElement=document.createElement('div');
+ mediaElement.setAttribute("class","media");
+ mediaElement.setAttribute("id","media");
+ cardElement.append(mediaElement);
+ const swipeElement=document.createElement('div');
+ swipeElement.setAttribute("class","swipe");
+ swipeElement.setAttribute("id","swipe");
+ cardElement.append(swipeElement);
+ swipeElement.append(document.createTextNode("Swipe left to queue \u00b7 right to keep"));
+ const captionElement=document.createElement('p');
+ captionElement.setAttribute("class","caption");
+ captionElement.setAttribute("id","caption");
+ cardElement.append(captionElement);
+ captionElement.append(document.createTextNode("Load a batch to start reviewing."));
+ const divElement13=document.createElement('div');
+ divElement13.setAttribute("class","actions");
+ divElement4.append(divElement13);
+ const removeElement=document.createElement('button');
+ removeElement.setAttribute("class","remove");
+ removeElement.setAttribute("id","remove");
+ divElement13.append(removeElement);
+ removeElement.append(document.createTextNode("\u00d7 Queue"));
+ const undoElement=document.createElement('button');
+ undoElement.setAttribute("id","undo");
+ divElement13.append(undoElement);
+ undoElement.append(document.createTextNode("Undo"));
+ const keepElement=document.createElement('button');
+ keepElement.setAttribute("class","keep");
+ keepElement.setAttribute("id","keep");
+ divElement13.append(keepElement);
+ keepElement.append(document.createTextNode("\u2713 Keep"));
+ const enlargeElement=document.createElement('button');
+ enlargeElement.setAttribute("id","enlarge");
+ divElement13.append(enlargeElement);
+ enlargeElement.append(document.createTextNode("Enlarge"));
+ const labelElement18=document.createElement('label');
+ divElement13.append(labelElement18);
+ labelElement18.append(document.createTextNode("Zoom "));
+ const zoomElement=document.createElement('input');
+ zoomElement.setAttribute("id","zoom");
+ zoomElement.setAttribute("type","range");
+ zoomElement.setAttribute("min","1");
+ zoomElement.setAttribute("max","3");
+ zoomElement.setAttribute("step","0.25");
+ zoomElement.setAttribute("value","1");
+ labelElement18.append(zoomElement);
+ const statsElement=document.createElement('div');
+ statsElement.setAttribute("class","stats");
+ statsElement.setAttribute("id","stats");
+ divElement4.append(statsElement);
+ const divElement21=document.createElement('div');
+ divElement21.setAttribute("class","toolbar");
+ divElement4.append(divElement21);
+ const loadElement=document.createElement('button');
+ loadElement.setAttribute("id","load");
+ divElement21.append(loadElement);
+ loadElement.append(document.createTextNode("Load 50 more"));
+ const refreshElement=document.createElement('button');
+ refreshElement.setAttribute("id","refresh");
+ divElement21.append(refreshElement);
+ refreshElement.append(document.createTextNode("Refresh latest"));
+ const filterElement=document.createElement('select');
+ filterElement.setAttribute("id","filter");
+ filterElement.setAttribute("aria-label","Media filter");
+ divElement21.append(filterElement);
+ const optionElement25=document.createElement('option');
+ optionElement25.setAttribute("value","all");
+ filterElement.append(optionElement25);
+ optionElement25.append(document.createTextNode("All media"));
+ const optionElement26=document.createElement('option');
+ optionElement26.setAttribute("value","photo");
+ filterElement.append(optionElement26);
+ optionElement26.append(document.createTextNode("Photos"));
+ const optionElement27=document.createElement('option');
+ optionElement27.setAttribute("value","video");
+ filterElement.append(optionElement27);
+ optionElement27.append(document.createTextNode("Videos"));
+ const sortElement=document.createElement('select');
+ sortElement.setAttribute("id","sort");
+ sortElement.setAttribute("aria-label","Review order");
+ divElement21.append(sortElement);
+ const optionElement29=document.createElement('option');
+ optionElement29.setAttribute("value","original");
+ sortElement.append(optionElement29);
+ optionElement29.append(document.createTextNode("Library order"));
+ const optionElement30=document.createElement('option');
+ optionElement30.setAttribute("value","oldest");
+ sortElement.append(optionElement30);
+ optionElement30.append(document.createTextNode("Oldest first"));
+ const optionElement31=document.createElement('option');
+ optionElement31.setAttribute("value","largest");
+ sortElement.append(optionElement31);
+ optionElement31.append(document.createTextNode("Largest first"));
+ const statusElement=document.createElement('p');
+ statusElement.setAttribute("role","status");
+ statusElement.setAttribute("aria-live","polite");
+ statusElement.setAttribute("class","status");
+ statusElement.setAttribute("id","status");
+ divElement4.append(statusElement);
+ const queue_detailsElement=document.createElement('details');
+ queue_detailsElement.setAttribute("id","queue-details");
+ divElement4.append(queue_detailsElement);
+ const queue_titleElement=document.createElement('summary');
+ queue_titleElement.setAttribute("id","queue-title");
+ queue_detailsElement.append(queue_titleElement);
+ queue_titleElement.append(document.createTextNode("Removal queue"));
+ const queueElement=document.createElement('div');
+ queueElement.setAttribute("class","queue");
+ queueElement.setAttribute("id","queue");
+ queue_detailsElement.append(queueElement);
+ const divElement36=document.createElement('div');
+ divElement36.setAttribute("class","toolbar");
+ divElement4.append(divElement36);
+ const sendElement=document.createElement('button');
+ sendElement.setAttribute("id","send");
+ divElement36.append(sendElement);
+ sendElement.append(document.createTextNode("Send to review album"));
+ const trashElement=document.createElement('button');
+ trashElement.setAttribute("id","trash");
+ divElement36.append(trashElement);
+ trashElement.append(document.createTextNode("Check deleted items"));
+ const albumElement=document.createElement('a');
+ albumElement.setAttribute("id","album");
+ albumElement.setAttribute("target","_blank");
+ albumElement.setAttribute("rel","noopener");
+ albumElement.hidden=true;
+ divElement36.append(albumElement);
+ albumElement.append(document.createTextNode("Open review album \u2197"));
+ const pElement40=document.createElement('p');
+ divElement4.append(pElement40);
+ pElement40.append(document.createTextNode("Swipes never delete media. Send candidates to a review album, then move them to Trash yourself in Google Photos."));
  document.documentElement.append(host);
  const $=id=>root.getElementById(id);
  let dbPromise,db,state=emptyReview(),identity,busy=false,history=[],inspected=null,shown=null,generation=0,leaseError=null,lockedAccount=null;
@@ -327,7 +455,7 @@ function mountPhotosSwipe(environment) {
  }
  const bytes=value=>value>=1e9?`${(value/1e9).toFixed(1)} GB`:value>=1e6?`${(value/1e6).toFixed(1)} MB`:`${Math.round(value/1e3)} KB`;
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
- function deck(){const items=reviewDeck(state).filter(item=>$('filter').value==='all'||item.type===$('filter').value);if($('sort').value==='oldest')items.sort((a,b)=>Date.parse(a.date||0)-Date.parse(b.date||0));if($('sort').value==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));return items;}
+ function deck(){const items=reviewDeck(state).filter(item=>$('filter').value==='all'||item.type===$('filter').value);if($('sort').value==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if($('sort').value==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));return items;}
  function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):deck()[0];}
  function mediaURL(value,video=false) {
   const url=new URL(value);
@@ -372,7 +500,7 @@ function mountPhotosSwipe(environment) {
   const item=current();if(!item)return;
   run(async()=>{const previous=item.decision;await save(decideReview(state,item.mediaKey,decision,previous,item.revision||0));history.push({key:item.mediaKey,previous,decision,revision:(item.revision||0)+1});inspected=null;message(decision==='remove'?'Added to the local removal queue.':'Kept.');});
  }
- function undo(){if(busy||!history.length)return;run(async()=>{while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.at(-1);if(!last){message('No previous decisions can be undone.');return;}await save(decideReview(state,last.key,last.previous,last.decision,last.revision));history.pop();inspected=null;message('Decision undone.');});}
+ function undo(){if(busy||!history.length)return;run(async()=>{while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.at(-1);if(!last){message('No previous decisions can be undone.');return;}await save(decideReview(state,last.key,last.previous,last.decision,last.revision));history.pop();const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=state.items.find(item=>item.mediaKey===last.key).revision;inspected=null;message('Decision undone.');});}
  async function load(refresh=false) {
   const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library · ${scanned} rows checked…`)});
   message(`${result.added} new items to review · ${result.scanned} library rows checked${result.exhausted?' · End of library':''}${result.limited?' · Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);
