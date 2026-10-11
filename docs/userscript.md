@@ -16,7 +16,7 @@ Photos Swipe can run directly in your signed-in Google Photos tab, without Node,
 3. Open the install link in Safari. Open Safari's extensions menu, select Userscripts, and accept its installation prompt. Alternatively, save the downloaded file as `photoswiper.user.js` in the app's selected scripts directory. Open the Userscripts popup so it discovers the file and ensure it is enabled.
 4. Open Google Photos **in Safari**, sign in, reload, and tap the **Photos Swipe** launcher. Review the account label before loading media. This runs in the website, not the Google Photos native app.
 
-The two installation methods and page-context metadata follow the [Userscripts documentation](https://github.com/quoid/userscripts#ios-ipados). Keep `@grant none` and `@inject-into page`: the script needs access to Google's page session tokens. No userscript-manager APIs are used.
+The script requests `GM.getValue`, `GM.setValue`, `GM.deleteValue` and `unsafeWindow`, and uses `@inject-into content`. [Userscripts requires content injection for GM APIs](https://github.com/quoid/userscripts#api). Keep these grants when updating or installing: pairing credentials belong in the manager's private storage.
 
 ## Review and album workflow
 
@@ -36,13 +36,34 @@ The **In Trash** running total counter includes saved removal candidates confirm
 
 ## Local state and compatibility
 
-Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. **Sync settings** appears near the top and opens on first use. Choose **Save and sync** with your Worker URL and token, or **Continue locally** to dismiss setup; you can reopen settings anytime. The visible sync status reports success or a failure with local fallback. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes it. Avoid private browsing if you need durable progress.
+Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. **Sync settings** appears near the top and opens on first use. Choose **Save and sync** with your Worker URL and token, or **Continue locally** to dismiss setup; you can reopen settings anytime. The visible sync status reports success or a failure with local fallback. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes the local review cache, but manager-backed pairing survives. Avoid private browsing if you need durable local progress.
 
 A renewable account lock prevents simultaneous work in multiple tabs. After a tab closes during an operation, a lock can take up to 90 seconds to expire. Account and page-session changes reject requests; close the overlay, reload Google Photos, and reopen it in the intended account.
 
-This uses the same undocumented batchexecute RPC formats as the extension, with in-page fetch and the current Google session. It reads page tokens, not Google Photos' DOM structure. If tokens are missing, check that the manager runs this script in the page context, that you are signed in, and reload. Website CSP or future Google changes can prevent execution; changing to content-context injection cannot provide the required page globals.
+This uses the same undocumented batchexecute RPC formats as the extension, with page fetch and the current Google session. With `unsafeWindow`, only the Google provider reads page globals and uses page fetch. Managers without `unsafeWindow`, including Userscripts, use an injected Google-operation bridge with bounded request timeouts. It reuses a page script nonce when available. The bridge carries Google operation names, arguments and results; it never receives pairing settings or exposes a sync API. Sync fetch runs in the privileged context with credentials omitted. Website CSP or future Google changes can prevent bridge execution; an unavailable bridge reports an error. If tokens are missing, sign in and reload.
 
 Automated validation uses synthetic responses only. Physical iPhone/Safari execution and live Google responses have not been tested in this change. No real Google Photos requests were made during development.
+
+## Pairing persistence and privacy
+
+Only the Worker origin, device token, device ID and optional display name are saved in per-script GM storage. On first use with GM available, existing IndexedDB credentials are copied to GM before their old record is deleted. Local onboarding dismissal stays in IndexedDB. A failed GM write leaves the old credentials intact and reports the failure. Existing GM credentials take precedence over any stale IndexedDB credentials. Review data stays in IndexedDB and optional Worker sync.
+
+The saved token is held inside the privileged script closure. It is never filled into the settings form or published to page globals, localStorage or the Google bridge. Enter a token to pair or replace it; leaving the token field blank keeps the existing token when the Worker URL is unchanged. Clear both URL and token and save to disable sync and delete the GM pairing. A token being entered in the form can be observed by page scripts; saved credentials are cleared from the form before saving and syncing.
+
+If GM storage APIs are unavailable, settings use the original IndexedDB fallback and the settings panel shows **Pairing may not persist in this browser**. This fallback has the original page-storage privacy and eviction limits. GM failures do not silently downgrade durable credentials into page storage.
+
+Reloads, version updates, Google Photos site-data clearing and Safari's origin-storage eviction do not erase manager storage. Reinstall retention depends on the manager and its removal options: keep the same script name/namespace and, for Userscripts, the same filename; avoid any **delete storage** option in Tampermonkey. If uninstalling the script or manager discards its storage, reinstalling cannot recover the token. Re-pair once; synced progress remains on the Worker.
+
+### Manual QA matrix (pending)
+
+No physical manager testing has been performed for this change. Run the following only on QA-DUMMY items in Chrome + Tampermonkey, macOS Safari + Userscripts, and iPhone Safari + Userscripts:
+
+1. Install from the public install link, pair, and confirm **Synced**.
+2. Reload, apply a version update, and confirm **Synced** after each step.
+3. Uninstall/reinstall from the public link while retaining manager storage where supported; record the manager version and storage-removal choice. Confirm **Synced**, or document that the manager erased storage and re-pair.
+4. Clear site data for photos.google.com, reopen and confirm **Synced**. On iPhone, also repeat after more than seven days without visiting Photos.
+5. Confirm library load, album creation/addition/verification, Trash reads and opt-in Move to Trash on QA-DUMMY items.
+6. Inspect page-context globals, localStorage, IndexedDB and the saved token field: none should contain the saved device token with GM enabled. Test GM-disabled fallback separately and confirm the persistence notice.
 
 ## Build and test
 
@@ -55,6 +76,6 @@ npm test
 node scripts/check.mjs
 ```
 
-The dependency-free build bundles `extension/photos-api.js` and `lib/userscript-*.mjs` into the installable file. The bundle uses ASCII Unicode escapes so labels retain their symbols even when an install endpoint omits a UTF-8 charset. Include that generated file whenever distributing changes, and increase the metadata version in the build script for a release. Unit tests cover request envelopes, fake responses, pagination, decisions, quota estimates, partial album retries and read-only Trash reconciliation. The artifact test checks metadata, absence of privileged APIs and reproducibility.
+The dependency-free build bundles `extension/photos-api.js` and `lib/userscript-*.mjs` into the installable file. The bundle uses ASCII Unicode escapes so labels retain their symbols even when an install endpoint omits a UTF-8 charset. Include that generated file whenever distributing changes, and increase the metadata version in the build script for a release. Unit tests cover request envelopes, fake responses, pagination, decisions, quota estimates, partial album retries and read-only Trash reconciliation. The artifact test checks privileged grants, credential isolation and reproducibility. Synthetic tests cover GM storage, migration, fallback, independent sync fetch and the content-to-page Google bridge.
 
 RPC mappings are adapted from Google Photos Toolkit by xob0t, revision `6db9ab355e4797327e4078cf87a2b6994d36cf73`. The upstream MIT license is retained in [the license notice](../extension/LICENSE-GPTK), with [third-party attribution](../extension/THIRD_PARTY_NOTICES.md).
