@@ -991,6 +991,24 @@ test('a failed video RPC does not reject the next visible video waiting for it',
  await mounted.nodes.get('close').onclick();
 });
 
+test('Close waits for an in-flight swipe account check before releasing the session',async()=>{
+ let finish,started,delay=false;
+ const checking=new Promise(resolve=>{started=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  const result=await webcrypto.subtle.digest(...args);
+  if(delay){delay=false;started();await new Promise(resolve=>{finish=resolve;});}
+  return result;
+ }}};
+ const mounted=await mountedReview([item('a')],{crypto});
+ delay=true;mounted.nodes.get('keep').onclick();await checking;
+ const closing=mounted.nodes.get('close').onclick();
+ finish();await closing;
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+});
+
 test('pagehide and unload start release immediately while a library operation is pending',async()=>{
  for(const event of ['pagehide','unload']){
   let finish,started;const loading=new Promise(resolve=>{started=resolve;});
@@ -1009,7 +1027,10 @@ test('pagehide and unload start release immediately while a library operation is
   assert.equal(releasing,true);
   await new Promise(resolve=>setTimeout(resolve,10));
   await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
-  finish();await operation;await mounted.nodes.get('close').onclick();
+  const before=await db.read(account);
+  finish();await operation;
+  assert.deepEqual(await db.read(account),before);
+  await mounted.nodes.get('close').onclick();
  }
 });
 test('visibility account changes allow close and reopening the new account',async()=>{

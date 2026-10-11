@@ -610,7 +610,7 @@ function mountPhotosSwipe(environment) {
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const syncClient=createSyncClient({fetch:environment.fetch,status:value=>{syncSummary=value;$('sync-status').textContent=value;}});
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
- const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
+ const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  let writes=createWrites();
  const synchronize=(pull=true)=>{
   if(!identity||!syncEnabled||leaseError||writeConflict||!lockedAccount)return Promise.resolve();
@@ -661,7 +661,12 @@ function mountPhotosSwipe(environment) {
    releaseLease();message(leaseError.message);throw leaseError;
   }
  }
- async function save(next){await syncRunning;await assertAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
+ async function assertSaveAccount(){
+  if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
+  await assertAccount();
+  if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
+ }
+ async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
  function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=busy||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer)return;
@@ -892,6 +897,7 @@ function mountPhotosSwipe(environment) {
   return openingPromise;
  }
  async function closeSession(){
+  await openingPromise;await activeOperation;await writes.flush();
   leaseGeneration++;clearInterval(leaseTimer);leaseTimer=null;
   $('overlay').hidden=true;$('launcher').hidden=false;$('launcher').focus();
   stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
