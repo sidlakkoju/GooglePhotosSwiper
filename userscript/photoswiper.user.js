@@ -313,28 +313,42 @@ async function openReviewDatabase(indexedDB) {
 }
 
 function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
- let settings={},blocked=false;
- const configure=value=>{settings=value||{};blocked=false;status(settings.url&&settings.token?'Sync ready':'Sync off \u00b7 saved locally');};
+ let settings={},blocked=false,firstSync=true;
+ const configure=value=>{settings=value||{};blocked=false;firstSync=true;status(settings.url&&settings.token?'Sync ready':'Sync off \u00b7 saved locally');};
  async function request(scope,path,method='GET',value) {
   if(blocked)throw Error('This device was unpaired.');
   if(!settings.url||!settings.token)throw Error('Configure sync to manage paired devices.');
   const url=new URL(path,settings.url.replace(/\/$/,'')+'/');url.searchParams.set('scope',scope);
-  const response=await fetch(url.href,{method,headers:{Authorization:`Bearer ${settings.token}`,...(value?{'Content-Type':'application/json'}:{})},...(value?{body:JSON.stringify(value)}:{}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
-  if(response.status===401){blocked=true;status('This device was unpaired.');await unpaired();throw Error('This device was unpaired.');}
-  if(!response.ok)throw Error(`Sync HTTP ${response.status}`);
-  return response.json();
+  const signal=AbortSignal.timeout(10000);
+  try {
+   const response=await fetch(url.href,{method,headers:{Authorization:`Bearer ${settings.token}`,...(value?{'Content-Type':'application/json'}:{})},...(value?{body:JSON.stringify(value)}:{}),credentials:'omit',referrerPolicy:'no-referrer',signal});
+   if(response.status===401){blocked=true;status('This device was unpaired.');await unpaired();throw Error('This device was unpaired.');}
+   if(!response.ok)throw Error(`Sync HTTP ${response.status}`);
+   return await response.json();
+  }catch(error){
+   if(signal.aborted||error.name==='TimeoutError')throw Object.assign(Error('Sync timed out'),{name:'TimeoutError'});
+   if(error.name==='AbortError')throw Error('Sync cancelled');
+   throw error;
+  }
  }
  async function sync(scope,state,save) {
   if(blocked||!settings.url||!settings.token)return state;
+  let retryAvailable=firstSync;firstSync=false;
+  const syncRequest=async(...args)=>{
+   try{return await request(...args);}catch(error){
+    if(error.name!=='TimeoutError'||!retryAvailable)throw error;
+    retryAvailable=false;return request(...args);
+   }
+  };
   status('Syncing\u2026');
   try {
-   const remote=await request(scope,'api/state');
+   const remote=await syncRequest(scope,'api/state');
    const decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
    const pending={...state.syncPending};
    if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey))pending[item.mediaKey]=item.decision;
    const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
    for(const [id,value] of Object.entries(pending)){
-    await request(scope,`api/decisions/${encodeURIComponent(id)}`,value===null?'DELETE':'PUT',value===null?undefined:{decision:value});
+    await syncRequest(scope,`api/decisions/${encodeURIComponent(id)}`,value===null?'DELETE':'PUT',value===null?undefined:{decision:value});
     if(value===null)delete decisions[id];else decisions[id]=value;
    }
    const history=(dirty?state.history:remote.history).slice(-2000);
@@ -345,8 +359,8 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    });
    let next={...state,history,items,syncDecisions:decisions};
    if(dirty){
-    await request(scope,'api/undo','PUT',{history});
-    await request(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
+    await syncRequest(scope,'api/undo','PUT',{history});
+    await syncRequest(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
    }
    next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress});
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
