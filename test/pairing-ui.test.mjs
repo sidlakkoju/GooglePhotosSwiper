@@ -111,3 +111,24 @@ test('hash changes in an already mounted Photos tab open consent for the latest 
  }
  location.hash='#unrelated';listeners.hashchange();assert.equal(elements.parent.children[0].hidden,true);
 });
+
+test('unpaired onboarding opens the existing receiver and Continue locally dismisses it',async()=>{
+ const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom();
+ let received=false;
+ const context={document:elements.document,divElement4:{insertBefore(){}},cardElement:{},receivePairing:manual=>received=manual};
+ vm.runInNewContext(ui.slice(ui.indexOf(" const onboarding=document.createElement"),ui.indexOf(" for(const [id,title,type]"))+ '\nglobalThis.card=onboarding;globalThis.local=syncLocal;',context);
+ const card=context.card;
+ assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
+ card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
+ const opening=ui.slice(ui.indexOf(' async function open()'),ui.indexOf(' function close()'));
+ for(const settings of [{},{onboardingDismissed:true},{url:'https://worker.example',token:'private-token'}]){
+  const nodes={},node=id=>nodes[id]||(nodes[id]={focus(){}});
+  const state={busy:false,preloader:{clear(){}},$:node,message(){},controls(){},render(){},refreshStalePreviews(){},rawCall:async()=>({ok:true,data:{account:'synthetic',label:'Synthetic'}}),identity:null,db:null,database:async()=>({read:async()=>({items:[],history:[]})}),state:null,stopMedia(){},pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,withAccountLease:async fn=>fn(),synchronize:async()=>{},idleMessage:()=>''};
+  vm.runInNewContext(opening+'\nglobalThis.openApp=open;',state);await state.openApp();
+  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');
+ }
+ let saved;
+ const dismissal={$:()=>context.local,run:fn=>fn(),pairingPromise:Promise.resolve({settings:async()=>({}),saveSettings:async value=>saved=value}),settingsPanel:{},onboarding:card,message(){},idleMessage:()=>''};
+ vm.runInNewContext(ui.split('\n').find(line=>line.includes("$('sync-local').onclick=")),dismissal);await context.local.onclick();
+ assert.equal(saved.onboardingDismissed,true);assert.equal(card.hidden,true);
+});

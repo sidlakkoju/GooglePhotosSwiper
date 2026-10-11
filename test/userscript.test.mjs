@@ -820,17 +820,19 @@ test('pairing settings failure after sign-in preserves the loaded review session
  assert.equal(mounted.nodes.get('status').textContent,'Kept synthetic-photo.');
 });
 
-test('first-use sync setup is above the card and local dismissal survives reopening',async()=>{
+test('first-use pairing onboarding is above the card and local dismissal survives reopening',async()=>{
  const mounted=await mountedReview([item('a')]);
  const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
  assert.ok(content.childNodes.indexOf(settings)<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
- assert.equal(settings.open,true);
+ assert.equal(settings.open,false);
+ const onboarding=mounted.nodes.get('pair-onboarding');assert.equal(onboarding.hidden,false);
+ assert.ok(content.childNodes.indexOf(onboarding)<content.childNodes.indexOf(mounted.nodes.get('card')));
  assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
- await mounted.click('sync-local');assert.equal(settings.open,false);
+ await mounted.click('sync-local');assert.equal(settings.open,false);assert.equal(onboarding.hidden,true);
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
- await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('sync-settings').open,false);
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('sync-settings').open,false);assert.equal(reopened.nodes.get('pair-onboarding').hidden,true);
  assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
 });
 
