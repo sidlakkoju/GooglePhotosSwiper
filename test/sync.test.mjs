@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage} from '../lib/userscript-core.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
 import {createSyncClient,markSyncChanges,validateSyncSettings} from '../lib/userscript-sync.mjs';
 class FakeD1 {
@@ -80,4 +81,75 @@ test('HTTP rejection preserves pending changes and settings reject insecure or c
  assert.match(statuses.at(-1),/401.*saved locally/);
  for(const url of ['http://sync.example','https://user:pass@sync.example','https://sync.example/api/','https://sync.example/?token=secret'])assert.throws(()=>validateSyncSettings(url,'secret'));
  assert.deepEqual(validateSyncSettings('',''),{url:'',token:''});
+});
+
+test('first sync backfills decisions after unrelated saves and preserves pending overrides',async()=>{
+ const e=env(),requests=[],client=createSyncClient({fetch:(url,options)=>{requests.push({url,options});return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ await call(e,'decisions/conflict','PUT',{decision:'remove'});
+ await call(e,'decisions/deleted','PUT',{decision:'keep'});
+ const remoteEntry={key:'remote',previous:null,decision:'keep',revision:1};
+ await call(e,'undo','PUT',{history:[remoteEntry]});
+ let state={history:[],items:[{mediaKey:'conflict',decision:'keep'},{mediaKey:'missing',decision:'remove'},{mediaKey:'deleted',decision:'keep'},{mediaKey:'edited',decision:'keep'}],syncPending:{deleted:null,edited:'remove'}};
+ state=markSyncChanges(state,{...state,cursor:'next',albumKey:'album'});
+ assert.equal(state.syncDirty,false);
+ state=await client.sync('default',state,async value=>value);
+ assert.deepEqual(state.syncDecisions,{conflict:'keep',missing:'remove',edited:'remove'});
+ assert.equal(state.items.find(item=>item.mediaKey==='deleted').decision,null);
+ assert.equal(state.items.find(item=>item.mediaKey==='edited').decision,'remove');
+ assert.deepEqual(state.history,[remoteEntry]);
+ assert.equal(requests.some(({url,options})=>new URL(url).pathname==='/api/undo'&&options.method==='PUT'),false);
+});
+test('unrelated saves retain clean history and history edits retain dirty status',()=>{
+ const state={history:[{key:'item',previous:null,decision:'keep',revision:1}],items:[{mediaKey:'item',decision:'keep'}],syncDecisions:{item:'keep'},syncPending:{}};
+ assert.equal(markSyncChanges(state,{...state,cursor:'next'}).syncDirty,false);
+ const changed=markSyncChanges(state,{...state,history:[]});
+ assert.equal(changed.syncDirty,true);
+ assert.equal(markSyncChanges(changed,{...changed,albumKey:'album'}).syncDirty,true);
+});
+test('clean pulls preserve album, trash and library restore revision locks',async()=>{
+ const e=env(),client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const entry={key:'item',previous:null,decision:'remove',revision:1};
+ await call(e,'decisions/item','PUT',{decision:'remove'});
+ await call(e,'undo','PUT',{history:[entry]});
+ const original={history:[entry],items:[{mediaKey:'item',decision:'remove',revision:1,state:'active'}],syncDecisions:{item:'remove'},syncPending:{}};
+ const album=finishReviewAlbum({...original,job:{albumKey:'album',mediaKeys:['item']}},{keys:['item'],dedupKeys:[]});
+ const trash=await reconcileReviewTrash(original,async()=>({items:[{mediaKey:'item'}],nextPageId:null}));
+ const restored=mergeReviewPage(trash,{items:[{mediaKey:'item'}],nextPageId:null},null,true);
+ for(const locked of [album,trash,restored]){
+  let state=markSyncChanges(original,locked);
+  state=await client.sync('default',state,async value=>value);
+  state=await client.sync('default',state,async value=>value);
+  assert.equal(state.items[0].revision,locked.items[0].revision);
+  assert.equal(canUndoReview(state,entry),false);
+  assert.throws(()=>decideReview(state,'item',null,'remove',entry.revision));
+ }
+});
+test('pulled decisions initialize undo revisions for changed or uninitialized items',async()=>{
+ const e=env(),client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const entry={key:'item',previous:null,decision:'keep',revision:3};
+ await call(e,'decisions/item','PUT',{decision:'keep'});
+ await call(e,'undo','PUT',{history:[entry]});
+ for(const item of [{mediaKey:'item',decision:null,revision:8},{mediaKey:'item',decision:'keep',revision:0},{mediaKey:'item',decision:'keep'}]){
+  const state=await client.sync('default',{history:[],items:[item],syncDecisions:{item:'keep'}},async value=>value);
+  assert.equal(state.items[0].revision,3);
+  assert.equal(canUndoReview(state,entry),true);
+ }
+});
+test('empty pending maps after offline cursor saves still backfill existing decisions',async()=>{
+ const e=env();let offline=true;
+ const client=createSyncClient({fetch:(url,options)=>{if(offline)throw Error('Offline');return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ await call(e,'decisions/item','PUT',{decision:'remove'});
+ let state={history:[],items:[{mediaKey:'item',decision:'keep'}]};
+ state=markSyncChanges(state,{...state,cursor:'next'});
+ assert.deepEqual(state.syncPending,{});
+ state=await client.sync('default',state,async value=>value);
+ assert.equal(state.items[0].decision,'keep');
+ offline=false;
+ state=await client.sync('default',state,async value=>value);
+ assert.equal(state.syncDecisions.item,'keep');
+ assert.equal(state.items[0].decision,'keep');
 });
