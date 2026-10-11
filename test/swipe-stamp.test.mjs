@@ -616,3 +616,12 @@ for(const action of ['decision','render'])test(`deck cancels a running snap-back
  assert.equal(running,false);
  assert.equal(cancelled,1);
 });
+
+for(const [name,y,expected] of [['picture',100,'keep'],['controls',280,undefined],['vertical drag',100,undefined]])test(`video ${name} preserves touch intent`,async()=>{
+ const {$,decisions}=review();
+ const target={tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})};
+ $('card').onpointerdown({button:0,target,pointerId:1,clientX:20,clientY:y});
+ $('card').onpointerup({pointerId:1,clientX:180,clientY:name==='vertical drag'?400:y});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(decisions.first,expected);
+});
