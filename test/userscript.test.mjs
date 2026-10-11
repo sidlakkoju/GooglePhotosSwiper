@@ -162,9 +162,44 @@ test('unreadable legacy albums retain their target with title-sensitive lookup a
  await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'}),/read failure/);
  assert.equal(workspace.state().albumKey,'legacy');assert.equal(workspace.state().job.albumKey,'legacy');
  assert.equal(reviewQueue(workspace.state()).length,1);assert.equal(workspace.state().items[1].queueSent,true);
- assert.deepEqual(calls.map(entry=>entry.operation),['albumMembers']);
+ assert.deepEqual(calls.map(entry=>entry.operation),['albumMembers','findAlbum']);
  unreadable=false;await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'});
  assert.equal(workspace.state().albumKey,'legacy');assert.equal(workspace.state().job,null);assert.equal(reviewQueue(workspace.state()).length,0);
+});
+test('missing saved albums recreate under their original job title and finish the queue',async()=>{
+ const workspace=albumWorkspace([item('a',{decision:'remove'})]);
+ const title='Photos Swipe · Review · 9c2a3f30466c',calls=[];let added=false;
+ await workspace.save({...workspace.state(),albumKey:'missing',job:{title,mediaKeys:['a'],albumKey:'missing'}});
+ const call=async(operation,args)=>{
+  calls.push({operation,args});
+  if(operation==='albumMembers'){
+   if(args.albumKey==='missing')throw Error('Album is gone');
+   assert.equal(args.albumKey,'replacement');return {keys:added?['a']:[],dedupKeys:[]};
+  }
+  if(operation==='findAlbum'){assert.equal(args.title,title);return {albumKey:null};}
+  if(operation==='createAlbum'){assert.equal(args.title,title);return {albumKey:'replacement'};}
+  if(operation==='addToAlbum'){assert.equal(args.albumKey,'replacement');added=true;}
+ };
+ await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'});
+ assert.equal(workspace.state().albumKey,'replacement');assert.equal(workspace.state().job,null);
+ assert.equal(reviewQueue(workspace.state()).length,0);
+ assert.equal(calls.filter(entry=>entry.operation==='createAlbum').length,1);
+});
+test('failed saved album reads preserve the key when title lookup finds any album',async()=>{
+ for(const foundKey of ['saved','different']){
+  const workspace=albumWorkspace([item('a',{decision:'remove'})]);
+  const title='Photos Swipe · Review · 9c2a3f30466c',calls=[];
+  await workspace.save({...workspace.state(),albumKey:'saved',job:{title,mediaKeys:['a'],albumKey:'saved'}});
+  const call=async(operation,args)=>{
+   calls.push(operation);
+   if(operation==='albumMembers')throw Error('Read failed');
+   if(operation==='findAlbum'){assert.equal(args.title,title);return {albumKey:foundKey};}
+   throw Error('Unexpected album mutation');
+  };
+  await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'}),/Read failed/);
+  assert.equal(workspace.state().job.albumKey,'saved');assert.equal(workspace.state().albumKey,'saved');
+  assert.deepEqual(calls,['albumMembers','findAlbum']);
+ }
 });
 test('fake library scanning passes reviewed overlaps and retains a bounded continuation',async()=>{
  const {loadReviewPages}=await import('../lib/userscript-core.mjs');
@@ -493,8 +528,24 @@ test('phone controls keep zoom together, order in a grid and Trash below the lib
  assert.match(css,/\.zoom-control,\.trash-toggle\{display:flex;align-items:center/);
  assert.match(css,/@media\(max-width:599px\)/);
  assert.match(css,/\.library-controls\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
- assert.doesNotMatch(css,/position:sticky/);
+ assert.match(css,/\.album-controls\{position:fixed;bottom:0/);
+ assert.match(css,/\.trash-toggle\{min-height:44px/);
  assert.match(css,/\.trash-toggle\{[^}]*white-space:normal/);
+});
+test('album control resizing reserves its height in the scrolling overlay',async()=>{
+ let callback,footer;
+ const mounted=await mountedReview([item('a')],{ResizeObserver:class{
+  constructor(handler){callback=handler;}
+  observe(element){footer=element;}
+ }});
+ const overlay=mounted.nodes.get('overlay'),values={};
+ overlay.style.setProperty=(key,value)=>{values[key]=value;};
+ footer.getBoundingClientRect=()=>({height:168});callback();
+ assert.equal(values['--album-controls-height'],'168px');
+ footer.getBoundingClientRect=()=>({height:0});callback();
+ assert.equal(values['--album-controls-height'],'168px');
+ footer.getBoundingClientRect=()=>({height:212});callback();
+ assert.equal(values['--album-controls-height'],'212px');
 });
 test('mounted album send creates a readable title and saves the verified album',async()=>{
  const titles=[],requests=[];let added=false;
@@ -546,8 +597,9 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const textFits=range.getBoundingClientRect().right<=bounds(label).right+1;
    const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
    const zoomFits=bounds(slider).right<=bounds(zoom).right+1&&bounds(slider).top>=bounds(zoom).top&&bounds(slider).bottom<=bounds(zoom).bottom;
-   const topClear=clear();overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,topClear,bottomClear:clear(),textFits,zoomFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   const toggleVisible=bounds(label).top>=bounds(overlay).top&&bounds(label).bottom<=bounds(overlay).bottom;
+   const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
+   results.push({width,height,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -557,7 +609,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
   for(const measurement of measurements){
-   assert.equal(measurement.topClear,true,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
+   assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
    assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
    assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
   }
