@@ -7,7 +7,7 @@ function setup(reduced=false,width=300){
  const target={addEventListener:(name,handler)=>{handlers[name]=handler;},setPointerCapture(){},hasPointerCapture:()=>true,releasePointerCapture(){}};
  const window={matchMedia:()=>({matches:reduced}),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id)};
  const feedback=createSwipeFeedback({window,targets:[target],card,under,keep,remove,canSwipe:()=>allowed,onDecide:value=>decisions.push(value)});
- const send=(type,x,y=0,id=1,timeStamp=undefined,eventTarget={tagName:'IMG'})=>handlers[type]({pointerId:id,clientX:x,clientY:y,button:0,isPrimary:true,timeStamp,target:eventTarget});
+ const send=(type,x,y=0,id=1,timeStamp=undefined,eventTarget={tagName:'IMG'})=>handlers[type]?.({pointerId:id,clientX:x,clientY:y,button:0,isPrimary:true,timeStamp,target:eventTarget});
  const paint=()=>{for(const [id,fn] of frames){frames.delete(id);fn();}};
  return {send,paint,card,under,keep,remove,decisions,frames,feedback,block:()=>{allowed=false;}};
 }
@@ -23,7 +23,7 @@ for(const direction of [-1,1])test(`drag feedback follows direction ${direction}
  s.feedback.reset();assert.equal(s.card.style.transform,'');
 });
 test('vertical, short, cancelled and unrelated pointers never commit',()=>{
- for(const end of ['pointerup','pointercancel','lostpointercapture']){
+ for(const end of ['pointerup','pointercancel']){
   const s=setup();s.send('pointerdown',0);s.send('pointermove',40);s.send('pointermove',200,0,2);s.send(end,40);s.paint();
   assert.deepEqual(s.decisions,[]);assert.equal(s.card.style.transform,'');assert.equal(s.keep.style.opacity,'0');
  }
@@ -48,11 +48,11 @@ for(const width of [200,600])test(`commit distance follows a ${width}px card`,()
 test('a short fast fling commits, but a held short drag does not',()=>{
  for(const delay of [30,300]){
   const s=setup();s.send('pointerdown',0,0,1,0);s.send('pointermove',30,0,1,30);s.send('pointerup',40,0,1,delay+30);
-  assert.deepEqual(s.decisions,[]);
+  assert.deepEqual(s.decisions,delay===30?['keep']:[]);
  }
  const s=setup();s.send('pointerdown',0,0,1,0);s.send('pointerup',40,0,1,40);assert.deepEqual(s.decisions,['keep']);
 });
-for(const end of ['pointercancel','lostpointercapture'])test(`${end} cancels a committable drag and queued paint`,()=>{
+for(const end of ['pointercancel'])test(`${end} cancels a committable drag and queued paint`,()=>{
  const s=setup();s.send('pointerdown',0);s.send('pointermove',200);s.send(end,200);s.paint();
  assert.deepEqual(s.decisions,[]);assert.equal(s.card.style.transform,'');assert.equal(s.keep.style.opacity,'0');
 });
@@ -77,4 +77,32 @@ test('dismissal retains its destination until reset and respects reduced motion'
 test('a fast return toward the origin cannot fling in the original direction',()=>{
  const s=setup();s.send('pointerdown',0,0,1,0);s.send('pointermove',80,0,1,100);s.send('pointerup',40,0,1,120);
  assert.deepEqual(s.decisions,[]);
+});
+
+test('capture transfer and capture loss before release preserve a swipe',()=>{
+ for(const video of [false,true]){
+  const s=setup();s.send('pointerdown',0,0,1,0,{tagName:video?'VIDEO':'IMG'});
+  s.send('lostpointercapture',0);s.send('pointermove',120,0,1,100);
+  s.send('lostpointercapture',120);s.send('pointerup',120,0,1,110);
+  assert.deepEqual(s.decisions,['keep']);
+ }
+});
+test('velocity averaging rejects millisecond jitter and retains a fling across release',()=>{
+ const jitter=setup();jitter.send('pointerdown',0,0,1,0);jitter.send('pointermove',20,0,1,200);jitter.send('pointermove',21,0,1,201);jitter.send('pointerup',21,0,1,202);
+ assert.deepEqual(jitter.decisions,[]);
+ const fling=setup();fling.send('pointerdown',0,0,1,0);fling.send('pointermove',40,0,1,40);fling.send('pointerup',40,0,1,60);
+ assert.deepEqual(fling.decisions,['keep']);
+});
+
+test('outgoing card animation survives resetting the live card and removes its clone',async()=>{
+ const s=setup();let finish,removed=false,outgoing;
+ s.card.parentNode={append(node){outgoing=node;}};
+ s.card.cloneNode=()=>({style:{},setAttribute(){},animate(){return {finished:new Promise(resolve=>{finish=resolve;})};},remove(){removed=true;}});
+ s.send('pointerdown',0);s.send('pointerup',150);
+ assert.match(outgoing.style.transform,/450px/);assert.equal(outgoing.inert,true);
+ s.feedback.reset();assert.equal(s.card.style.transform,'');assert.equal(removed,false);
+ finish();await new Promise(resolve=>setTimeout(resolve,0));
+ s.send('pointerdown',0);s.send('pointerup',-150);assert.deepEqual(s.decisions,['keep','remove']);
+ finish();await s.feedback.finished;
+ assert.equal(removed,true);
 });

@@ -331,8 +331,9 @@ async function mountedReview(items,windowOverrides={}) {
  await db.save(account,{...emptyReview(),items});
  Object.assign(mounted.environment.window,windowOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const click=async id=>{mounted.nodes.get(id).onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
- return {...mounted,click,read:()=>db.read(account)};
+ const settle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const click=async id=>{mounted.nodes.get(id).onclick();await settle();};
+ return {...mounted,click,settle,read:()=>db.read(account)};
 }
 test('mounted undo restores undecided after queue, keep instead, and two undos',async()=>{
  const mounted=await mountedReview([item('a')]);
@@ -874,18 +875,15 @@ test('release metadata names the author and install guide explains Chrome script
  assert.equal(under.hidden,true);
  });
 
-test('mounted swipe keeps the old card dismissed until animation finishes',async()=>{
- const mounted=await mountedReview([item('a'),item('b')]);
- const waitFor=async predicate=>{for(let count=0;count<100;count++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,1));}assert.fail('Mounted swipe did not settle');};
- const media=mounted.nodes.get('media'),top=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card');
- let finish;
- top.animate=()=>({finished:new Promise(resolve=>{finish=resolve;}),cancel(){}});
- media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});
- media.listeners.pointerup({pointerId:1,clientX:150,clientY:0});
- await waitFor(async()=> (await mounted.read()).items[0].decision==='keep','Decision did not save');
- assert.match(top.style.transform,/translate3d/);assert.equal(media.querySelector('img').alt,'a');assert.equal(mounted.nodes.get('keep').disabled,true);
- finish();await waitFor(()=>mounted.nodes.get('keep').disabled===false,'Animation did not release UI');
- assert.equal(media.querySelector('img').alt,'b');assert.equal(top.style.transform,'');
+test('an unresolved fly animation never blocks the next decision',async()=>{
+ const mounted=await mountedReview([item('a'),item('b'),item('c')]);
+ const top=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card');
+ top.animate=()=>({finished:new Promise(()=>{}),cancel(){}});
+ mounted.nodes.get('keep').onclick();await mounted.settle();
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal(mounted.nodes.get('media').querySelector('img').alt,'b');
+ mounted.nodes.get('remove').onclick();await mounted.settle();
+ assert.equal((await mounted.read()).items[1].decision,'remove');
 });
 test('mounted under-card shares the media origin and image gestures reach the media container',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
@@ -894,4 +892,32 @@ test('mounted under-card shares the media origin and image gestures reach the me
  assert.match(css,/\.under-card\{position:absolute;inset:0 0 auto;/);
  assert.match(css,/\.media img\{pointer-events:none;/);
  mounted.nodes.get('media').ondblclick();assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
+});
+
+test('empty and filtered decks cannot latch swipe dismissal',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const {nodes}=mounted,media=nodes.get('media');
+ const swipe=()=>{media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});media.listeners.pointerup({pointerId:1,clientX:150,clientY:0});};
+ nodes.get('filter').value='video';nodes.get('filter').onchange();swipe();
+ nodes.get('filter').value='all';nodes.get('filter').onchange();swipe();await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');swipe();
+ nodes.get('undo').onclick();await mounted.settle();swipe();await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+test('deck video buttons control playback and audio and enlarge restores native controls',async()=>{
+ const mounted=await mountedReview([item('v',{type:'video'})],async()=>({ok:true,text:async()=>envelope('VrseUb',[['v'],'https://lh3.googleusercontent.com/video'])}));
+ const media=mounted.nodes.get('media'),video=media.querySelector('video');
+ const buttons=media.childNodes.filter(node=>node.dataset.videoControl);
+ assert.equal(video.controls,false);assert.equal(buttons.length,2);
+ video.paused=false;buttons[0].onclick();assert.equal(video.paused,true);
+ buttons[0].onclick();assert.equal(video.paused,false);
+ buttons[1].onclick();assert.equal(video.muted,false);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);assert.ok(buttons.every(button=>button.hidden));
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);assert.ok(buttons.every(button=>!button.hidden));
+});
+test('overlay stops pointer touch and wheel propagation without cancelling browser defaults',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','touchstart','touchmove','touchend','touchcancel','wheel']){
+  let stopped=false;mounted.nodes.get('overlay').listeners[type]({stopPropagation(){stopped=true;},preventDefault(){assert.fail('Browser defaults must remain available');}});assert.equal(stopped,true);
+ }
 });
