@@ -48,8 +48,8 @@ async function browser(t,previous=null){
  };
 }
 
-for(const arrival of ['during decision write','during animation','after animation'])test(`stale focus refresh cannot erase a swipe ${arrival}`,async t=>{
- const b=await browser(t),stale=b.delayWorkspace();b.focus();
+for(const arrival of ['during decision write','during animation','after animation'])test(`stale workspace load cannot erase a swipe ${arrival}`,async t=>{
+ const b=await browser(t),stale=b.delayWorkspace();b.context.loadWorkspace();
  const write=arrival==='during decision write'?b.delayDecision():null;
  const swipe=b.getElement('remove').onclick();await settle();
  if(arrival==='after animation')await b.finishSwipe();
@@ -60,7 +60,7 @@ for(const arrival of ['during decision write','during animation','after animatio
  assert.equal(b.getElement('undo').disabled,false);
  assert.equal(b.getElement('removed').textContent,1);
  assert.equal(undoHistory.loadUndoHistory(b.sessionStorage).length,1);
- await b.context.refreshWorkspace();
+ await b.context.loadWorkspace();
  assert.equal(b.getElement('undo').disabled,false);
  await b.getElement('undo').onclick();
  assert.equal(b.store.listItems()[0].decision,null);
@@ -70,7 +70,7 @@ for(const arrival of ['during decision write','during animation','after animatio
 test('refresh started during a decision write cannot replace the active item or undo history',async t=>{
  const b=await browser(t),write=b.delayDecision();
  const swipe=b.getElement('keep').onclick();await settle();
- const refresh=b.context.refreshWorkspace();write.resolve();await b.finishSwipe();await swipe;await refresh;
+ const refresh=b.context.loadWorkspace();write.resolve();await b.finishSwipe();await swipe;await refresh;
  assert.equal(b.getElement('kept').textContent,1);
  assert.equal(vm.runInContext('items[0].revision',b.context),b.store.listItems()[0].revision);
  await b.getElement('undo').onclick();
@@ -80,9 +80,9 @@ test('refresh started during a decision write cannot replace the active item or 
 
 test('older refresh cannot supersede a newer snapshot that invalidates undo',async t=>{
  const b=await browser(t),swipe=b.getElement('remove').onclick();await b.finishSwipe();await swipe;
- const stale=b.delayWorkspace(),refresh=b.context.refreshWorkspace();
+ const stale=b.delayWorkspace(),refresh=b.context.loadWorkspace();
  const item=b.store.listItems()[0];b.store.decide(item.id,'keep',item.revision);
- await b.context.refreshWorkspace();stale.resolve();await refresh;
+ await b.context.loadWorkspace();stale.resolve();await refresh;
  assert.equal(b.getElement('kept').textContent,1);
  assert.equal(b.getElement('undo').disabled,true);
  assert.equal(undoHistory.loadUndoHistory(b.sessionStorage).length,0);
@@ -90,7 +90,7 @@ test('older refresh cannot supersede a newer snapshot that invalidates undo',asy
 
 for(const signInAgain of [false,true])test(`pending refresh cannot restore signed-out history${signInAgain?' after sign-in':''}`,async t=>{
  const b=await browser(t),swipe=b.getElement('remove').onclick();await b.finishSwipe();await swipe;
- const stale=b.delayWorkspace(),refresh=b.context.refreshWorkspace();
+ const stale=b.delayWorkspace(),refresh=b.context.loadWorkspace();
  await b.getElement('lock').onclick();
  if(signInAgain){const item=b.store.listItems()[0];b.store.decide(item.id,'keep',item.revision);await b.context.unlocked();}
  stale.resolve();await refresh;
@@ -117,9 +117,9 @@ for(const signInAgain of [false,true])test(`sign-out discards an in-flight swipe
 for(const timing of ['before write','during write'])test(`overlapping refresh retries and applies other workspace changes ${timing}`,async t=>{
  const b=await browser(t),stale=b.delayWorkspace();
  let refresh;
- if(timing==='before write')refresh=b.context.refreshWorkspace(true);
+ if(timing==='before write')refresh=b.context.loadWorkspace(true);
  const write=b.delayDecision(),swipe=b.getElement('remove').onclick();await settle();
- if(timing==='during write')refresh=b.context.refreshWorkspace(true,b.snapshot());
+ if(timing==='during write')refresh=b.context.loadWorkspace(true,b.snapshot());
  const other=b.store.listItems()[1];b.store.decide(other.id,'keep',other.revision);
  b.store.importItems([{mediaKey:'c',name:'c.jpg',type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake'}],'fake');
  stale.resolve();await settle();write.resolve();await b.finishSwipe();await swipe;await refresh;
@@ -147,10 +147,10 @@ test('app reload restores tab history and undoes swipes in reverse order',async 
 
 for(const path of ['/api/logout','/api/workspace'])test(`session expiry at ${path} clears tab history before sign-in or reload`,async t=>{
  const b=await browser(t),swipe=b.getElement('remove').onclick();await b.finishSwipe();await swipe;
- const stale=b.delayWorkspace(),refresh=b.context.refreshWorkspace();
+ const stale=b.delayWorkspace(),refresh=b.context.loadWorkspace();
  b.expireRequest(path);
  if(path==='/api/logout')await b.getElement('lock').onclick();
- else await assert.rejects(b.context.refreshWorkspace(),/sign-in expired/);
+ else await assert.rejects(b.context.loadWorkspace(),/sign-in expired/);
  assert.equal(b.getElement('login-dialog').open,true);
  assert.equal(b.getElement('undo').disabled,true);
  assert.equal(undoHistory.loadUndoHistory(b.sessionStorage).length,0);
