@@ -496,7 +496,7 @@ function mountPhotosSwipe(environment) {
   const item=current(),queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
   $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'}`:'No unreviewed items in this batch.';
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
-  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} \u00b7 estimated savings ${estimate(queue)} \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))}`;
+  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} \u00b7 estimated savings ${estimate(queue)} \u00b7 In Trash \u00b7 running total \u00b7 estimated savings: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))}`;
   moveTrash.textContent=`Move ${candidates.length} items to Trash`;
   trashCandidates.hidden=!trashOptIn.checked;moveTrash.hidden=!trashOptIn.checked;
   trashTitle.textContent=`Move to Trash candidates (${candidates.length})`;
@@ -550,6 +550,7 @@ function mountPhotosSwipe(environment) {
   target.addEventListener('pointerup',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const dx=event.clientX-swipeStart.x,dy=event.clientY-swipeStart.y;swipeStart=null;if(Math.abs(dx)>65&&Math.abs(dx)>Math.abs(dy)*1.5)decide(dx>0?'keep':'remove');});
   target.addEventListener('pointercancel',()=>{swipeStart=null;});
  }
+ window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
  window.addEventListener('keydown',event=>{
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey)return;
   if(event.key==='Tab'){
