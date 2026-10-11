@@ -1,6 +1,6 @@
 import { readdir,readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-const paths=['server.mjs','userscript/photoswiper.user.js','scripts/build-userscript.mjs','worker/src/index.mjs',...(await readdir('lib')).filter(p=>p.endsWith('.mjs')).map(p=>`lib/${p}`),...(await readdir('public')).filter(p=>p.endsWith('.js')).map(p=>`public/${p}`),...(await readdir('extension')).filter(p=>p.endsWith('.js')).map(p=>`extension/${p}`)];
+const paths=['server.mjs','userscript/photoswiper.user.js','scripts/build-userscript.mjs','worker/src/index.mjs','worker/src/sync.mjs',...(await readdir('lib')).filter(p=>p.endsWith('.mjs')).map(p=>`lib/${p}`),...(await readdir('public')).filter(p=>p.endsWith('.js')).map(p=>`public/${p}`),...(await readdir('extension')).filter(p=>p.endsWith('.js')).map(p=>`extension/${p}`)];
 for(const path of paths){const result=spawnSync(process.execPath,['--check',path],{encoding:'utf8'});if(result.status){process.stderr.write(result.stderr);process.exit(1);}}
 const userscriptBuild=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});if(userscriptBuild.status){process.stderr.write(userscriptBuild.stderr);process.exit(1);}
 const manifest=JSON.parse(await readFile('extension/manifest.json'));if(manifest.manifest_version!==3)throw Error('Expected MV3');

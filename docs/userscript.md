@@ -36,7 +36,7 @@ The **In Trash · running total · estimated savings** counter includes saved re
 
 ## Local state and compatibility
 
-Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Tokens and Google cookies are never stored by this script. No data is sent to the existing local app. State does not sync between devices, Safari profiles, userscript managers or the desktop app. Clearing website data removes it. Avoid private browsing if you need durable progress.
+Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes it. Avoid private browsing if you need durable progress.
 
 A renewable account lock prevents simultaneous work in multiple tabs. After a tab closes during an operation, a lock can take up to 90 seconds to expire. Account and page-session changes reject requests; close the overlay, reload Google Photos, and reopen it in the intended account.
 

@@ -7,3 +7,9 @@ workers_dev = true
 type = "Text"
 globs = ["**/photoswiper.user.js"]
 fallthrough = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "photoswiper-sync"
+database_id = "REPLACE_DATABASE_ID"
+migrations_dir = "migrations"

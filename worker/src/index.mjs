@@ -1,7 +1,9 @@
+import {syncRequest} from './sync.mjs';
 import userscript from '../../userscript/photoswiper.user.js';
 
 export default {
-  fetch(request) {
+  fetch(request, env) {
+    if (new URL(request.url).pathname.startsWith('/api/')) return syncRequest(request, env);
     if (new URL(request.url).pathname !== '/photoswiper.user.js') {
       return new Response(request.method === 'HEAD' ? null : 'Not found', {status: 404});
     }

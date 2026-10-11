@@ -218,6 +218,7 @@ test('repeated library cursors do not commit their page, and refresh reads only 
 function fakeIndexedDB(fault={}) {
  const stores=new Map();let initialized=false;
  const database={
+  objectStoreNames:{contains:name=>stores.has(name)},
   createObjectStore:name=>stores.set(name,new Map()),close(){},
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false;
@@ -234,7 +235,8 @@ test('fake IndexedDB persists account-isolated progress and rejects stale revisi
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),indexedDB=fakeIndexedDB();
  const first=await openReviewDatabase(indexedDB),initial=await first.read('account-a');
  const saved=await first.save('account-a',{...initial,cursor:'older',items:[item('a',{decision:'keep'})]});assert.equal(saved.revision,1);
- const reopened=await openReviewDatabase(indexedDB);assert.deepEqual(await reopened.read('account-a'),saved);assert.deepEqual(await reopened.read('account-b'),emptyReview());
+ await first.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ const reopened=await openReviewDatabase(indexedDB);assert.deepEqual(await reopened.settings(),{url:'https://sync.example',token:'synthetic-token'});assert.deepEqual(await reopened.read('account-a'),saved);assert.deepEqual(await reopened.read('account-b'),emptyReview());
  await assert.rejects(first.save('account-a',initial),/another tab/);assert.deepEqual(await first.read('account-a'),saved);
  await first.lease('account-a','owner-a');await assert.rejects(reopened.lease('account-a','owner-b'),/busy/);
  await reopened.lease('account-b','owner-b');await first.lease('account-a','owner-a',true);await reopened.lease('account-a','owner-b');

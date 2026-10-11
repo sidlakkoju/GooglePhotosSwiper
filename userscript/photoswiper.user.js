@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.1.1
+// @version 1.2.0
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -228,8 +228,8 @@ async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},tar
 
 async function openReviewDatabase(indexedDB) {
  const db=await new Promise((resolve,reject)=>{
-  const request=indexedDB.open('photos-swipe-userscript',1);
-  request.onupgradeneeded=()=>{request.result.createObjectStore('accounts');request.result.createObjectStore('leases');};
+  const request=indexedDB.open('photos-swipe-userscript',2);
+  request.onupgradeneeded=()=>{for(const name of ['accounts','leases','settings'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};
   request.onsuccess=()=>resolve(request.result);
   request.onerror=()=>reject(request.error);
   request.onblocked=()=>reject(Error('Close other Photos Swipe tabs to open local storage.'));
@@ -247,6 +247,8 @@ async function openReviewDatabase(indexedDB) {
   });
  }
  return {
+  settings:async()=>await transaction('settings','sync')||{},
+  saveSettings:value=>transaction('settings','sync',()=>value),
   read:async account=>(await transaction('accounts',account))||emptyReview(),
   save:(account,state)=>transaction('accounts',account,current=>{
    if((current?.revision||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
@@ -257,6 +259,61 @@ async function openReviewDatabase(indexedDB) {
    return {owner,expires:release?0:Date.now()+90000};
   })
  };
+}
+
+function createSyncClient({fetch,status=()=>{}}) {
+ let settings={};
+ const configure=value=>{settings=value||{};status(settings.url&&settings.token?'Sync ready':'Sync off \u00b7 saved locally');};
+ async function request(scope,path,method='GET',value) {
+  const url=new URL(path,settings.url.replace(/\/$/,'')+'/');url.searchParams.set('scope',scope);
+  const response=await fetch(url.href,{method,headers:{Authorization:`Bearer ${settings.token}`,...(value?{'Content-Type':'application/json'}:{})},...(value?{body:JSON.stringify(value)}:{}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
+  if(!response.ok)throw Error(`Sync HTTP ${response.status}`);
+  return response.json();
+ }
+ async function sync(scope,state,save) {
+  if(!settings.url||!settings.token)return state;
+  status('Syncing\u2026');
+  try {
+   const remote=await request(scope,'api/state');
+   const decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
+   const pending=state.syncPending||(!state.syncDecisions?Object.fromEntries(state.items.filter(item=>item.decision).map(item=>[item.mediaKey,item.decision])):{});
+   const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
+   for(const [id,value] of Object.entries(pending)){
+    await request(scope,`api/decisions/${encodeURIComponent(id)}`,value===null?'DELETE':'PUT',value===null?undefined:{decision:value});
+    if(value===null)delete decisions[id];else decisions[id]=value;
+   }
+   const history=(dirty?state.history:remote.history).slice(-2000);
+   const items=state.items.map(item=>{
+    const value=Object.hasOwn(pending,item.mediaKey)?pending[item.mediaKey]:decisions[item.mediaKey]??(Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
+    const entry=history.findLast(entry=>entry.key===item.mediaKey&&entry.decision===value);
+    return {...item,decision:value,revision:!dirty&&entry?entry.revision:item.revision};
+   });
+   let next={...state,history,items,syncDecisions:decisions};
+   if(dirty){
+    await request(scope,'api/undo','PUT',{history});
+    await request(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
+   }
+   next=await save({...next,syncPending:{},syncDirty:false,syncProgress:remote.progress});
+   status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs`);return next;
+  }catch(error){status(`${error.message} \u00b7 saved locally; retry on next action`);return state;}
+ }
+ return {configure,sync};
+}
+function markSyncChanges(previous,next) {
+ const pending={...previous.syncPending};
+ const old=new Map(previous.items.map(item=>[item.mediaKey,item.decision]));
+ const items=next.items.map(item=>{
+  if(!old.has(item.mediaKey)&&previous.syncDecisions?.[item.mediaKey])return {...item,decision:previous.syncDecisions[item.mediaKey],revision:previous.history.findLast(entry=>entry.key===item.mediaKey)?.revision||item.revision||0};
+  if((old.get(item.mediaKey)??null)!==(item.decision??null))pending[item.mediaKey]=item.decision??null;
+  return item;
+ });
+ return {...next,items,syncPending:pending,syncDirty:true};
+}
+function validateSyncSettings(url,token) {
+ if(!url&&!token)return {url:'',token:''};
+ const parsed=new URL(url);
+ if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash||parsed.pathname!=='/'||token.length>4096||!token||/[\r\n]/.test(token))throw Error('Enter an HTTPS Worker origin and sync token.');
+ return {url:parsed.origin,token};
 }
 
 function mountPhotosSwipe(environment) {
@@ -444,6 +501,10 @@ function mountPhotosSwipe(environment) {
  divElement4.append(trashCandidates);
  divElement4.append(divElement36);
  divElement36.append(trashLabel,moveTrash);
+ const settingsPanel=document.createElement('details'),settingsTitle=document.createElement('summary');settingsTitle.textContent='Sync settings';settingsPanel.append(settingsTitle);
+ for(const [id,title,type] of [['sync-url','Sync URL','url'],['sync-token','Sync token','password']]){const label=document.createElement('label'),input=document.createElement('input');label.textContent=title+' ';input.setAttribute('id',id);input.type=type;input.autocomplete='off';label.append(input);settingsPanel.append(label);}
+ const syncSave=document.createElement('button');syncSave.setAttribute('id','sync-save');syncSave.textContent='Save and sync';settingsPanel.append(syncSave);
+ const syncStatus=document.createElement('p');syncStatus.setAttribute('id','sync-status');syncStatus.setAttribute('role','status');settingsPanel.append(syncStatus);divElement4.append(settingsPanel);
  document.documentElement.append(host);
  const $=id=>root.getElementById(id);
  if(window.ResizeObserver){
@@ -455,6 +516,8 @@ function mountPhotosSwipe(environment) {
  }
  let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null;
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
+ const syncClient=createSyncClient({fetch:environment.fetch,status:value=>{$('sync-status').textContent=value;}});
+ const synchronize=async()=>{state=await syncClient.sync(identity.account,state,next=>db.save(identity.account,next));};
  const message=value=>{$('status').textContent=value;};
  async function call(operation,args={}) {
   if(leaseError)throw leaseError;
@@ -466,7 +529,7 @@ function mountPhotosSwipe(environment) {
   return result.data;
  }
  async function assertAccount(){if(!identity)throw Error('Close and reopen Photos Swipe after signing into Google Photos.');const result=await call('identity');if(result.account!==identity.account)throw Error('Google account changed. Close and reopen Photos Swipe.');}
- async function save(next){await assertAccount();state=await db.save(identity.account,next);return state;}
+ async function save(next){await assertAccount();state=await db.save(identity.account,markSyncChanges(state,next));await synchronize();return state;}
  function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=busy||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
  async function run(task) {
   if(busy)return;
@@ -533,7 +596,7 @@ function mountPhotosSwipe(environment) {
   if(busy)return;
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
   busy=true;controls();
-  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);message(state.job?'A saved album operation is ready to retry.':'Ready. Decisions are saved locally on this browser.');}
+  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncClient.configure(settings);await synchronize();message(state.job?'A saved album operation is ready to retry.':'Ready. Decisions are saved locally on this browser.');}
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
  function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
@@ -550,6 +613,7 @@ function mountPhotosSwipe(environment) {
  }
 
  function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
+ $('sync-save').onclick=()=>run(async()=>{const settings=validateSyncSettings($('sync-url').value.trim(),$('sync-token').value);await db.saveSettings(settings);syncClient.configure(settings);await synchronize();});
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;render();};
  $('zoom').oninput=()=>{const image=$('media').querySelector('img');if(image){image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'pan-y pinch-zoom';}};
