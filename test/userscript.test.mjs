@@ -216,7 +216,7 @@ function bundleEnvironment() {
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
  const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
- const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,addEventListener(){}};window.top=window;
+ const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
  return result;
 }
@@ -356,6 +356,30 @@ test('mounted Trash is opt-in, confirms the exact count and verifies synthetic T
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
  for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
+});
+test('Trash completion status resets on reload and cached-page restore while estimates retain a running total',async()=>{
+ const candidates=Array.from({length:5},(_,index)=>item(`fake-${index}`,{decision:'remove',dedupKey:`stable-${index}`,spaceTaken:11400}));
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  assert.ok(['XwAOJf','zy0IHe'].includes(entry[0]));
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['previous'],...candidates.map(row=>[row.mediaKey,null,null,row.dedupKey])],null])};
+ };
+ const mounted=await mountedReview([item('previous',{decision:'remove',state:'in_trash',spaceTaken:55000}),...candidates],{fetch,confirm:()=>true});
+ const ready='Ready. Decisions are saved locally on this browser.';
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 55 KB$/);
+ mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+ await mounted.click('move-trash');
+ assert.equal(mounted.nodes.get('status').textContent,'Verified 5 items in Trash.');
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 112 KB$/);
+ await mounted.environment.window.listeners.pageshow({persisted:true});
+ assert.equal(mounted.nodes.get('status').textContent,ready);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 112 KB$/);
+ const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reloaded.environment);
+ await reloaded.nodes.get('launcher').onclick();
+ assert.equal(reloaded.nodes.get('status').textContent,ready);
+ assert.match(reloaded.nodes.get('stats').textContent,/In Trash · running total · estimated savings: 112 KB$/);
+ assert.equal(reloaded.nodes.get('move-trash').textContent,'Move 0 items to Trash');
 });
 test('mounted Trash and deleted-item checks retain all 45 undecided items despite six older dedup matches',async()=>{
  for(const action of ['move-trash','trash']){

@@ -32,6 +32,8 @@ To move reviewed candidates to Trash, select **Enable Move to Trash**, review th
 
 Trash reconciliation confirms exact media identifiers directly. A dedup-key match with a different Trash identifier requires checking the library item's own state, so an older trashed copy cannot hide an active copy from review. Check deleted items also restores previously misclassified items when their individual state is confirmed active; unknown results retain their saved state.
 
+The **In Trash · running total · estimated savings** counter includes saved removal candidates confirmed in Trash across sessions in this browser and account. Reloading retains that estimate and resets action status messages. Restoring an open panel from the browser's page cache rereads local progress. The total can decrease when an item is confirmed active again; it is not Google's account storage meter.
+
 ## Local state and compatibility
 
 Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Tokens and Google cookies are never stored by this script. No data is sent to the existing local app. State does not sync between devices, Safari profiles, userscript managers or the desktop app. Clearing website data removes it. Avoid private browsing if you need durable progress.
