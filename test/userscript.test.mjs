@@ -516,6 +516,14 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  assert.equal(mounted.nodes.get('move-trash').hidden,true);
  assert.ok(!requests.includes('XwAOJf'));
 });
+test('card stack clips outgoing cards without a later overflow override',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const css=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent||node.childNodes.map(child=>child.textContent).join('')).join('');
+ const cardRules=[...css.matchAll(/\.card\{([^}]*)\}/g)].map(match=>match[1]);
+ assert.ok(cardRules.length>0);
+ assert.match(cardRules.at(-1),/overflow:hidden/);
+ assert.ok(mounted.nodes.get('card').childNodes.some(node=>node.class==='top-card'));
+});
 test('phone controls keep zoom together, order in a grid and Trash below the library controls',async()=>{
  const mounted=await mountedReview([item('a')]);
  const css=mounted.root.childNodes[0].childNodes[0].textContent;
