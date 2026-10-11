@@ -71,14 +71,22 @@ for(const surface of ['viewer']){
   const matchMedia=globalThis.matchMedia;
   globalThis.matchMedia=()=>({matches:fallback==='reduced motion'});
   context.throwSwipe=throwPublicSwipe;
-  context.render=()=>{};
-  context.show=async()=>{};
+  context.render=()=>assert.equal(card.style.visibility,'');
+  let finishPreview;
+  const previewWaiting=new Promise(resolve=>{finishPreview=resolve;});
+  context.show=async()=>{assert.equal(card.style.visibility,'');await previewWaiting;assert.equal(card.style.visibility,'');};
   try{
    const result=context.decide('keep',{dx:120,duration:240});
    assert.equal(removed,fallback==='missing animate');
-   assert.equal(card.style.visibility,fallback==='reduced motion'?'hidden':'');
+   assert.equal(card.style.visibility,'');
    assert.deepEqual(writes,['save']);
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(removed,true);
+   assert.equal(card.style.visibility,'');
    finish();
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(card.style.visibility,'');
+   finishPreview();
    await result;
    await new Promise(resolve=>setImmediate(resolve));
    assert.equal(card.style.visibility,'');
