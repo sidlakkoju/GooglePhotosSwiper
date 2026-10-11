@@ -251,7 +251,7 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:820,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:820,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
@@ -492,6 +492,30 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
 function swipeEvent(overrides={}) {
  return {isPrimary:true,button:0,target:{tagName:'VIDEO'},pointerId:1,clientX:20,clientY:20,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...overrides};
 }
+test('zoomed photos allow touch panning without swiping and reset for the next photo',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {nodes}=mounted,card=nodes.get('card'),media=nodes.get('media'),zoom=nodes.get('zoom');
+ const css=mounted.root.childNodes[0].childNodes[0].textContent;
+ assert.match(css,/\.card\.zoomed,\.card\.zoomed \.media\{touch-action:pan-x pan-y pinch-zoom\}/);
+ assert.match(css,/\.card\.zoomed \.media img\{pointer-events:auto\}/);
+ assert.equal(card.classList.contains('expanded'),false);
+ for(const value of ['2','2.5','1','3']){
+  zoom.value=value;zoom.oninput();
+  assert.equal(card.classList.contains('zoomed'),Number(value)>1);
+ }
+ const image=media.querySelector('img');
+ assert.equal(image.style.touchAction,'pan-x pan-y pinch-zoom');
+ media.setPointerCapture=()=>assert.fail('Zoomed photos must keep native touch panning');
+ media.listeners.pointerdown(swipeEvent({target:image,pointerType:'touch'}));
+ const move=swipeEvent({target:image,clientX:120});media.listeners.pointermove(move);
+ media.listeners.pointerup(swipeEvent({target:image,clientX:120}));
+ assert.equal(move.prevented,undefined);
+ assert.equal((await mounted.read()).history.length,0);
+ await mounted.click('keep');
+ assert.equal(zoom.value,'1');
+ assert.equal(card.classList.contains('zoomed'),false);
+});
+
 test('swipes lock direction after slop and cancellation releases capture without deciding',async()=>{
  for(const scenario of ['vertical','cancel','short','other-pointer']){
   const mounted=await mountedReview([item('synthetic')]),media=mounted.nodes.get('media');
