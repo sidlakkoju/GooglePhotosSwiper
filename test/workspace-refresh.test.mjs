@@ -13,7 +13,7 @@ async function browser(t,previous=null){
  const store=previous?.store||createStore();if(!previous)t.after(()=>store.close());
  if(!previous){store.setSetting('account','fake');
  store.importItems(['a','b'].map(mediaKey=>({mediaKey,name:mediaKey+'.jpg',type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake'})),'fake');}
- const elements=new Map(),timers=new Map(),storage=previous?.storage||new Map(),listeners=new Map();let timerId=0,workspaceWait=null,decisionWait=null;
+ const elements=new Map(),timers=new Map(),storage=previous?.storage||new Map(),listeners=new Map();let timerId=0,workspaceWait=null,decisionWait=null,unauthorizedPath=null;
  function element(){return {style:{},dataset:{},hidden:false,open:false,classList:{add(){},remove(){},toggle(){}},addEventListener(){},querySelector:()=>null,setAttribute(){},removeAttribute(){},replaceChildren(){},append(){},before(){},showModal(){this.open=true;},close(){this.open=false;}};}
  const getElement=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
  const snapshot=()=>({items:store.listItems().map(item=>({...item,url:'data:image/png;base64,fake'})),jobs:[]});
@@ -27,6 +27,7 @@ async function browser(t,previous=null){
   IntersectionObserver:class{disconnect(){}observe(){}},matchMedia:()=>({matches:false,addEventListener(){}}),
   setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId;},clearTimeout:id=>timers.delete(id),setInterval(){},
   fetch:async(path,options)=>{
+   if(path===unauthorizedPath){unauthorizedPath=null;return {ok:false,status:401,json:async()=>({})};}
    let body;
    if(path==='/api/session')body={authenticated:false};
    else if(path==='/api/workspace'){body=snapshot();if(workspaceWait){const wait=workspaceWait;workspaceWait=null;await wait.promise;}}
@@ -39,6 +40,7 @@ async function browser(t,previous=null){
  const source=(await readFile(new URL('../public/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
  vm.runInContext(source,context);await settle();await context.unlocked();
  return {context,store,storage,sessionStorage,getElement,snapshot,
+  expireRequest(path){unauthorizedPath=path;},
   delayWorkspace(){workspaceWait=deferred();return workspaceWait;},
   delayDecision(){decisionWait=deferred();return decisionWait;},
   async finishSwipe(){await settle();const animation=[...timers].find(([,timer])=>timer.delay===230);assert.ok(animation,'swipe animation started');timers.delete(animation[0]);animation[1].fn();await settle();},
@@ -139,6 +141,29 @@ test('app reload restores tab history and undoes swipes in reverse order',async 
  assert.equal(reloaded.store.listItems()[0].decision,'remove');
  await reloaded.getElement('undo').onclick();
  assert.ok(reloaded.store.listItems().every(item=>item.decision===null));
+ assert.equal(reloaded.getElement('undo').disabled,true);
+ assert.equal(undoHistory.loadUndoHistory(reloaded.sessionStorage).length,0);
+});
+
+for(const path of ['/api/logout','/api/workspace'])test(`session expiry at ${path} clears tab history before sign-in or reload`,async t=>{
+ const b=await browser(t),swipe=b.getElement('remove').onclick();await b.finishSwipe();await swipe;
+ const stale=b.delayWorkspace(),refresh=b.context.refreshWorkspace();
+ b.expireRequest(path);
+ if(path==='/api/logout')await b.getElement('lock').onclick();
+ else await assert.rejects(b.context.refreshWorkspace(),/sign-in expired/);
+ assert.equal(b.getElement('login-dialog').open,true);
+ assert.equal(b.getElement('undo').disabled,true);
+ assert.equal(undoHistory.loadUndoHistory(b.sessionStorage).length,0);
+ assert.equal(vm.runInContext('history.length',b.context),0);
+ assert.equal(vm.runInContext('items.length',b.context),0);
+ assert.equal(vm.runInContext('Object.keys(decisions).length',b.context),0);
+ assert.equal(b.getElement('removed').textContent,0);
+ await b.context.unlocked();
+ stale.resolve();await refresh;
+ assert.equal(b.getElement('removed').textContent,1);
+ assert.equal(b.getElement('undo').disabled,true);
+ assert.equal(undoHistory.loadUndoHistory(b.sessionStorage).length,0);
+ const reloaded=await browser(t,b);
  assert.equal(reloaded.getElement('undo').disabled,true);
  assert.equal(undoHistory.loadUndoHistory(reloaded.sessionStorage).length,0);
 });
