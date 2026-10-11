@@ -16,7 +16,7 @@ const metadata=`// ==UserScript==
 // @license MIT
 // ==/UserScript==
 `;
-const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-qr','userscript-pairing','userscript-preload','userscript-ui'];
+const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-swipe','userscript-qr','userscript-pairing','userscript-preload','userscript-ui'];
 const sources=await Promise.all(modules.map(name=>readFile(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8')));
 const swipeSource=await readFile(new URL('../lib/swipe.mjs',import.meta.url),'utf8');
 sources.unshift(swipeSource);
