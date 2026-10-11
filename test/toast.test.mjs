@@ -70,7 +70,7 @@ test('toast replacement and click dismissal cancel the previous timer',()=>{
  assert.equal(timers.size,0);
 });
 
-test('loading no new fake media shows a notification in its own flow space before the empty-state queue button',async()=>{
+test('loading no new fake media shows a notification without shifting the review controls before the empty-state queue button',async()=>{
  const items=[{id:'synthetic-photo',type:'photo',decision:'remove'}];
  const result=await loadReviewBatch({initial:{items,cursor:'older'},fetchPage:async()=>({count:0}),readWorkspace:async()=>({items,cursor:null,exhausted:true})});
  assert.equal(result.added,0);
@@ -85,9 +85,9 @@ test('loading no new fake media shows a notification in its own flow space befor
  assert.ok(main.indexOf('id="toast"')<main.indexOf('id="empty-queue"'));
  assert.equal((html.match(/id="toast"/g)||[]).length,1);
  const rules=[...css.matchAll(/#toast(?:\.show)?\s*\{([^}]*)\}/g)].map(match=>match[1]).join(';');
- assert.match(rules,/position:static(?:;|$)/);
+ assert.match(rules,/position:fixed(?:;|$)/);
  assert.match(rules,/display:none(?:;|$)/);
  assert.match(rules,/display:block(?:;|$)/);
  assert.match(rules,/overflow-wrap:anywhere(?:;|$)/);
- assert.doesNotMatch(rules,/(?:position\s*:\s*(?:fixed|absolute|sticky)|(?:top|bottom|left|right|transform)\s*:)/);
+ assert.match(rules,/max-width:calc\(100vw - 32px\)/);
 });
