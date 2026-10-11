@@ -1010,4 +1010,43 @@ test('accepted bridge operations outlive the injection deadline while missing in
  let receiver,request;const missingWindow={addEventListener(type,listener){receiver=listener;},postMessage(data){request=data;}};
  const missing=createPagePhotosBridge({window:missingWindow,document:{querySelector(){},createElement:()=>({remove(){}}),documentElement:{append(){}}},crypto:webcrypto,...timers});
  const unavailable=missing('identity');receiver({source:{},data:{...request,kind:'photos-accepted'}});await advance(35000);assert.match((await unavailable).error,/bridge unavailable/);assert.equal(scheduled.size,0);
+ const lostResult=missing('identity');receiver({source:missingWindow,data:{...request,kind:'photos-accepted'}});assert.equal(scheduled.size,1);await advance(35000);assert.match((await lostResult).error,/bridge unavailable/);assert.equal(scheduled.size,0);
+ receiver({source:missingWindow,data:{...request,kind:'photos-result',result:{ok:true}}});assert.equal(scheduled.size,0);
+});
+
+test('incomplete GM values migrate complete legacy pairing and preserve partial legacy credentials',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ for(const initial of [undefined,null,{}, {url:'https://sync.example'}, {token:'partial'}]){
+  const db=await openReviewDatabase(fakeIndexedDB());
+  let value=initial,writes=0;
+  const GM={getValue:async()=>value,setValue:async(key,next)=>{value=next;writes++;},deleteValue:async()=>{}};
+  const store=await createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+  const partial={token:'legacy-token',deviceName:'Phone'};
+  await db.saveSettings(partial);await store.settings();assert.deepEqual(await db.settings(),partial);assert.equal(writes,0);
+  await db.saveSettings({...partial,url:'https://sync.example',onboardingDismissed:true});
+  const migrated=await store.settings();assert.equal(migrated.token,'legacy-token');assert.ok(migrated.deviceId);assert.equal(writes,1);
+  assert.deepEqual(await db.settings(),{onboardingDismissed:true});await store.settings();assert.equal(writes,1);
+ }
+});
+
+test('signed-in privileged bundle uses page AbortSignals for library, album and Trash requests',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment(),pageWindow=mounted.environment.window,requests=[];
+ class PageAbortController extends AbortController {}
+ class ContentAbortController {constructor(){throw Error('Content AbortController used for page fetch');}}
+ pageWindow.AbortController=PageAbortController;
+ pageWindow.fetch=async(url,options)=>{
+  assert.ok(options.signal instanceof AbortSignal);
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
+  return {ok:true,text:async()=>envelope(id,id==='OXvT9d'?[['album']]:[[],null])};
+ };
+ mounted.environment.unsafeWindow=pageWindow;
+ mounted.environment.window={...pageWindow,AbortController:ContentAbortController};
+ const instrumented=source.replace('mountPhotosSwipe(environment);','globalThis.pageAPI=createPhotosAPI(environment);mountPhotosSwipe(environment);');
+ vm.runInNewContext(instrumented,mounted.environment);
+ for(const [name,args] of [['library',{}],['createAlbum',{title:'Photos Swipe · Review'}],['trashPage',{}]]){
+  const result=await mounted.environment.pageAPI(name,args);assert.equal(result.ok,true,result.error);
+ }
+ assert.deepEqual(requests,['lcxiM','OXvT9d','zy0IHe']);
 });

@@ -326,17 +326,18 @@ function validateSyncSettings(url,token) {
 async function createPairingStore({GM,database,crypto}) {
  const durable=!!GM&&['getValue','setValue','deleteValue'].every(name=>typeof GM[name]==='function');
  const key='photos-swipe-pairing';
+ const complete=value=>typeof value?.url==='string'&&!!value.url&&typeof value?.token==='string'&&!!value.token;
  const select=value=>Object.fromEntries(['url','token','deviceId','deviceName'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
  async function settings() {
   const db=await database();
   if(!durable)return db.settings();
   let value=await GM.getValue(key);
   const legacy=await db.settings();
-  if(value===undefined&&legacy.url&&legacy.token){
+  if(!complete(value)&&complete(legacy)){
    value={...select(legacy),deviceId:legacy.deviceId||crypto.randomUUID()};
    await GM.setValue(key,value);
   }
-  if(legacy.token||legacy.url||legacy.deviceId||legacy.deviceName){await db.deleteSettings();if(legacy.onboardingDismissed)await db.saveSettings({onboardingDismissed:true});}
+  if(complete(value)&&(legacy.token||legacy.url||legacy.deviceId||legacy.deviceName)){await db.deleteSettings();if(legacy.onboardingDismissed)await db.saveSettings({onboardingDismissed:true});}
   return {...select(value),onboardingDismissed:legacy.onboardingDismissed};
  }
  async function saveSettings(value) {
@@ -357,7 +358,7 @@ function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}
   const entry=pending.get(event.data.id);
   if(!entry)return;
   clearTimeout(entry.timer);
-  if(event.data.kind==='photos-accepted')return;
+  if(event.data.kind==='photos-accepted'){entry.timer=setTimeout(entry.expire,entry.duration);return;}
   pending.delete(event.data.id);entry.resolve(event.data.result);
  });
  const script=document.createElement('script');
@@ -375,8 +376,10 @@ function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}
  document.documentElement.append(script);script.remove();
  return (name,args={})=>new Promise(resolve=>{
   const id=crypto.randomUUID();
-  const timer=setTimeout(()=>{pending.delete(id);resolve({ok:false,error:'Google Photos page bridge unavailable. Reload or check userscript injection permissions.'});},35000);
-  pending.set(id,{resolve,timer});
+  const duration=(['findAlbum','albumMembers'].includes(name)?1001:name==='library'?2:1)*30000+5000;
+  const expire=()=>{pending.delete(id);resolve({ok:false,error:'Google Photos page bridge unavailable. Reload or check userscript injection permissions.'});};
+  const timer=setTimeout(expire,35000);
+  pending.set(id,{resolve,timer,expire,duration});
   window.postMessage({channel,kind:'photos-call',id,name,args},'https://photos.google.com');
  });
 }
@@ -752,7 +755,7 @@ function mountPhotosSwipe(environment) {
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:window.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
