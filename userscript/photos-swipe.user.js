@@ -152,9 +152,13 @@ function mergeReviewPage(state,page,requestCursor,refresh=false) {
  if(!refresh&&state.cursor!==requestCursor)throw Error('Library progress changed. Retry Load more.');
  if(page.nextPageId&&page.nextPageId===requestCursor)throw Error('Google repeated a page. Reload before retrying.');
  const items=new Map(state.items.map(item=>[item.mediaKey,item]));
- for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...item,decision:old?.decision??null,queueSent:old?.queueSent??false,state:old?.state??'active',revision:old?.revision||0});}
+ for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
  const progress=!refresh||!state.started?{cursor:page.nextPageId,exhausted:!page.nextPageId,started:true}:{};
  return {...state,...progress,items:[...items.values()]};
+}
+function canUndoReview(state,entry) {
+ const item=state.items.find(item=>item.mediaKey===entry.key);
+ return !!item&&item.state!=='in_trash'&&item.decision===entry.decision&&(item.revision||0)===entry.revision&&!state.job?.mediaKeys.includes(entry.key);
 }
 function decideReview(state,key,decision,expected,expectedRevision) {
  if(![null,'keep','remove'].includes(decision))throw Error('Invalid decision.');
@@ -207,7 +211,6 @@ async function reconcileReviewTrash(state,call) {
  if(state.job)throw Error('Finish the saved album operation before checking Trash.');
  const trash=await readReviewTrash(call),items=[];
  for(const item of state.items){
-  if(item.decision!=='remove'){items.push(item);continue;}
   let next=item.state;
   if(trash.keys.has(item.mediaKey)||item.dedupKey&&trash.dedupKeys.has(item.dedupKey))next='in_trash';
   else if(item.state==='in_trash'){const result=await call('itemState',{mediaKey:item.mediaKey});if(result.state!=='unknown')next=result.state;}
@@ -275,7 +278,7 @@ function mountPhotosSwipe(environment) {
  :host{font:16px system-ui;color:#193426}*{box-sizing:border-box}button,select,input{font:inherit}button,a,select{touch-action:manipulation}button{min-height:44px;border:0;border-radius:12px;background:#e3ebdf;color:#193426;padding:10px 16px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #0075ff;outline-offset:2px}a{color:#236541}p{margin:8px 0;overflow-wrap:anywhere}[hidden]{display:none!important}
  .launcher{pointer-events:auto;position:absolute;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#245b3d;color:white;box-shadow:0 3px 20px #0005}
  .overlay{pointer-events:auto;position:absolute;inset:0;background:#f4f7f1;overflow:auto;overscroll-behavior:contain;padding:calc(12px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom))}
- .content{max-width:850px;margin:auto}header,.actions,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:22px;margin:0}.account{font-size:13px}.card{margin-top:12px;background:#13281f;border-radius:18px;overflow:hidden;position:relative}.media{height:48vh;height:48dvh;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:auto}.media img,.media video{display:block;max-width:100%;max-height:100%;object-fit:contain}.media img{touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-drag:none}.card.expanded .media{height:72vh;height:72dvh}.caption{color:white;padding:10px 14px}.swipe{color:white;text-align:center;padding:12px;touch-action:pan-y pinch-zoom;background:#264638}.actions{justify-content:center;margin:12px 0}.keep{background:#245b3d;color:white}.remove{background:#8c3535;color:white}.stats{padding:12px;background:#e3ebdf;border-radius:12px;margin:12px 0}.toolbar{margin:10px 0}select{max-width:100%;min-height:44px;border-radius:8px}details{margin:16px 0}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}.queue button{padding:6px;overflow:hidden}.queue img{width:100%;height:75px;object-fit:cover}.queue span{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{min-height:24px}#zoom{width:120px} @media(min-width:800px){.media{height:55vh}.overlay{padding:24px}}
+ .content{max-width:850px;margin:auto}header,.actions,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:22px;margin:0}.account{font-size:13px}.card{margin-top:12px;background:#13281f;border-radius:18px;overflow:hidden;position:relative}.media{height:48vh;height:48dvh;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:auto}.media img,.media video{display:block;max-width:100%;max-height:100%;object-fit:contain}.media img{touch-action:pan-y pinch-zoom;user-select:none;-webkit-user-drag:none}.card.expanded .media{height:72vh;height:72dvh}.caption{color:white;padding:10px 14px}.swipe{color:white;text-align:center;padding:12px;touch-action:pan-y pinch-zoom;background:#264638}.actions{justify-content:center;margin:12px 0}.keep{background:#245b3d;color:white}.remove{background:#8c3535;color:white}.stats{padding:12px;background:#e3ebdf;border-radius:12px;margin:12px 0}.toolbar{margin:10px 0}select{max-width:100%;min-height:44px;border-radius:8px}details{margin:16px 0}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}.queue button{padding:6px;overflow:hidden}.queue img{width:100%;height:75px;object-fit:cover}.queue span{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{min-height:24px}#zoom{width:120px;min-height:44px} @media(min-width:800px){.media{height:55vh}.overlay{padding:24px}}
  </style>
  <button class="launcher" id="launcher">Photos Swipe</button>
  <section class="overlay" id="overlay" hidden role="dialog" aria-modal="true" aria-label="Photos Swipe"><div class="content">
@@ -353,7 +356,7 @@ function mountPhotosSwipe(environment) {
   for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
   $('remove').textContent=inspected?'Back to review':'× Queue';$('keep').textContent=inspected?'Keep instead':'✓ Keep';
   $('send').textContent=state.job?'Retry saved album operation':'Send to review album';
-  $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/album/${encodeURIComponent(state.albumKey)}`;
+  $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/album/${encodeURIComponent(state.albumKey)}`;
  }
  async function open() {
   if(busy)return;
@@ -369,7 +372,7 @@ function mountPhotosSwipe(environment) {
   const item=current();if(!item)return;
   run(async()=>{const previous=item.decision;await save(decideReview(state,item.mediaKey,decision,previous,item.revision||0));history.push({key:item.mediaKey,previous,decision,revision:(item.revision||0)+1});inspected=null;message(decision==='remove'?'Added to the local removal queue.':'Kept.');});
  }
- function undo(){const last=history.at(-1);if(!last)return;run(async()=>{await save(decideReview(state,last.key,last.previous,last.decision,last.revision));history.pop();inspected=null;message('Decision undone.');});}
+ function undo(){if(busy||!history.length)return;run(async()=>{while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.at(-1);if(!last){message('No previous decisions can be undone.');return;}await save(decideReview(state,last.key,last.previous,last.decision,last.revision));history.pop();inspected=null;message('Decision undone.');});}
  async function load(refresh=false) {
   const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library · ${scanned} rows checked…`)});
   message(`${result.added} new items to review · ${result.scanned} library rows checked${result.exhausted?' · End of library':''}${result.limited?' · Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);

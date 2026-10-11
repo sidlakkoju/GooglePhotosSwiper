@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {webcrypto} from 'node:crypto';
 import vm from 'node:vm';
 import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
-import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
+import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
@@ -125,7 +125,12 @@ test('built userscript metadata, page isolation, no privileged APIs and reproduc
  assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('id="card"')<source.indexOf('id="stats"'));
  const body=source.slice(source.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);assert.doesNotMatch(body,/^\s*\/\/|\/\*/m);
  new vm.Script(source);
- vm.runInNewContext(source,{window:{top:{} ,fetch(){},crypto:{},setTimeout(){},clearTimeout(){}},document:{},location:{origin:'https://photos.google.com'}});
+ const mounted=bundleEnvironment();
+ vm.runInNewContext(source,mounted.environment);
+ assert.equal(mounted.hosts.length,1);assert.equal(mounted.shadowMode,'open');
+ assert.equal(typeof mounted.nodes.get('launcher').onclick,'function');
+ assert.match(mounted.root.innerHTML,/#zoom\{[^}]*min-height:44px/);
+ vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
 });
 test('unavailable saved albums can be replaced without resetting sent decisions',async()=>{
@@ -159,7 +164,7 @@ test('repeated library cursors do not commit their page, and refresh reads only 
  count=0;await loadReviewPages({...workspace,refresh:true,call:async()=>{count++;return {items:[item('latest')],nextPageId:'head'};}});
  assert.equal(count,1);assert.equal(workspace.state().cursor,'loop');
 });
-function fakeIndexedDB() {
+function fakeIndexedDB(fault={}) {
  const stores=new Map();let initialized=false;
  const database={
   createObjectStore:name=>stores.set(name,new Map()),close(){},
@@ -167,7 +172,7 @@ function fakeIndexedDB() {
    const staged=new Map(stores.get(name));let aborted=false;
    const tx={objectStore:()=>({
     get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    put:(value,key)=>staged.set(key,structuredClone(value))
+    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -189,4 +194,52 @@ test('item revisions prevent stale undo after another tab changes or sends the s
  assert.throws(()=>decideReview(state,'a',null,'remove',1),/changed/);
  const completed=finishReviewAlbum({...state,job:{albumKey:'album',mediaKeys:['a']}},{keys:['a'],dedupKeys:[]});
  assert.throws(()=>decideReview(completed,'a',null,'remove',3),/changed/);assert.equal(completed.items[0].queueSent,true);
+});
+
+function bundleEnvironment() {
+ const nodes=new Map(),hosts=[];
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{toggle(){},contains(){return false;}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(){return null;},setAttribute(){},addEventListener(){},focus(){}});
+ const root={getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
+ Object.defineProperty(root,'innerHTML',{get:()=>root.markup,set:value=>{root.markup=value;for(const match of value.matchAll(/<(\w+)[^>]*\bid="([^"]+)"[^>]*>/g)){const node=element(match[1]);node.id=match[2];node.hidden=match[0].includes(' hidden');nodes.set(node.id,node);}nodes.get('filter').value='all';nodes.get('sort').value='original';}});
+ const result={nodes,hosts,root};
+ const document={getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
+ const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,addEventListener(){}};window.top=window;
+ result.environment={window,document,location:{...page},URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ return result;
+}
+test('library sightings restore active state and retain local album membership on load and refresh',()=>{
+ for(const refresh of [false,true]){
+  const state={...emptyReview(),items:[item('queued',{decision:'remove',state:'in_trash',albumKey:'album',revision:4}),item('unreviewed',{state:'in_trash'}),item('sent',{decision:'remove',queueSent:true,albumKey:'album'})]};
+  const merged=mergeReviewPage(state,{items:state.items.map(row=>item(row.mediaKey)),nextPageId:null},null,refresh);
+  assert.deepEqual(merged.items.map(row=>row.state),['active','active','active']);assert.equal(merged.items[0].albumKey,'album');assert.equal(merged.items[0].revision,5);
+  assert.deepEqual(reviewQueue(merged).map(row=>row.mediaKey),['queued']);assert.deepEqual(reviewDeck(merged).map(row=>row.mediaKey),['unreviewed']);assert.equal(merged.items[2].queueSent,true);
+ }
+});
+test('Trash reconciliation covers kept and undecided rows and verifies their restoration',async()=>{
+ const state={...emptyReview(),items:[item('kept',{decision:'keep'}),item('new',{dedupKey:'stable'}),item('other')]};
+ const marked=await reconcileReviewTrash(state,async()=>({items:[{mediaKey:'kept'},{mediaKey:'alternate',dedupKey:'stable'}],nextPageId:null}));
+ assert.deepEqual(marked.items.map(row=>row.state),['in_trash','in_trash','active']);assert.deepEqual(reviewDeck(marked).map(row=>row.mediaKey),['other']);
+ const restored=await reconcileReviewTrash(marked,async operation=>operation==='trashPage'?{items:[],nextPageId:null}:{state:'active'});
+ assert.deepEqual(restored.items.map(row=>row.state),['active','active','active']);assert.equal(restored.items[0].decision,'keep');assert.equal(restored.items[1].revision,2);
+});
+test('undo eligibility rejects missing, trashed, revised and job-locked decisions',()=>{
+ const entry={key:'a',decision:'keep',revision:1},state={...emptyReview(),items:[item('a',{decision:'keep',revision:1})]};
+ assert.equal(canUndoReview(state,entry),true);
+ for(const changed of [{...state,items:[]},{...state,items:[item('a',{decision:'keep',revision:2})]},{...state,items:[item('a',{decision:'keep',revision:1,state:'in_trash'})]},{...state,job:{mediaKeys:['a']}}])assert.equal(canUndoReview(changed,entry),false);
+});
+test('mounted bundle keeps album links in the page account and undo skips stale history',async()=>{
+ const source=await readFile(new URL('../userscript/photos-swipe.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),fault={};
+ mounted.environment.window.indexedDB=fakeIndexedDB(fault);
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ assert.equal(mounted.nodes.get('album').href,'https://photos.google.com/u/2/album/album');
+ const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ mounted.nodes.get('keep').onclick();await idle();mounted.nodes.get('keep').onclick();await idle();
+ const state=await db.read(account);await db.save(account,{...state,items:state.items.map(row=>row.mediaKey==='b'?{...row,state:'in_trash',revision:row.revision+1}:row)});
+ fault.failSave=true;mounted.nodes.get('undo').onclick();await idle();
+ assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');assert.equal((await db.read(account)).items[0].decision,'keep');
+ fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
+ const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone.');
 });
