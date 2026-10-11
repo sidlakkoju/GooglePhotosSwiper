@@ -251,7 +251,7 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment() {
  const nodes=new Map(),hosts=[];
- const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({tagName:tag.toUpperCase(),style:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
@@ -761,4 +761,93 @@ test('photo viewer consumes Space without scrolling, closing or recording decisi
    assert.deepEqual(await mounted.read(),before);
   }
  }
+});
+
+test('first-use sync setup is above the card and local dismissal survives reopening',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
+ assert.ok(content.childNodes.indexOf(settings)<content.childNodes.indexOf(mounted.nodes.get('card')));
+ assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
+ assert.equal(settings.open,true);
+ await mounted.click('sync-local');assert.equal(settings.open,false);
+ const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('sync-settings').open,false);
+ assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+});
+
+test('sync setup actions preserve the saved album retry status and job',async()=>{
+ for(const action of ['sync-local','sync-save']){
+  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})});
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+  const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  const job={title:'Photos Swipe · Review',mediaKeys:['a'],albumKey:'saved-album'};
+  await db.save(account,{...await mounted.read(),job});
+  mounted.environment.AbortSignal=AbortSignal;
+  await mounted.nodes.get('launcher').onclick();
+  assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
+  if(action==='sync-save'){
+   mounted.nodes.get('sync-url').value='https://sync.example';
+   mounted.nodes.get('sync-token').value='synthetic-token';
+  }
+  await mounted.click(action);
+  assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
+  assert.equal(mounted.nodes.get('send').textContent,'Retry saved album operation');
+  assert.deepEqual((await mounted.read()).job,job);
+  assert.equal(mounted.nodes.get('sync-settings').open,false);
+  if(action==='sync-save')assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
+ }
+});
+
+test('main and visible sync status report successful sync, failures and disabling sync',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
+ reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ let fail=false,requests=0;
+ reopened.environment.window.fetch=async url=>{
+  assert.equal(new URL(url).origin,'https://sync.example');requests++;
+  if(fail)throw Error('Synthetic offline');
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+ };
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(reopened.environment.window.indexedDB);
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ vm.runInNewContext(source,reopened.environment);await reopened.nodes.get('launcher').onclick();
+ assert.equal(requests,1);assert.match(reopened.nodes.get('status').textContent,/sync enabled.*Synced/);
+ assert.match(reopened.nodes.get('sync-status').textContent,/^Synced/);
+ assert.equal(reopened.nodes.get('sync-settings').open,false);
+ fail=true;await reopened.nodes.get('launcher').onclick();
+ assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);
+ reopened.nodes.get('sync-url').value='';reopened.nodes.get('sync-token').value='';
+ reopened.nodes.get('sync-save').onclick();
+ for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ assert.equal(reopened.nodes.get('sync-status').textContent,'Sync off · saved locally');
+});
+
+test('decision history previews the same next Undo and updates after undo and reload',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/No decisions yet/);
+ await mounted.click('remove');mounted.nodes.get('queue').childNodes[0].onclick();await mounted.click('keep');
+ assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: a · Queue → Keep; restores Queue/);
+ assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(mounted.nodes.get('undo-preview')));
+ assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
+ assert.match(mounted.nodes.get('history-list').childNodes[0].textContent,/Next Undo/);
+ assert.match(mounted.nodes.get('history-list').childNodes[1].textContent,/Unavailable for Undo/);
+ const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
+ await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,'remove');
+ assert.match(mounted.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);
+ await mounted.click('undo');assert.equal(mounted.nodes.get('history-list').childNodes.length,1);
+ assert.equal(mounted.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
+});
+
+test('release metadata names the author and install guide explains Chrome script execution',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ assert.match(source,/\/\/ @version 1\.2\.3\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
+ const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
+ assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });

@@ -4,7 +4,7 @@ Photos Swipe can run directly in your signed-in Google Photos tab, without Node,
 
 ## Desktop: Tampermonkey or Violentmonkey
 
-1. Enable Tampermonkey or Violentmonkey in your browser and allow it to run on `photos.google.com`. Follow your manager's browser setup instructions if script execution is disabled.
+1. Enable Tampermonkey or Violentmonkey in your browser and allow it to run on `photos.google.com`. For Tampermonkey in Chrome, open `chrome://extensions`, select Tampermonkey **Details**, and turn on **Allow User Scripts** (off by default). If Chrome requires Developer mode to expose this toggle, enable it on the extensions page first. Follow your manager's browser setup instructions if script execution is disabled.
 2. Open the install link above, review the script, and choose Install in your manager. If the link displays source instead, create a new script in the manager, replace its contents with the downloaded file, and save.
 3. Open or reload `https://photos.google.com/`, sign into the intended account, and select **Photos Swipe** at the bottom right.
 4. Confirm the account shown in the overlay, then choose **Load 50 more**.
@@ -22,7 +22,7 @@ The two installation methods and page-context metadata follow the [Userscripts d
 
 The media card appears above the stats on mobile. Phone layouts keep Zoom on one row, pair the filter and sort controls, and keep album and opt-in Trash controls in an action area below the library controls. Swipe a photo horizontally or use **Queue** and **Keep**. For videos, use the separate swipe strip below the player so native playback and scrubbing controls stay usable. Photos support Enlarge, the Zoom slider, and browser pinch zoom. On desktop, left/right arrows queue/keep, Z undoes, F enlarges, Space toggles video playback, and Escape closes the overlay.
 
-Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** changes its decision; **Back to review** returns to the deck. Decisions and undo history survive reloads in IndexedDB. Undo names the restored item and shows it on the card, even when it was off-screen or the review order has changed. If Undo restores a removal decision, the card opens that item for queue inspection.
+Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** changes its decision; **Back to review** returns to the deck. Open **Decision history** to see recent decisions, their previous values, and the exact item and value the next **Undo** will restore. Entries that cannot currently be undone are marked unavailable. Decisions and undo history survive reloads in IndexedDB. Undo names the restored item and shows it on the card, even when it was off-screen or the review order has changed. If Undo restores a removal decision, the card opens that item for queue inspection.
 
 **Load 50 more** scans through overlapping or reviewed pages until it finds 50 new review items, reaches the end, or checks 12 pages. **Refresh latest** reads the head page while retaining older-library progress. Filters and order apply to the current local batch.
 
@@ -32,11 +32,11 @@ To move reviewed candidates to Trash, select **Enable Move to Trash**, review th
 
 Trash reconciliation confirms exact media identifiers directly. A dedup-key match with a different Trash identifier requires checking the library item's own state, so an older trashed copy cannot hide an active copy from review. Check deleted items also restores previously misclassified items when their individual state is confirmed active; unknown results retain their saved state.
 
-The **In Trash · running total · estimated savings** counter includes saved removal candidates confirmed in Trash across sessions in this browser and account. Reloading retains that estimate and resets action status messages. Restoring an open panel from the browser's page cache rereads local progress. The total can decrease when an item is confirmed active again; it is not Google's account storage meter.
+The **In Trash** running total counter includes saved removal candidates confirmed in Trash across sessions in this browser and account. Reloading retains that estimate and resets action status messages. Restoring an open panel from the browser's page cache rereads local progress. The total can decrease when an item is confirmed active again; it is not Google's account storage meter.
 
 ## Local state and compatibility
 
-Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes it. Avoid private browsing if you need durable progress.
+Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. **Sync settings** appears near the top and opens on first use. Choose **Save and sync** with your Worker URL and token, or **Continue locally** to dismiss setup; you can reopen settings anytime. The visible sync status reports success or a failure with local fallback. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes it. Avoid private browsing if you need durable progress.
 
 A renewable account lock prevents simultaneous work in multiple tabs. After a tab closes during an operation, a lock can take up to 90 seconds to expire. Account and page-session changes reject requests; close the overlay, reload Google Photos, and reopen it in the intended account.
 
