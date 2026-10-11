@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.18
+// @version 1.2.19
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content
@@ -68,7 +68,7 @@ function injectRelease(environment,release){
  if(root.dataset.psLoaded||root.dataset.psLoaderInjected)return false;
  const script=document.createElement('script'),nonce=document.querySelector('script[nonce]');
  if(nonce)script.nonce=nonce.nonce||nonce.getAttribute('nonce');
- let code=release.code;
+ let code=`(function(photosSwipeReleaseVersion){\n${release.code}\n})(${JSON.stringify(release.version)});`;
  if(environment.trustedTypes)code=environment.trustedTypes.createPolicy('photoswiper-loader',{createScript:value=>value}).createScript(code);
  script.textContent=code;
  root.dataset.psLoaderInjected='1';

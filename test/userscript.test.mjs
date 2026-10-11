@@ -1,6 +1,7 @@
+import {injectRelease} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,access,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {readFile,access,mkdtemp,writeFile,rm,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -142,6 +143,8 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  const mounted=bundleEnvironment();
  vm.runInNewContext(source,mounted.environment);
  assert.equal(mounted.hosts.length,1);assert.equal(mounted.shadowMode,'open');
+ assert.equal(mounted.nodes.get('running-version').textContent,'v'+/^\/\/ @version (\S+)$/m.exec(source)[1]);
+ for(const field of ['updateURL','downloadURL'])assert.deepEqual([...source.slice(0,source.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),[url]);
  assert.equal(typeof mounted.nodes.get('launcher').onclick,'function');
  assert.match(mounted.root.childNodes[0].childNodes[0].textContent,/#zoom\{[^}]*min-height:44px/);
  assert.doesNotMatch(source,/innerHTML|outerHTML|insertAdjacentHTML/);
@@ -149,6 +152,24 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  for(const line of metadata.trim().split('\n').slice(1))assert.match(line,/^\/\/ @/);
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+});
+test('rebuilt panel version follows a metadata version bump',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'photos-version-'));
+ try{
+  for(const name of ['scripts','lib','extension','public'])await cp(new URL('../'+name,import.meta.url),join(directory,name),{recursive:true});
+  const builderPath=join(directory,'scripts/build-userscript.mjs');
+  const builder=await readFile(builderPath,'utf8');
+  const version='9.8.7';
+  await writeFile(builderPath,builder.replace(/^\/\/ @version .*$/gm,'// @version '+version));
+  const result=spawnSync(process.execPath,[builderPath],{cwd:directory,encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  const source=await readFile(join(directory,'userscript/photoswiper.user.js'),'utf8');
+  const metadataVersion=/^\/\/ @version (\S+)$/m.exec(source)[1];
+  assert.equal(metadataVersion,version);
+  const mounted=bundleEnvironment();
+  vm.runInNewContext(source,mounted.environment);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+metadataVersion);
+ }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
  const bytes=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));
@@ -1619,4 +1640,14 @@ test('decision history caps visible rows while retaining all Undo entries',async
  assert.equal(rows[100].textContent,'Showing the latest 100 of 105 decisions.');
  assert.match(rows[0].textContent,/synthetic-104-/);
  assert.equal((await mounted.read()).history.length,105);
+});
+
+test('loader panel displays the selected signed release version instead of the bundled version',async()=>{
+ const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ for(const version of ['1.2.99','1.2.8']){
+  const mounted=bundleEnvironment();
+  const document={documentElement:{dataset:{}},querySelector:()=>null,createElement:()=>({remove(){}}),head:{appendChild:script=>vm.runInNewContext(script.textContent,mounted.environment)}};
+  assert.equal(injectRelease({document},{version,code}),true);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
+ }
 });
