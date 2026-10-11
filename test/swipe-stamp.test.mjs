@@ -18,7 +18,7 @@ function review({delayed=false}={}){
  };
  const timers=[],toastTimers=new Map(),writes=[];
  let timerId=0;
- const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
+ const context=vm.createContext({photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceLoadsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,evict:async()=>{},mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
  context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
@@ -26,7 +26,7 @@ function review({delayed=false}={}){
   const line=source.split('\n').find(line=>line.startsWith(`function ${name}(`)||line.startsWith(`async function ${name}(`));
   vm.runInContext(line,context);
  }
- vm.runInContext(source.split('\n').find(line=>line.startsWith('let startX=null;')),context);
+ vm.runInContext(source.split('\n').find(line=>line.startsWith('let startX=null')),context);
  context.render();
  return {context,$,decisions,timers,toastTimers,writes};
 }
@@ -415,4 +415,102 @@ test('sort, filter, and navigation cannot change the target of a queued burst',a
  filterButton.onclick();
  assert.equal(context.sort,'newest');
  assert.equal(selectedFilter,'video');
+});
+
+function viewerReview(context){
+ let callbacks,opens=0;
+ context.ensurePreview=()=>{};
+ context.loadVideo=()=>{};
+ context.createPhotoViewer=(dialog,preview,video,review)=>{callbacks=review;return {open(){opens++;}};};
+ vm.runInContext(source.split('\n').find(line=>line.startsWith('const photoViewer=createPhotoViewer(')),context);
+ vm.runInContext(source.split('\n').find(line=>line.startsWith('function enlargeMedia(')),context);
+ return {callbacks,opens:()=>opens};
+}
+
+test('reload locks viewer and pointer decisions when the pending head changes',async()=>{
+ const {context,$,writes}=review();
+ const viewer=viewerReview(context);
+ let release;
+ context.api=()=>new Promise(resolve=>{release=resolve;});
+ $('card').onpointerdown(pointer(200));
+ const refresh=context.refreshWorkspace();
+ assert.equal(context.workspaceLoadsPending,1);
+ assert.equal(context.reviewActionsPending,1);
+ assert.equal(viewer.callbacks.canDecide(),false);
+ assert.equal(viewer.callbacks.canUndo(),false);
+ context.enlargeMedia(context.active());
+ assert.equal(viewer.opens(),0);
+ assertReset($);
+ $('card').onpointerdown(pointer(200));
+ $('card').onpointermove(pointer(320));
+ $('card').onpointerup(pointer(320));
+ assertReset($);
+ await assert.rejects(viewer.callbacks.decide('keep','first'),/Wait for the current operation/);
+ await new Promise(resolve=>setImmediate(resolve));
+ release({items:[{id:'next'},{id:'third'}],jobs:[]});
+ await refresh;
+ assert.equal(context.active().id,'next');
+ assert.equal(context.workspaceLoadsPending,0);
+ assert.equal(context.reviewActionsPending,0);
+ await assert.rejects(viewer.callbacks.decide('remove','first'),/Wait for the current operation/);
+ assert.deepEqual(writes,[]);
+ assert.equal(viewer.callbacks.canDecide(),true);
+ await viewer.callbacks.decide('keep','next');
+ assert.deepEqual(writes,[['next','keep']]);
+});
+
+test('a pinned viewer decision skips a replaced head even if its previous decision matches',async()=>{
+ const {context,writes}=review();
+ const {callbacks}=viewerReview(context);
+ context.decisions.first='keep';
+ context.active=()=>context.items[0];
+ const result=callbacks.decide('keep','first');
+ context.active=()=>context.items[1];
+ await assert.rejects(result,/could not be saved/);
+ assert.deepEqual(writes,[]);
+});
+
+test('reload failure releases viewer and pointer controls',async()=>{
+ const {context,$,writes}=review();
+ const {callbacks}=viewerReview(context);
+ context.api=async()=>{throw Error('Synthetic reload failure');};
+ await assert.rejects(context.refreshWorkspace(),/Synthetic reload failure/);
+ assert.equal(context.workspaceLoadsPending,0);
+ assert.equal(context.reviewActionsPending,0);
+ assert.equal(callbacks.canDecide(),true);
+ $('card').onpointerdown(pointer(200));
+ $('card').onpointerup(pointer(320));
+ await context.reviewActions;
+ assert.deepEqual(writes,[['first','keep']]);
+});
+
+test('viewer controls block input during reload and pass the displayed id after unlocking',async()=>{
+ const viewerSource=await readFile(new URL('../public/viewer.js',import.meta.url),'utf8');
+ const writes=[],shown=[];
+ let loading=true;
+ const context=vm.createContext({canReview:true,working:false,current:{id:'displayed'},request:0,actions:{},removeButton:{},keepButton:{},undoButton:{},review:{canDecide:()=>!loading,canUndo:()=>!loading,decide:async(decision,id)=>{writes.push([id,decision]);return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async item=>shown.push(item.id)});
+ for(const name of ['controls','decide'])vm.runInContext(viewerSource.split('\n').find(line=>line.trimStart().startsWith(`function ${name}(`)||line.trimStart().startsWith(`async function ${name}(`)),context);
+ context.controls();
+ assert.equal(context.keepButton.disabled,true);
+ assert.equal(context.removeButton.disabled,true);
+ assert.equal(context.undoButton.disabled,true);
+ await context.decide('remove');
+ assert.deepEqual(writes,[]);
+ loading=false;
+ context.controls();
+ assert.equal(context.keepButton.disabled,false);
+ assert.equal(context.removeButton.disabled,false);
+ assert.equal(context.undoButton.disabled,false);
+ await context.decide('remove');
+ assert.deepEqual(writes,[['displayed','remove']]);
+ assert.deepEqual(shown,['next']);
+});
+
+
+test('viewer swipe gestures cannot start while a workspace reload locks decisions',async()=>{
+ const viewerSource=await readFile(new URL('../public/viewer.js',import.meta.url),'utf8');
+ const context=vm.createContext({working:false,canReview:true,current:{id:'first'},review:{canDecide:()=>false},ready:false,scale:1,pointers:new Map(),swipe:null,swipeZone:{setPointerCapture:()=>assert.fail('Locked gestures must not capture the pointer')}});
+ vm.runInContext(viewerSource.slice(viewerSource.indexOf('  function down('),viewerSource.indexOf('  function move(')),context);
+ context.down({button:0,target:{closest:()=>null},currentTarget:context.swipeZone,pointerId:1,clientX:200,clientY:100});
+ assert.equal(context.swipe,null);
 });

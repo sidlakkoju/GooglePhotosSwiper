@@ -68,7 +68,7 @@ test('synthetic video player leaves filename, date and size visible inside the c
     $('media').innerHTML='<video controls muted loop></video>';
     $('media').querySelector('video').src='data:video/quicktime;base64,${video.toString('base64')}';
    }
-   ${app.slice(app.indexOf('const phoneLayout='),app.indexOf('function showView(v)'))}
+   ${app.slice(app.indexOf('const phoneLayout='),app.indexOf('function showView('))}
    const filename=new URLSearchParams(location.search).get('name');
    renderCard({type:'video',name:filename,date:'2026-10-10T12:00:00Z',size:12500000,url:'fake'});
    const phone=innerWidth<=760;

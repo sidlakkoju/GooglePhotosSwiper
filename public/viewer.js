@@ -13,7 +13,7 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   function zoom(value,anchorX=0,anchorY=0){if(!ready)return;const next=Math.min(6,Math.max(1,value));x=anchorX-(anchorX-x)*next/scale;y=anchorY-(anchorY-y)*next/scale;scale=next;paint();}
   function metrics(){const points=[...pointers.values()];if(points.length<2)return points[0]?{...points[0],distance:null}:null;return {x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2,distance:Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y)};}
   function clearSwipe(){swipe=null;stamp.hidden=true;swipeZone.textContent='Swipe left or right';stage.classList.remove('review-dragging');}
-  function controls(){actions.hidden=!canReview;removeButton.disabled=keepButton.disabled=working||!current;undoButton.disabled=working||!review.canUndo?.();}
+  function controls(){actions.hidden=!canReview;removeButton.disabled=keepButton.disabled=working||!current||review.canDecide?.()===false;undoButton.disabled=working||!review.canUndo?.();}
   function clearMedia(){ready=false;video.pause();video.removeAttribute('src');video.load();video.hidden=true;image.removeAttribute('src');image.hidden=true;pointers.clear();gesture=null;clearSwipe();stage.classList.remove('panning');}
   async function show(item,playback={}){
     const token=++request;clearMedia();current=item;scale=1;x=y=0;controls();
@@ -27,7 +27,7 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
       else{image.src=url;await image.decode();if(token!==request||!dialog.open)return;ready=true;image.hidden=false;status.hidden=true;fit();}
     }catch(error){if(token===request&&dialog.open)status.textContent=error.message;}
   }
-  async function decide(decision){if(!canReview||working||!current)return;working=true;controls();const token=request;try{const next=await review.decide(decision);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
+  async function decide(decision){if(!canReview||working||!current||review.canDecide?.()===false)return;working=true;controls();const token=request;try{const next=await review.decide(decision,current.id);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
   async function undo(){if(!canReview||working||!review.canUndo?.())return;working=true;controls();const token=request;try{const next=await review.undo();if(dialog.open&&token===request)await show(next);}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
   removeButton.onclick=()=>decide('remove');keepButton.onclick=()=>decide('keep');undoButton.onclick=undo;
   zoomIn.onclick=()=>zoom(scale*1.25);zoomOut.onclick=()=>zoom(scale/1.25);fitButton.onclick=fit;
@@ -38,9 +38,8 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
   function down(e){
     if(working||e.button!==0||e.target.closest('button,video'))return;
     const onZone=e.currentTarget===swipeZone;
-    if(canReview&&current&&((ready&&scale===1&&pointers.size===0)||onZone)&&!swipe){swipe={id:e.pointerId,x:e.clientX,y:e.clientY,dx:0,dy:0,target:e.currentTarget};e.currentTarget.setPointerCapture(e.pointerId);return;}
+    if(canReview&&current&&review.canDecide?.()!==false&&((ready&&scale===1&&pointers.size===0)||onZone)&&!swipe){swipe={id:e.pointerId,x:e.clientX,y:e.clientY,dx:0,dy:0,target:e.currentTarget};e.currentTarget.setPointerCapture(e.pointerId);return;}
     if(!ready||onZone)return;
-    // A second finger cancels review dragging and starts pinch zoom.
     if(swipe){const r=stage.getBoundingClientRect();pointers.set(swipe.id,{x:swipe.x+swipe.dx-r.left-r.width/2,y:swipe.y+swipe.dy-r.top-r.height/2});clearSwipe();}
     pointers.set(e.pointerId,localPoint(e));stage.setPointerCapture(e.pointerId);gesture=metrics();stage.classList.add('panning');
   }

@@ -17,7 +17,7 @@ test('workspace loading updates guide copy and progress while preserving guide d
   return elements.get(id);
  };
  const saved=new Map();
- const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue,authenticated:true,reviewActionVersion:0,reviewActions:Promise.resolve(),workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),history:[],historyRestored:false,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},localStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)}};
+ const context={$,items:[],decisions:{},workspace:{},summarize,pending,removalQueue,authenticated:true,reviewActionVersion:0,reviewActionsPending:0,workspaceLoadsPending:0,reviewActions:Promise.resolve(),workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),history:[],historyRestored:false,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},localStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)}};
  context.setHistory=entries=>{context.history=entries;};
  context.active=()=>pending(context.items,context.decisions)[0];
  for(const name of ['resetCardGesture','renderStorage','renderCard','renderQueue','renderOperations','renderReconciliation','renderControls','prefetchReview'])context[name]=()=>{};
