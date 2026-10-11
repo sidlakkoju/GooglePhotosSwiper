@@ -9,8 +9,8 @@ A local desktop app for reviewing Google Photos one photo or video at a time. Sw
 Requirements: Node.js **22.13 or newer**, Chrome, and a Google Photos account. There are no npm dependencies to install and no hosted backend.
 
 ```sh
-git clone git@github.com:sidlakkoju/GooglePhotos.git
-cd GooglePhotos
+git clone git@github.com:sidlakkoju/GooglePhotosSwiper.git
+cd GooglePhotosSwiper
 npm start
 ```
 
