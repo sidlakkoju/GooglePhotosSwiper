@@ -1,0 +1,66 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Photos Swipe redesign</title><style>
+:root{--ps-bg:#F2F2F7;--ps-surface:rgba(255,255,255,.72);--ps-surface-solid:#fff;--ps-fill:rgba(120,120,128,.12);--ps-label:#000;--ps-label2:rgba(60,60,67,.6);--ps-sep:rgba(60,60,67,.18);--ps-accent:#007AFF;--ps-destructive:#FF3B30;--ps-success:#34C759;--ps-shadow:0 10px 30px rgba(0,0,0,.12);
+--ps-r-sm:10px;--ps-r-md:16px;--ps-r-lg:24px;--ps-r-pill:999px;--ps-s1:4px;--ps-s2:8px;--ps-s3:12px;--ps-s4:16px;--ps-s5:24px;--ps-s6:32px;
+--ps-font:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,Inter,"Segoe UI",sans-serif;--ps-t-large:600 28px/34px var(--ps-font);--ps-t-title:600 20px/25px var(--ps-font);--ps-t-body:400 17px/22px var(--ps-font);--ps-t-callout:500 15px/20px var(--ps-font);--ps-t-caption:400 12px/16px var(--ps-font)}
+.dark{--ps-bg:#000;--ps-surface:rgba(28,28,30,.72);--ps-surface-solid:#1C1C1E;--ps-fill:rgba(120,120,128,.24);--ps-label:#fff;--ps-label2:rgba(235,235,245,.6);--ps-sep:rgba(84,84,88,.6);--ps-accent:#0A84FF;--ps-destructive:#FF453A;--ps-success:#30D158;--ps-shadow:0 10px 30px rgba(0,0,0,.5)}
+*{box-sizing:border-box;margin:0}body{font:var(--ps-t-body);background:#d8dbe2;padding:24px}.dark.body{background:#0d0d0f}
+.row{display:flex;gap:28px}.cap{font:600 13px var(--ps-font);color:#666;margin:0 0 8px 4px;text-transform:uppercase;letter-spacing:.06em}
+.phone{width:390px;height:844px;border-radius:44px;background:var(--ps-bg);color:var(--ps-label);position:relative;overflow:hidden;box-shadow:0 0 0 10px #111;font-family:var(--ps-font)}
+.top{display:flex;align-items:center;justify-content:space-between;padding:56px 20px 12px}
+.icon{width:36px;height:36px;border-radius:50%;background:var(--ps-fill);display:grid;place-items:center;color:var(--ps-label);font-size:17px}
+.pill{background:var(--ps-fill);border-radius:var(--ps-r-pill);padding:6px 12px;font:var(--ps-t-callout)}.pill b{color:var(--ps-accent)}
+.prog{height:3px;background:var(--ps-fill);border-radius:2px;margin:0 20px}.prog i{display:block;height:100%;width:38%;background:var(--ps-accent);border-radius:2px}
+.card{position:absolute;left:16px;right:16px;top:132px;height:520px;border-radius:var(--ps-r-lg);box-shadow:var(--ps-shadow);overflow:hidden}
+.img1{background:radial-gradient(circle at 30% 30%,#ffd9a0,transparent 50%),linear-gradient(160deg,#f7a35c,#c0396b 60%,#3b1d5c)}
+.img2{background:linear-gradient(180deg,#9fd4ff,#4a90d9 50%,#2c5e3f 52%,#1f3d2a)}
+.card.back{transform:scale(.95) translateY(14px);opacity:.6}.card.front{transform:rotate(-6deg) translateX(-30px)}
+.stamp{position:absolute;top:24px;right:20px;border:3px solid var(--ps-destructive);color:var(--ps-destructive);font:800 22px var(--ps-font);padding:2px 10px;border-radius:8px;transform:rotate(12deg)}
+.meta{position:absolute;left:0;right:0;bottom:0;padding:40px 16px 14px;background:linear-gradient(transparent,rgba(0,0,0,.55));color:#fff;font:var(--ps-t-caption)}.meta b{font:var(--ps-t-callout);display:block}
+.actions{position:absolute;bottom:44px;left:0;right:0;display:flex;justify-content:center;align-items:center;gap:28px}
+.btn{border-radius:50%;display:grid;place-items:center;background:var(--ps-surface-solid);box-shadow:var(--ps-shadow);font-weight:700}
+.big{width:72px;height:72px;font-size:30px}.sm{width:48px;height:48px;font-size:20px;color:var(--ps-label2)}.x{color:var(--ps-destructive)}.ok{color:var(--ps-accent)}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:136px;background:var(--ps-surface);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-radius:var(--ps-r-pill);padding:8px 14px;font:var(--ps-t-callout);box-shadow:var(--ps-shadow);white-space:nowrap}.toast a{color:var(--ps-accent);margin-left:10px}
+h1{font:var(--ps-t-large);padding:0 20px}.sub{color:var(--ps-label2);font:var(--ps-t-callout);padding:4px 20px 14px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:0 20px}.t{aspect-ratio:1;border-radius:6px;position:relative}.t:after{content:"✕";position:absolute;right:5px;top:5px;width:20px;height:20px;border-radius:50%;background:var(--ps-destructive);color:#fff;font:700 11px/20px var(--ps-font);text-align:center}
+.t.res{opacity:.35}.t.res:after{content:"↺";background:var(--ps-accent)}
+.g1{background:linear-gradient(135deg,#8e9eab,#eef2f3)}.g2{background:linear-gradient(135deg,#f7a35c,#c0396b)}.g3{background:linear-gradient(135deg,#355c7d,#6c5b7b)}.g4{background:linear-gradient(135deg,#a8e063,#56ab2f)}.g5{background:linear-gradient(135deg,#e0c3fc,#8ec5fc)}.g6{background:linear-gradient(135deg,#434343,#000)}
+.hint{color:var(--ps-label2);font:var(--ps-t-caption);padding:10px 20px}
+.dock{position:absolute;left:0;right:0;bottom:0;padding:16px 20px 36px;background:var(--ps-surface);backdrop-filter:blur(20px);border-top:.5px solid var(--ps-sep)}
+.primary{display:block;text-align:center;background:var(--ps-destructive);color:#fff;border-radius:14px;padding:15px;font:600 17px var(--ps-font)}.primary.blue{background:var(--ps-accent)}
+.secondary{display:block;text-align:center;color:var(--ps-accent);font:var(--ps-t-callout);padding:12px 0 0}
+.hero{text-align:center;padding:150px 32px 0}.ring{width:120px;height:120px;border-radius:50%;margin:0 auto 24px;background:conic-gradient(var(--ps-accent) 0 72%,var(--ps-fill) 0);display:grid;place-items:center}.ring span{width:100px;height:100px;border-radius:50%;background:var(--ps-bg);display:grid;place-items:center;font:700 26px var(--ps-font)}
+.big2{font:700 40px var(--ps-font)}.stats{display:flex;justify-content:center;gap:28px;margin:22px 0;color:var(--ps-label2);font:var(--ps-t-caption)}.stats b{display:block;color:var(--ps-label);font:600 20px var(--ps-font)}
+.list{margin:16px 20px;background:var(--ps-surface-solid);border-radius:var(--ps-r-md);font:var(--ps-t-callout)}.list div{padding:13px 16px;border-bottom:.5px solid var(--ps-sep);display:flex;justify-content:space-between}.list div:last-child{border:0}.list span{color:var(--ps-label2)}
+.pill b.r{color:var(--ps-destructive)}.badge{position:relative}.badge em{position:absolute;top:-4px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--ps-destructive);color:#fff;font:700 11px/18px var(--ps-font);font-style:normal;text-align:center}
+.card{top:116px}
+/* desktop */
+.desk{width:1280px;height:800px;position:relative;border-radius:12px;overflow:hidden;font-family:var(--ps-font);background:linear-gradient(#fff,#fff);}
+.gp{position:absolute;inset:0;display:grid;grid-template-columns:repeat(8,1fr);gap:4px;padding:70px 20px;filter:blur(2px)}.gp i{aspect-ratio:1;border-radius:4px}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(8px)}
+.panel{position:absolute;left:50%;top:40px;transform:translateX(-50%);width:560px;height:720px;background:var(--ps-bg);color:var(--ps-label);border-radius:28px;box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden}
+.panel .top{padding:18px 20px}.panel .card{top:86px;height:500px}.panel .actions{bottom:28px}
+.kbd{font:var(--ps-t-caption);color:var(--ps-label2);position:absolute;bottom:8px;width:100%;text-align:center}
+.sheet{position:absolute;right:36px;top:40px;width:340px;background:var(--ps-surface);backdrop-filter:blur(30px);border-radius:20px;color:var(--ps-label);box-shadow:0 30px 80px rgba(0,0,0,.4);padding:8px 0}
+.sheet h3{font:var(--ps-t-title);padding:12px 20px}.sheet .list{margin:8px 12px}
+</style></head><body>
+<div class="light" style="background:#e6e8ee;padding:20px;display:inline-block"><div class="row"><div><div class="cap">1 · Swipe</div><div class="phone"><div class="top"><div class="icon">⚙︎</div><div class="pill"><b>38</b> reviewed · <b class="r">12</b> marked</div><div class="icon badge">🗑<em>12</em></div></div>
+<div class="card back img2"></div><div class="card front img1"><div class="stamp">DELETE</div><div class="meta"><b>Oct 10, 2026</b>IMG_1566.HEIC · 2.5 MB</div></div>
+<div class="toast">Marked for deletion<a>Undo</a></div>
+<div class="actions"><div class="btn sm">↺</div><div class="btn big x">✕</div><div class="btn big ok">♥</div><div class="btn sm">⤢</div></div></div></div><div><div class="cap">2 · Review</div><div class="phone"><div class="top"><div class="icon">‹</div><div class="pill">12 marked</div><div class="icon">⋯</div></div>
+<h1>12 to delete</h1><div class="sub">Frees about 48 MB · tap a photo to keep it</div>
+<div class="grid"><div class="t g1"></div><div class="t g2"></div><div class="t g3"></div><div class="t g4"></div><div class="t g5 res"></div><div class="t g6"></div><div class="t g1"></div><div class="t g2"></div><div class="t g3"></div><div class="t g4"></div><div class="t g5"></div><div class="t g6"></div></div>
+<div class="hint">Opens from 🗑 or automatically every 25 marked · 1 kept · Items go to Google Photos Trash and can be restored for 60 days.</div>
+<div class="dock"><a class="primary">Move 11 to Trash</a><a class="secondary">Keep swiping</a></div></div></div><div><div class="cap">3 · Done</div><div class="phone"><div class="top"><div class="icon">✕</div><div></div><div class="icon">⚙︎</div></div>
+<div class="hero"><div class="ring"><span>✓</span></div><div class="big2">44 MB freed</div><div class="sub">11 items moved to Google Photos Trash</div>
+<div class="stats"><div><b>38</b>reviewed</div><div><b>27</b>kept</div><div><b>11</b>trashed</div></div><div class="hint" style="text-align:center">Up next: 1,204 unreviewed, continuing from Oct 3, 2026</div></div>
+<div class="dock"><a class="primary blue">Keep swiping</a><a class="secondary">Open Trash in Google Photos</a></div></div></div></div></div><br><br><div class="dark" style="background:#0d0d0f;padding:20px;display:inline-block"><div class="row"><div><div class="cap">1 · Swipe</div><div class="phone"><div class="top"><div class="icon">⚙︎</div><div class="pill"><b>38</b> reviewed · <b class="r">12</b> marked</div><div class="icon badge">🗑<em>12</em></div></div>
+<div class="card back img2"></div><div class="card front img1"><div class="stamp">DELETE</div><div class="meta"><b>Oct 10, 2026</b>IMG_1566.HEIC · 2.5 MB</div></div>
+<div class="toast">Marked for deletion<a>Undo</a></div>
+<div class="actions"><div class="btn sm">↺</div><div class="btn big x">✕</div><div class="btn big ok">♥</div><div class="btn sm">⤢</div></div></div></div><div><div class="cap">2 · Review</div><div class="phone"><div class="top"><div class="icon">‹</div><div class="pill">12 marked</div><div class="icon">⋯</div></div>
+<h1>12 to delete</h1><div class="sub">Frees about 48 MB · tap a photo to keep it</div>
+<div class="grid"><div class="t g1"></div><div class="t g2"></div><div class="t g3"></div><div class="t g4"></div><div class="t g5 res"></div><div class="t g6"></div><div class="t g1"></div><div class="t g2"></div><div class="t g3"></div><div class="t g4"></div><div class="t g5"></div><div class="t g6"></div></div>
+<div class="hint">Opens from 🗑 or automatically every 25 marked · 1 kept · Items go to Google Photos Trash and can be restored for 60 days.</div>
+<div class="dock"><a class="primary">Move 11 to Trash</a><a class="secondary">Keep swiping</a></div></div></div><div><div class="cap">3 · Done</div><div class="phone"><div class="top"><div class="icon">✕</div><div></div><div class="icon">⚙︎</div></div>
+<div class="hero"><div class="ring"><span>✓</span></div><div class="big2">44 MB freed</div><div class="sub">11 items moved to Google Photos Trash</div>
+<div class="stats"><div><b>38</b>reviewed</div><div><b>27</b>kept</div><div><b>11</b>trashed</div></div><div class="hint" style="text-align:center">Up next: 1,204 unreviewed, continuing from Oct 3, 2026</div></div>
+<div class="dock"><a class="primary blue">Keep swiping</a><a class="secondary">Open Trash in Google Photos</a></div></div></div></div></div></body></html>
