@@ -69,12 +69,12 @@ dialog.photo-viewer{width:calc(100vw - 40px);max-width:1600px;height:calc(100dvh
   .mobile-actions{order:-3;margin-bottom:16px}
   .mobile-actions button{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #dce3d9;color:#69776d}
   .mobile-actions button.active{background:#edf3ed;border-color:#79967b;color:#436a50;font-weight:600}
-  #review-view,#queue-view{order:-2}
-  #busy-status{order:-1}
   .review-toolbar{flex-wrap:wrap;gap:10px;margin:0 0 16px}
   .sort{margin-left:auto}
-  .card-area{height:min(385px,50dvh)}
+  .card-area{height:min(385px,50dvh,calc(100dvh - 300px))}
   .decision-actions{margin-top:18px}
   .progress-line{margin-top:14px;margin-bottom:20px}
-  .keyboard-hint,.viewer-help{display:none}
+  .keyboard-hint{display:none}
 }
+
+@media(min-width:761px){main{display:flex;flex-direction:column}.stats{order:-3}.storage-detail{order:-2}.collection-actions{order:-1}}
