@@ -502,11 +502,11 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  await mounted.click('send');
  assert.equal((await mounted.read()).items[0].queueSent,true);
  assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
- const content=mounted.nodes.get('overlay').childNodes[0],footer=content.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
+ const content=mounted.nodes.get('overlay').childNodes[0],toolbar=content.childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash'))),footer=toolbar.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
  assert.equal(footer.childNodes[0].textContent,'Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
- const toolbar=content.childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash')));
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('status'))<content.childNodes.indexOf(toolbar));
- assert.ok(content.childNodes.indexOf(footer)<content.childNodes.indexOf(toolbar));
+ assert.ok(toolbar.childNodes.includes(footer));
+ assert.equal(footer.class,'album-explanation');
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('trash-candidates'))<content.childNodes.indexOf(toolbar));
  assert.ok(toolbar.childNodes.some(node=>node.childNodes.includes(mounted.nodes.get('trash-opt-in'))));
  assert.equal(mounted.nodes.get('move-trash').hidden,true);
@@ -533,6 +533,9 @@ test('phone controls keep zoom together, order in a grid and Trash below the lib
  assert.match(css,/\.album-controls\{position:fixed;bottom:0/);
  assert.match(css,/\.trash-toggle\{min-height:44px/);
  assert.match(css,/\.trash-toggle\{[^}]*white-space:normal/);
+ assert.match(css,/\.album-controls button\{[^}]*min-width:0;white-space:normal;overflow-wrap:anywhere/);
+ assert.match(css,/\.album-controls a,\.album-explanation\{grid-column:1 \/ -1;min-width:0/);
+ assert.ok(footer.childNodes.some(node=>node.class==='album-explanation'));
 });
 test('album control resizing reserves its height in the scrolling overlay',async()=>{
  let callback,footer;
@@ -587,10 +590,11 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height] of [[400,713],[400,633],[320,633]]){
+  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true]]){
    const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
+   root.getElementById('move-trash').hidden=!expanded;root.getElementById('album').hidden=!expanded;
    const footer=root.querySelector('.album-controls'),overlay=root.querySelector('.overlay'),label=root.querySelector('.trash-toggle');
    const bounds=element=>element.getBoundingClientRect();
    const controls=['load','refresh','filter','sort'].map(id=>root.getElementById(id)).filter(Boolean);
@@ -600,8 +604,14 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
    const zoomFits=bounds(slider).right<=bounds(zoom).right+1&&bounds(slider).top>=bounds(zoom).top&&bounds(slider).bottom<=bounds(zoom).bottom;
    const toggleVisible=bounds(label).top>=bounds(overlay).top&&bounds(label).bottom<=bounds(overlay).bottom;
+   const explanation=root.querySelector('.album-explanation'),check=root.getElementById('trash');
+   const inside=(element,container)=>bounds(element).left>=bounds(container).left&&bounds(element).right<=bounds(container).right+1&&bounds(element).top>=bounds(container).top&&bounds(element).bottom<=bounds(container).bottom;
+   const textInside=element=>{range.selectNodeContents(element);return Array.from(range.getClientRects()).every(rect=>rect.left>=bounds(element).left&&rect.right<=bounds(element).right+1);};
+   const explanationVisible=inside(explanation,footer)&&inside(explanation,overlay)&&textInside(explanation);
+   const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
+   const checkFits=inside(check,footer)&&textInside(check);
    const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   results.push({width,height,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -613,6 +623,7 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   for(const measurement of measurements){
    assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
    assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
+   for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
