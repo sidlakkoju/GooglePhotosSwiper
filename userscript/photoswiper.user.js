@@ -580,7 +580,7 @@ function mountPhotosSwipe(environment) {
  }
  async function assertAccount(){if(!identity)throw Error('Close and reopen Photos Swipe after signing into Google Photos.');const result=await call('identity');if(result.account!==identity.account)throw Error('Google account changed. Close and reopen Photos Swipe.');}
  async function save(next){await assertAccount();state=await db.save(identity.account,markSyncChanges(state,next));await synchronize();return state;}
- function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=busy||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=(busy&&!(cardAnimation&&['keep','remove','undo'].includes(button.id)))||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
  async function withAccountLease(task) {
   const account=identity.account;let acquired=false,timer;
   leaseError=null;
@@ -672,14 +672,31 @@ function mountPhotosSwipe(environment) {
   try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);settingsPanel.open=!syncEnabled&&!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;if(syncEnabled)await withAccountLease(synchronize);message(idleMessage());}
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
- function close(){preloader.clear();$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
- function decide(decision){
-  if(busy)return;
+ function close(){preloader.clear();finishCardAnimation();$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
+ let reviewActions=Promise.resolve(),reviewInputsPending=0,cardAnimation=null;
+ function finishCardAnimation(){if(cardAnimation){cardAnimation.finish();cardAnimation.cancel();cardAnimation=null;}}
+ async function animateCard(decision,restoring=false){
+  finishCardAnimation();
+  if(!$('card').animate||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  const side=decision==='keep'?1:-1,center={transform:'translateX(0) rotate(0deg)',opacity:1},edge={transform:`translateX(${side*120}vw) rotate(${side*18}deg)`,opacity:0};
+  const animation=$('card').animate(restoring?[edge,center]:[center,edge],{duration:250,easing:'ease-out',fill:'forwards'});cardAnimation=animation;controls();
+  if(reviewInputsPending>1)finishCardAnimation();
+  try{await animation.finished;}catch{}finally{animation.cancel();if(cardAnimation===animation)cardAnimation=null;}
+ }
+ function enqueueReviewInput(action){
+  if(!identity||$('overlay').hidden||(busy&&!reviewInputsPending))return;
+  const queued=reviewInputsPending>0;reviewInputsPending++;finishCardAnimation();
+  reviewActions=(queued?reviewActions.then(action):Promise.resolve(action())).catch(error=>message(error.message)).finally(()=>{reviewInputsPending--;});
+  return reviewActions;
+ }
+ function decide(decision){return enqueueReviewInput(()=>applyDecision(decision));}
+ function undo(){return enqueueReviewInput(applyUndo);}
+ async function applyDecision(decision){
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
-  run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});
+  await run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);const flight=animateCard(decision);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});await flight;inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});finishCardAnimation();
  }
- function undo(){if(busy)return;run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});const restored=state.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;message(`Decision undone for ${restored.name}.`);});}
+ async function applyUndo(){await run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});const restored=state.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;render();await animateCard(last.decision,true);message(`Decision undone for ${restored.name}.`);});}
  async function load(refresh=false) {
   const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.limited?' \u00b7 Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);

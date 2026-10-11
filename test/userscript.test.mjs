@@ -929,3 +929,57 @@ test('resize and enlarge preserve the displayed media while a decision awaits sy
   assert.notEqual(media.childNodes[0],node);assert.match(media.childNodes[0].src,/next=w900-h500/);
  }
 });
+
+function controlledCardAnimations(mounted){
+ const animations=[];
+ mounted.nodes.get('card').animate=(frames,options)=>{
+  let resolve;
+  const animation={frames,options,finished:new Promise(done=>{resolve=done;}),finish(){this.finishedInstantly=true;resolve();},cancel(){this.cancelled=true;resolve();}};
+  animations.push(animation);return animation;
+ };
+ return animations;
+}
+async function waitForReview(predicate){
+ for(let count=0;count<200;count++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,1));}
+ assert.fail('Synthetic review did not settle');
+}
+function pressReviewKey(mounted,key){mounted.environment.window.listeners.keydown({key,preventDefault(){},stopImmediatePropagation(){}});}
+
+for(const [key,button,decision,side] of [['ArrowLeft','remove','remove',-1],['ArrowRight','keep','keep',1]]){
+ test(`mounted ${key} and ${button} share the fly-off and Undo returns from that side`,async()=>{
+  const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
+  pressReviewKey(mounted,key);
+  await waitForReview(()=>animations.length===1);
+  assert.equal(animations[0].options.duration,250);
+  assert.match(animations[0].frames[1].transform,new RegExp(`translateX\\(${side*120}vw\\)`));
+  animations[0].finish();
+  await waitForReview(async()=>!mounted.nodes.get('overlay')['aria-busy'].includes('true'));
+  mounted.nodes.get(button).onclick();
+  await waitForReview(()=>animations.length===2);
+  assert.deepEqual(animations[1].frames,animations[0].frames);
+  mounted.nodes.get('undo').onclick();
+  assert.equal(animations[1].cancelled,true);
+  await waitForReview(()=>animations.length===3);
+  assert.deepEqual(structuredClone(animations[2].frames),structuredClone([animations[1].frames[1],animations[1].frames[0]]));
+  assert.equal(animations[2].options.duration,250);
+  assert.equal((await mounted.read()).items[1].decision,null);
+  animations[2].finish();
+  await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+  assert.equal((await mounted.read()).items[0].decision,decision);
+ });
+}
+
+test('mounted ten rapid arrow inputs finish the old flight and persist ten ordered decisions',async()=>{
+ const mounted=await mountedReview(Array.from({length:11},(_,index)=>item(String(index)))),animations=controlledCardAnimations(mounted);
+ pressReviewKey(mounted,'ArrowLeft');
+ await waitForReview(()=>animations.length===1);
+ for(let index=1;index<10;index++)pressReviewKey(mounted,index%2?'ArrowRight':'ArrowLeft');
+ assert.equal(animations[0].cancelled,true);
+ await waitForReview(()=>animations.length===10);
+ animations[9].finish();
+ await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ const state=await mounted.read();
+ assert.equal(state.history.length,10);
+ assert.deepEqual(state.items.slice(0,10).map(row=>row.decision),Array.from({length:10},(_,index)=>index%2?'keep':'remove'));
+ assert.equal(state.items[10].decision,null);
+});
