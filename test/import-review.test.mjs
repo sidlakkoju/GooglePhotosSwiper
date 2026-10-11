@@ -14,8 +14,13 @@ test('generated copies and pending crop originals never count as new review work
  const {result}=await run({items:[],cursor:'start'},[{items:[{id:'clip',generated:true},{id:'protected',cropPending:true}],cursor:'next',count:2},{items:[{id:'clip',generated:true},{id:'protected',cropPending:true},{id:'new',decision:null}],cursor:null,exhausted:true,count:1}]);assert.equal(result.added,1);assert.equal(result.exhausted,true);assert.match(importMessage(result),/1 new item to review.*End of library/);
 });
 test('repeated cursors and cycles stop safely instead of reporting empty success indefinitely',async()=>{
- let f=await run({items:reviewed,cursor:'start'},[{items:reviewed,cursor:'start'}]);assert.equal(f.calls,1);assert.equal(f.result.stalled,true);assert.match(importMessage(f.result),/0 new items.*Google repeated/);
+ let f=await run({items:reviewed,cursor:'start'},[{items:reviewed,cursor:'start'}]);assert.equal(f.calls,1);assert.equal(f.result.stalled,true);assert.equal(importMessage(f.result),'No new photos or videos were loaded. Reload your Google Photos tab.');
  f=await run({items:reviewed,cursor:'start'},[{items:reviewed,cursor:'second'},{items:reviewed,cursor:'start'}]);assert.equal(f.calls,2);assert.equal(f.result.stalled,true);
+});
+test('an empty repeated page in a fresh workspace gives one user-facing action',async()=>{
+ const {result,calls}=await run({items:[],cursor:null},[{items:[],cursor:null,count:0}]);
+ assert.equal(calls,1);assert.equal(result.stalled,true);assert.equal(result.scanned,0);assert.equal(result.added,0);
+ assert.equal(importMessage(result),'No new photos or videos were loaded. Reload your Google Photos tab.');
 });
 test('bounded scans preserve continuation and latest refresh intentionally reads only the head',async()=>{
  let f=await run({items:reviewed,cursor:'start'},[{items:reviewed,cursor:'second'},{items:reviewed,cursor:'third'}],{maxPages:2});assert.equal(f.result.limited,true);assert.match(importMessage(f.result),/Scan limit reached/);assert.equal(f.result.workspace.cursor,'third');
