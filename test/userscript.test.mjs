@@ -71,6 +71,18 @@ test('video and Trash reads use page-session RPCs and refuse direct deletion com
  const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
  const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
 });
+test('media URL refresh selects the preview tuple while video keeps the playback URL',async()=>{
+ const preview='https://photos.fife.usercontent.google.com/preview',playback='https://lh3.googleusercontent.com/playback';
+ const f=fixture(()=>[['photo',[preview,800,600]],playback]);
+ assert.deepEqual(await call(f,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ assert.deepEqual(await call(f,'video',{mediaKey:'photo'}),{url:playback});
+ assert.deepEqual(f.calls[0].args,['photo',null,null,null,null]);
+ const download=fixture(()=>[['photo',[preview,800,600]],'https://video-downloads.google.com/download']);
+ assert.deepEqual(await call(download,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ for(const data of [[['other',[preview,800,600]],playback],[['photo'],playback],[['photo',['https://invalid.test/preview',800,600]],playback]]){
+  assert.equal((await fixture(()=>data).api('mediaURL',{mediaKey:'photo'})).ok,false);
+ }
+});
 test('page merges preserve decisions, sent markers and older progress through latest refresh',()=>{
  let state={...emptyReview(),items:[item('old',{decision:'remove',queueSent:true})]};
  state=mergeReviewPage(state,{items:[item('old'),item('new')],nextPageId:'older'},null);
@@ -1151,7 +1163,7 @@ test('stale saved previews refresh only the current and preload window on open a
  const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
  const mounted=await mountedReview(items,async(url,options)=>{
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
-  return {ok:true,text:async()=>envelope('VrseUb',[[key],`https://lh3.googleusercontent.com/fresh-${key}`])};
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
  });
  await settlePreviews();
  assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
@@ -1174,12 +1186,12 @@ test('photo and video errors refresh once then replace failed media with an expl
   const calls=[];
   const mounted=await mountedReview([item('expired',{type})],async(url,options)=>{
    const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];calls.push(entry[0]);
-   return {ok:true,text:async()=>envelope('VrseUb',[['expired'],`https://lh3.googleusercontent.com/fresh-${calls.length}`])};
+   return {ok:true,text:async()=>envelope('VrseUb',[['expired',[`https://photos.fife.usercontent.google.com/fresh-preview-${calls.length}`,800,600]],`https://lh3.googleusercontent.com/fresh-playback-${calls.length}`])};
   });
   await settlePreviews();calls.length=0;
   const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
   await first.onerror();await settlePreviews();
-  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,/fresh-/);
+  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-playback-/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
   assert.equal(calls.length,type==='video'?2:1);
   await retried.onerror();assert.equal(container.querySelector(tag),null);
   const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
@@ -1191,7 +1203,7 @@ test('photo and video errors refresh once then replace failed media with an expl
 
 test('late expired preview responses cannot replace a newly selected card',async()=>{
  const response=Promise.withResolvers();
- const mounted=await mountedReview([item('old'),item('next')],async()=>{await response.promise;return {ok:true,text:async()=>envelope('VrseUb',[['old'],'https://lh3.googleusercontent.com/fresh-old'])};});
+ const mounted=await mountedReview([item('old'),item('next')],async()=>{await response.promise;return {ok:true,text:async()=>envelope('VrseUb',[['old',['https://photos.fife.usercontent.google.com/fresh-old',800,600]],'https://video-downloads.google.com/download'])};});
  const failed=mounted.nodes.get('media').querySelector('img').onerror();
  await mounted.click('keep');const next=mounted.nodes.get('media').querySelector('img');
  response.resolve();await failed;await settlePreviews();
