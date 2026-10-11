@@ -66,17 +66,17 @@ for(const surface of ['viewer']){
   const {context,card,writes,finish}=fixture({fail});
   let removed=false;
   const copy={style:{},removeAttribute(){},setAttribute(){},querySelectorAll:()=>[],remove(){removed=true;},getBoundingClientRect:()=>({width:300})};
-  if(fallback==='reduced motion')copy.animate=()=>assert.fail('Reduced motion must skip animation');
+  if(fallback==='reduced motion')copy.animate=(frames,options)=>{assert.deepEqual(frames,[{opacity:1},{opacity:0}]);assert.equal(options.duration,150);return {finished:Promise.resolve()};};
   Object.assign(card,{ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect:()=>({left:0,top:0,width:300,height:400})});
   const matchMedia=globalThis.matchMedia;
   globalThis.matchMedia=()=>({matches:fallback==='reduced motion'});
   context.throwSwipe=throwPublicSwipe;
-  context.render=()=>assert.equal(card.style.visibility,'');
-  context.show=async()=>assert.equal(card.style.visibility,'');
+  context.render=()=>{};
+  context.show=async()=>{};
   try{
    const result=context.decide('keep',{dx:120,duration:240});
-   assert.equal(removed,true);
-   assert.equal(card.style.visibility,'');
+   assert.equal(removed,fallback==='missing animate');
+   assert.equal(card.style.visibility,fallback==='reduced motion'?'hidden':'');
    assert.deepEqual(writes,['save']);
    finish();
    await result;

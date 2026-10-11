@@ -35,7 +35,7 @@ test('throw duration scales with speed and stays within 180–300ms',()=>{
 });
 test('fly-off clears the viewport in either direction and snap-back overshoots for 320ms',()=>{
  let frames,options;
- const element={style:{transform:'translateX(40px)'},getBoundingClientRect:()=>({width:300}),animate:(f,o)=>{frames=f;options=o;}};
+ const element={style:{transform:'translateX(40px)',width:'300px'},getBoundingClientRect:()=>({width:300}),animate:(f,o)=>{frames=f;options=o;}};
  animateSwipe(element,40,true,240);
  assert.equal(frames[0].transform,'translateX(40px)');
  assert.match(frames[1].transform,/translateX\(1300px\)/);
@@ -88,4 +88,18 @@ test('web card stack leaves backs, card shadows and keyboard focus outlines uncl
   assert.doesNotMatch(rule,/(?:^|;)overflow(?:-x|-y)?:[^;]*(?:hidden|clip|auto|scroll)/);
   assert.doesNotMatch(rule,/(?:^|;)(?:clip|clip-path):(?!(?:auto|none)(?:;|$))/);
  }
+});
+
+test('cached outgoing geometry avoids release layout reads and computed style walks',async()=>{
+ const {throwSwipe}=await import('../public/swipe.js');
+ let frames,options;
+ let mediaClass;
+ const media={getAttribute:()=> 'media',classList:{add:value=>{mediaClass=value;}},removeAttribute(){}};
+ const copy={style:{},removeAttribute(){},setAttribute(){},querySelectorAll:()=>[media],remove(){},animate(values,timing){frames=values;options=timing;return {finished:Promise.resolve()};}};
+ const original={style:{transform:'translateX(120px)'},ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect:()=>assert.fail('Release must use cached geometry')};
+ const animation=throwSwipe(original,120,240,{left:10,top:20,width:300,height:400});
+ assert.equal(frames[0].transform,'translateX(120px)');assert.equal(options.duration,240);assert.equal(copy.style.willChange,'');
+ assert.equal(mediaClass,'swipe-media');
+ assert.ok(frames.every(frame=>Object.keys(frame).every(key=>['transform','opacity'].includes(key))));
+ await animation.finished;
 });

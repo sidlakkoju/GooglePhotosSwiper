@@ -138,3 +138,29 @@ for(const direction of [-1,1])test(`a pause before a short fling uses only recen
  s.send('pointerup',direction*50,0,1,1040);
  assert.deepEqual(s.decisions,[direction>0?'keep':'remove']);
 });
+
+test('pointermove batches all style writes and reads width only at pointerdown',()=>{
+ const s=setup();let reads=0,writes=0;
+ s.card.getBoundingClientRect=()=>{reads++;return {width:300};};
+ for(const element of [s.card,s.under,s.keep,s.remove])element.style=new Proxy(element.style,{set(target,key,value){writes++;target[key]=value;return true;}});
+ s.send('pointerdown',0);
+ assert.equal(reads,1);
+ const initialWrites=writes;
+ for(let x=20;x<=120;x+=20)s.send('pointermove',x);
+ assert.equal(writes,initialWrites);assert.equal(reads,1);assert.equal(s.frames.size,1);
+ s.paint();assert.match(s.card.style.transform,/120px/);assert.equal(s.card.style.willChange,'transform');
+ s.send('pointerup',120);assert.equal(reads,1);assert.equal(s.card.style.willChange,'');assert.equal(s.frames.size,0);
+});
+
+test('reduced motion fades an outgoing copy for 150ms while the next card resets immediately',async()=>{
+ const s=setup(true);let complete,outgoing,frames,options,removed=false;
+ s.card.parentNode={append(node){outgoing=node;}};
+ s.card.cloneNode=()=>({style:{...s.card.style},setAttribute(){},removeAttribute(){},animate(values,timing){frames=values;options=timing;return {finished:new Promise(resolve=>{complete=resolve;})};},remove(){removed=true;}});
+ s.send('pointerdown',0);s.send('pointermove',120);s.paint();
+ assert.equal(s.card.style.transform,'');assert.equal(s.under.style.transform,'');assert.equal(s.card.style.willChange,'');
+ s.send('pointerup',120);
+ assert.deepEqual(s.decisions,['keep']);assert.deepEqual(frames,[{opacity:1},{opacity:0}]);assert.equal(options.duration,150);
+ assert.equal(outgoing.style.transform,'');assert.equal(outgoing.style.willChange,'');
+ s.feedback.reset();assert.equal(s.card.style.visibility,'');assert.equal(removed,false);
+ complete();await new Promise(resolve=>setImmediate(resolve));assert.equal(removed,true);
+});
