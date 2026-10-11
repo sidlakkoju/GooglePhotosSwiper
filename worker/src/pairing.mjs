@@ -63,11 +63,9 @@ export async function pairingRequest(request,env,device,readBody,respond) {
   ]);
   if(results[0].results.length)return respond({deviceId:id,token});
   if(isShort){
-   const failures=await db.batch([
-    db.prepare('INSERT INTO pair_attempts (ip_hash,window_start,count) VALUES (?,?,1) ON CONFLICT(ip_hash,window_start) DO UPDATE SET count = count + 1 WHERE count < 100 RETURNING count').bind(globalKey,window),
-    db.prepare('UPDATE pairing_codes SET failed_attempts = failed_attempts + 1, used_at = CASE WHEN failed_attempts >= 4 THEN ? ELSE used_at END WHERE used_at IS NULL AND expires_at > ?').bind(now,now)
-   ]);
-   if(!failures[0].results.length)return limited();
+   const failures=await db.prepare('INSERT INTO pair_attempts (ip_hash,window_start,count) VALUES (?,?,1) ON CONFLICT(ip_hash,window_start) DO UPDATE SET count = count + 1 WHERE count < 100 RETURNING count').bind(globalKey,window).all();
+   if(!failures.results.length)return limited();
+   await db.prepare('UPDATE pairing_codes SET failed_attempts = failed_attempts + 1, used_at = CASE WHEN failed_attempts >= 4 THEN ? ELSE used_at END WHERE used_at IS NULL AND expires_at > ?').bind(now,now).run();
    return respond({error:'invalid'},400);
   }
   const existing=await db.prepare('SELECT id FROM pairing_codes WHERE code_hash = ?').bind(inputHash).first();
@@ -103,12 +101,13 @@ export async function pairingRequest(request,env,device,readBody,respond) {
  const match=route.match(/^\/api\/devices\/([^/]+)$/);
  if(match&&['PATCH','DELETE'].includes(method)){
   const id=decodeURIComponent(match[1]);
+  let result;
   if(method==='PATCH'){
    const value=await readBody(request);
    if(Object.keys(value).length!==1||!label(value.name))throw Error('Invalid device name');
-   await db.prepare('UPDATE devices SET name = ? WHERE id = ?').bind(value.name.trim(),id).run();
-  }else await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(now,id).run();
-  return respond({ok:true});
+   result=await db.prepare('UPDATE devices SET name = ? WHERE id = ? RETURNING id').bind(value.name.trim(),id).first();
+  }else result=await db.prepare('UPDATE devices SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ? RETURNING id').bind(now,id).first();
+  return result?respond({ok:true}):respond({error:'Not found'},404);
  }
  return null;
 }

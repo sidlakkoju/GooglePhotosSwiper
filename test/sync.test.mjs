@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage} from '../lib/userscript-core.mjs';
+import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
 import {createSyncClient,markSyncChanges,validateSyncSettings} from '../lib/userscript-sync.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -232,4 +233,36 @@ test('revoking an issuer prevents outstanding pairing claims',async()=>{
  const pending=await start(e);
  await call(e,'devices/legacy','DELETE',undefined,withToken(device.token));
  assert.equal((await claim(e,{code:pending.code})).status,400);
+});
+
+test('concurrent short failures at the global cap burn live codes only once',async()=>{
+ const e=env(),pairing=await start(e),window=Math.floor(Date.now()/3600000)*3600;
+ e.DB.sqlite.prepare('INSERT INTO pair_attempts VALUES (?,?,99)').run(new Uint8Array(await hash('global-short-failures')),window);
+ const wrong=pairing.short==='000000'?'000001':'000000';
+ const responses=await Promise.all(Array.from({length:8},(_,index)=>claim(e,{short:wrong},`198.51.100.${index+1}`)));
+ assert.equal(responses.filter(response=>response.status===400).length,1);
+ assert.equal(responses.filter(response=>response.status===429).length,7);
+ for(const response of responses.filter(response=>response.status===429))assert.ok(Number(response.headers.get('Retry-After'))>0);
+ const stored=e.DB.sqlite.prepare('SELECT failed_attempts,used_at FROM pairing_codes WHERE id = ?').get(pairing.id);
+ assert.equal(stored.failed_attempts,1);
+ assert.equal(stored.used_at,null);
+ assert.equal(e.DB.sqlite.prepare('SELECT count FROM pair_attempts WHERE ip_hash = ? AND window_start = ?').get(new Uint8Array(await hash('global-short-failures')),window).count,100);
+ assert.equal((await claim(e,{code:pairing.code},'203.0.113.1')).status,200);
+});
+test('device mutations report unknown IDs and revocation remains idempotent',async()=>{
+ const e=env(),device=await (await claim(e,{code:(await start(e)).code})).json();
+ for(const method of ['PATCH','DELETE']){
+  const response=await call(e,'devices/missing',method,method==='PATCH'?{name:'Renamed'}:undefined);
+  assert.equal(response.status,404);
+  assert.deepEqual(await response.json(),{error:'Not found'});
+ }
+ assert.equal((await call(e,`devices/${device.deviceId}`,'PATCH',{name:'QA phone'})).status,200);
+ assert.equal((await call(e,`devices/${device.deviceId}`,'DELETE')).status,200);
+ const revoked=e.DB.sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(device.deviceId).revoked_at;
+ const original=Date.now;
+ try{
+  Date.now=()=>original()+61000;
+  assert.equal((await call(e,`devices/${device.deviceId}`,'DELETE')).status,200);
+  assert.equal(e.DB.sqlite.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(device.deviceId).revoked_at,revoked);
+ }finally{Date.now=original;}
 });
