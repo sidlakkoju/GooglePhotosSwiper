@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Pinned Ed25519 release-signing PUBLIC key (not a secret)"
+regexes = ['''wPP8HXN0V1jAGqFb\+M5kQycKc9/sUrOm6YTKPJM\+SLw=''']

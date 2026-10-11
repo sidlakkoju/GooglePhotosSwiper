@@ -256,7 +256,7 @@ function bundleEnvironment(fault={}) {
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
+ const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
  const events=new EventTarget();
  const window={dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;events.addEventListener(name,handler);}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,AbortSignal,setInterval,clearInterval};
@@ -518,6 +518,14 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  assert.ok(toolbar.childNodes.some(node=>node.childNodes.includes(mounted.nodes.get('trash-opt-in'))));
  assert.equal(mounted.nodes.get('move-trash').hidden,true);
  assert.ok(!requests.includes('XwAOJf'));
+});
+test('card stack clips outgoing cards without a later overflow override',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const css=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent||node.childNodes.map(child=>child.textContent).join('')).join('');
+ const cardRules=[...css.matchAll(/\.card\{([^}]*)\}/g)].map(match=>match[1]);
+ assert.ok(cardRules.length>0);
+ assert.match(cardRules.at(-1),/overflow:hidden/);
+ assert.ok(mounted.nodes.get('card').childNodes.some(node=>node.class==='top-card'));
 });
 test('phone controls keep zoom together, order in a grid and Trash below the library controls',async()=>{
  const mounted=await mountedReview([item('a')]);
@@ -1265,7 +1273,7 @@ function isolatedPageBridge(mounted,timers={setTimeout,clearTimeout},fetchOverri
  const context={window:pageWindow,location:page,crypto:webcrypto,AbortController,...timers,TextEncoder,Uint8Array,URL,URLSearchParams,fetch:fetchOverride||pageWindow.fetch};
  const document=mounted.environment.document,append=document.documentElement.append,createElement=document.createElement;
  document.querySelector=()=>null;document.createElement=tag=>{const element=createElement(tag);element.remove=()=>{};return element;};
- document.documentElement={append(element){if(element.tagName==='SCRIPT')vm.runInNewContext(element.textContent,context);else append(element);}};
+ document.documentElement={dataset:{},append(element){if(element.tagName==='SCRIPT')vm.runInNewContext(element.textContent,context);else append(element);}};
  return {pageWindow,contentWindow,messages};
 }
 

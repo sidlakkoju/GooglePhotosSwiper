@@ -56,3 +56,15 @@ test('Worker serves the pairing hand-off publicly with strict security headers',
  const head=await worker.fetch(new Request(url,{method:'HEAD'}));assert.equal(head.body,null);assert.deepEqual([...head.headers],[...response.headers]);
  assert.equal((await worker.fetch(new Request(url,{method:'POST'}))).status,405);
 });
+
+test('Worker serves separate loader and uncached release routes',async()=>{
+ for(const [path,type] of [['photoswiper-loader.user.js','text/javascript; charset=utf-8'],['photoswiper-release.json','application/json; charset=utf-8']]){
+  const url=new URL('/'+path+'?t=123',installURL);
+  const response=await worker.fetch(new Request(url));
+  assert.equal(response.status,200);assert.equal(response.headers.get('Content-Type'),type);
+  if(path.endsWith('.json')){assert.equal(response.headers.get('Cache-Control'),'no-store');assert.deepEqual(Object.keys(await response.json()),['version','code','signature']);}
+  else assert.equal(await response.text(),await readFile(new URL('../userscript/'+path,import.meta.url),'utf8'));
+  const head=await worker.fetch(new Request(url,{method:'HEAD'}));assert.equal(head.body,null);assert.deepEqual([...head.headers],[...response.headers]);
+  assert.equal((await worker.fetch(new Request(url,{method:'POST'}))).status,405);
+ }
+});
