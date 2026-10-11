@@ -4,6 +4,12 @@ A local desktop app for reviewing Google Photos one photo or video at a time. Sw
 
 **Swiping and creating an album never delete photos.** The core app has no Trash or permanent-deletion command.
 
+## Standalone userscript (desktop and iOS Safari)
+
+[Install Photos Swipe](https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photoswiper.user.js) in Tampermonkey, Violentmonkey, or quoid's iOS **Userscripts** Safari extension. Open Google Photos in the browser, then tap the **Photos Swipe** launcher. This version runs inside your signed-in Photos page, with account-scoped decisions and progress saved in IndexedDB; no server or pairing is needed.
+
+See [userscript installation and usage](docs/userscript.md). The review card sits above the stats on mobile, with touch swipes and desktop keyboard controls. Album writes are verified. Move to Trash is opt-in and requires confirmation of the exact count; undo history survives reloads. State is separate from the desktop app and does not sync across devices. Physical iPhone/Safari validation remains outstanding.
+
 ## Quick start
 
 Requirements: Node.js **22.13 or newer**, Chrome, and a Google Photos account. There are no npm dependencies to install and no hosted backend.
@@ -59,6 +65,7 @@ To delete, open the review album in Google Photos, select the items, then choose
 | `public/` | Review UI, media viewer, preview cache, import controller, browser guide |
 | `server.mjs` | Loopback-only server, local authentication, application/bridge endpoints |
 | `lib/store.mjs` | SQLite persistence, revisions, account binding, album jobs, reconciliation |
+| `userscript/` | Built standalone userscript for Google Photos in desktop browsers and iOS Safari |
 | `extension/` | Chrome Manifest V3 bridge and Google Photos web API adapter |
 | `test/` | Core regression tests and synthetic browser fixtures |
 | `docs/` | Setup, architecture, development, privacy, status and future plans |
