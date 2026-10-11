@@ -519,7 +519,7 @@ function mountPhotosSwipe(environment) {
  let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null;
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const syncClient=createSyncClient({fetch:environment.fetch,status:value=>{$('sync-status').textContent=value;}});
- const synchronize=async()=>{state=await syncClient.sync(identity.account,state,next=>db.save(identity.account,next));};
+ const synchronize=async()=>{state=await syncClient.sync(identity.account,state,async next=>{if(leaseError)throw leaseError;await db.lease(identity.account,owner);return db.save(identity.account,next);});};
  const message=value=>{$('status').textContent=value;};
  async function call(operation,args={}) {
   if(leaseError)throw leaseError;
@@ -533,20 +533,29 @@ function mountPhotosSwipe(environment) {
  async function assertAccount(){if(!identity)throw Error('Close and reopen Photos Swipe after signing into Google Photos.');const result=await call('identity');if(result.account!==identity.account)throw Error('Google account changed. Close and reopen Photos Swipe.');}
  async function save(next){await assertAccount();state=await db.save(identity.account,markSyncChanges(state,next));await synchronize();return state;}
  function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id))button.disabled=busy||!identity;$('overlay').setAttribute('aria-busy',String(busy));}
+ async function withAccountLease(task) {
+  const account=identity.account;let acquired=false,timer;
+  leaseError=null;
+  try {
+   await db.lease(account,owner);acquired=true;lockedAccount=account;
+   timer=setInterval(()=>{db.lease(account,owner).catch(error=>{leaseError=error;});},20000);
+   state=await db.read(account);
+   await task();
+  }finally{
+   clearInterval(timer);
+   if(acquired)try{await db.lease(account,owner,true);}catch{}
+   lockedAccount=null;
+  }
+ }
  async function run(task) {
   if(busy)return;
-  busy=true;leaseError=null;controls();let acquired=false,timer;
+  busy=true;leaseError=null;controls();
   try {
    db=await database();
    await assertAccount();
-   await db.lease(identity.account,owner);acquired=true;lockedAccount=identity.account;
-   timer=setInterval(()=>{db.lease(identity.account,owner).catch(error=>{leaseError=error;});},20000);
-   state=await db.read(identity.account);
-   await task();
+   await withAccountLease(task);
   }catch(error){message(error.message);}finally{
-   clearInterval(timer);
-   if(acquired)try{await db.lease(identity.account,owner,true);}catch{}
-   lockedAccount=null;busy=false;render();controls();
+   busy=false;render();controls();
   }
  }
  const bytes=value=>value>=1e9?`${(value/1e9).toFixed(1)} GB`:value>=1e6?`${(value/1e6).toFixed(1)} MB`:`${Math.round(value/1e3)} KB`;
@@ -598,7 +607,7 @@ function mountPhotosSwipe(environment) {
   if(busy)return;
   $('overlay').hidden=false;$('launcher').hidden=true;$('close').focus();message('Reading local progress\u2026');
   busy=true;controls();
-  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncClient.configure(settings);await synchronize();message(state.job?'A saved album operation is ready to retry.':'Ready. Decisions are saved locally on this browser.');}
+  try{const result=await rawCall('identity');if(!result.ok)throw Error(result.error);if(identity?.account!==result.data.account){inspected=null;focused=null;stopMedia();}identity=result.data;$('account').textContent=identity.label;db=await database();state=await db.read(identity.account);const settings=await db.settings();$('sync-url').value=settings.url||'';$('sync-token').value=settings.token||'';syncClient.configure(settings);if(settings.url&&settings.token)await withAccountLease(synchronize);message(state.job?'A saved album operation is ready to retry.':'Ready. Decisions are saved locally on this browser.');}
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
  function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}

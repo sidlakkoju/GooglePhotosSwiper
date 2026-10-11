@@ -523,7 +523,7 @@ test('phone controls keep zoom together, order in a grid and Trash below the lib
  const library=content.childNodes.find(node=>node.class==='toolbar library-controls');
  assert.ok(library.childNodes.includes(mounted.nodes.get('filter')));
  assert.ok(library.childNodes.includes(mounted.nodes.get('sort')));
- const footer=content.childNodes.at(-1);
+ const footer=content.childNodes.find(node=>node.class==='toolbar album-controls');
  assert.equal(footer.class,'toolbar album-controls');
  assert.ok(footer.childNodes.includes(mounted.nodes.get('move-trash')));
  assert.ok(footer.childNodes.some(node=>node.class==='trash-toggle'));
@@ -616,4 +616,45 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
    assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+test('opening with sync respects an in-flight Trash lease and holds the lease until sync saves',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ let finishTrash,trashStarted;
+ const started=new Promise(resolve=>{trashStarted=resolve;});
+ const pendingTrash=new Promise(resolve=>{finishTrash=resolve;});
+ const first=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],{confirm:()=>true,fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='XwAOJf'){trashStarted();await pendingTrash;}
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['a',null,null,'stable']],null])};
+ }});
+ const db=await openReviewDatabase(first.environment.window.indexedDB);
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;second.environment.AbortSignal=AbortSignal;
+ let syncCalls=0,finishSync,syncStarted;
+ const syncing=new Promise(resolve=>{syncStarted=resolve;});
+ const pendingSync=new Promise(resolve=>{finishSync=resolve;});
+ second.environment.window.fetch=async url=>{
+  assert.equal(new URL(url).origin,'https://sync.example');syncCalls++;syncStarted();await pendingSync;
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ first.nodes.get('trash-opt-in').checked=true;first.nodes.get('trash-opt-in').onchange();
+ const moving=first.click('move-trash');await started;
+ const before=await first.read();
+ await second.nodes.get('launcher').onclick();
+ assert.match(second.nodes.get('status').textContent,/busy in another tab/);
+ assert.equal(syncCalls,0);assert.deepEqual(await first.read(),before);
+ finishTrash();await moving;
+ const completed=await first.read();
+ assert.equal(completed.items[0].state,'in_trash');
+ assert.equal(first.nodes.get('status').textContent,'Verified 1 items in Trash.');
+ const opening=second.nodes.get('launcher').onclick();await syncing;
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);
+ assert.deepEqual(await first.read(),completed);
+ finishSync();await opening;
+ assert.equal((await first.read()).revision,completed.revision+1);
+ assert.equal((await first.read()).items[0].state,'in_trash');
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
