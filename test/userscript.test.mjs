@@ -1,0 +1,192 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {webcrypto} from 'node:crypto';
+import vm from 'node:vm';
+import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
+import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
+const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
+const page={origin:'https://photos.google.com',pathname:'/u/2/'};
+const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
+const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
+function fixture(responder){
+ const calls=[],window={WIZ_global_data:{...tokens}};
+ const api=createPhotosAPI({window,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,fetch:async(url,options)=>{
+  const body=new URLSearchParams(options.body),entry=JSON.parse(body.get('f.req'))[0][0],id=entry[0],args=JSON.parse(entry[1]);calls.push({url,options,id,args});
+  const result=await responder(id,args,window);
+  return result?.raw!==undefined?{ok:result.ok!==false,status:result.status||200,text:async()=>result.raw}:{ok:true,text:async()=>envelope(id,result)};
+ }});
+ return {calls,window,api};
+}
+async function call(f,operation,args){const result=await f.api(operation,args);if(!result.ok)throw Error(result.error);return result.data;}
+test('userscript request builder scopes the session path, tokens, credentials and RPC payload',()=>{
+ const request=buildPhotosRequest(tokens,page,'lcxiM',['next',null,50,null,1,1]);
+ const url=new URL(request.url),body=new URLSearchParams(request.options.body);
+ assert.equal(url.origin,page.origin);assert.equal(url.pathname,'/_/PhotosUi/u/2/data/batchexecute');assert.equal(url.searchParams.get('source-path'),'/u/2/');assert.equal(url.searchParams.get('f.sid'),'fake-session');
+ assert.equal(request.options.credentials,'include');assert.equal(request.options.method,'POST');assert.equal(body.get('at'),'fake-token');
+ assert.deepEqual(JSON.parse(body.get('f.req')),[[['lcxiM',JSON.stringify(['next',null,50,null,1,1]),null,'generic']]]);
+ for(const path of ['https://invalid.test/','//invalid.test/','/u/2/../../'])assert.throws(()=>buildPhotosRequest({...tokens,eptZe:path},page,'rpc',[]));
+ assert.throws(()=>buildPhotosRequest(tokens,{...page,origin:'https://invalid.test'},'rpc',[]));
+});
+test('userscript response parser handles XSSI and length framing and rejects mismatched or malformed envelopes',()=>{
+ assert.deepEqual(parsePhotosResponse(envelope('rpc',[['fake']]),'rpc'),[['fake']]);
+ for(const raw of ['garbage',envelope('wrong',[]),JSON.stringify([['wrb.fr','rpc',null]]),JSON.stringify([['wrb.fr','rpc','{']])])assert.throws(()=>parsePhotosResponse(raw,'rpc'));
+});
+test('fake library and bulk metadata responses produce photos/videos and preserve next-page tokens',async()=>{
+ const row=['video',['https://lh3.googleusercontent.com/fake',800,600],1720000000000,'stable',0,{76647426:[25000]}];
+ const detail=['video',[]];detail[1][3]='fake.mp4';detail[1][9]=500;detail[1][35]=[1,300];
+ const f=fixture(id=>id==='lcxiM'?[[row],'next']:id==='EWgK9e'?[[null,[detail]]]:null);
+ const result=await call(f,'library',{cursor:'previous'});
+ assert.equal(result.items[0].type,'video');assert.equal(result.items[0].spaceTaken,300);assert.equal(result.items[0].size,500);assert.equal(result.items[0].name,'fake.mp4');assert.equal(result.nextPageId,'next');
+ assert.deepEqual(f.calls[0].args,['previous',null,50,null,1,1]);assert.equal(f.calls[1].args[0][1][0].length,36);
+});
+test('metadata failures retain review items with unknown sizes; invalid preview hosts fail',async()=>{
+ const row=['photo',['https://lh3.googleusercontent.com/fake'],1720000000000,'stable',0,{}];
+ const f=fixture(id=>id==='lcxiM'?[[row],null]:null);const result=await call(f,'library');assert.equal(result.items.length,1);assert.match(result.metadataWarning,/sizes/);
+ row[1][0]='https://invalid.test/fake';assert.equal((await f.api('library')).ok,false);
+});
+test('wrong account, changed session, failed HTTP and malformed responses never acknowledge success',async()=>{
+ const f=fixture(()=>[]);assert.equal((await f.api('library',{account:'different'})).ok,false);assert.equal(f.calls.length,0);
+ const changed=fixture((id,args,window)=>{window.WIZ_global_data.SNlM0e='changed';return [];});assert.equal((await changed.api('trashPage')).ok,false);
+ const failed=fixture(()=>({raw:'',ok:false,status:403}));assert.match((await failed.api('trashPage')).error,/403/);
+ const malformed=fixture(()=>({raw:'garbage'}));assert.equal((await malformed.api('addToAlbum',{albumKey:'album',mediaKeys:['photo']})).ok,false);
+});
+test('album discovery/create/add/membership use the extension request formats with paginated fakes',async()=>{
+ const f=fixture((id,args)=>id==='Z5xsfc'?(args[0]?[[['album',{72930366:[null,'Photos Swipe · Review · fake']}]],null]:[[],'next']):id==='OXvT9d'?[['album']]:id==='E1Cajb'?[]:id==='snAcKc'?[null,[['photo',null,null,'stable']],null,['album']]:null);
+ assert.equal((await call(f,'findAlbum',{title:'Photos Swipe · Review · fake'})).albumKey,'album');
+ assert.equal((await call(f,'createAlbum',{title:'Photos Swipe · Review · fake'})).albumKey,'album');
+ assert.equal((await call(f,'addToAlbum',{albumKey:'album',mediaKeys:['photo']})).requested,1);
+ assert.deepEqual(await call(f,'albumMembers',{albumKey:'album'}),{keys:['photo'],dedupKeys:['stable']});
+ assert.deepEqual(f.calls.find(c=>c.id==='E1Cajb').args,[['photo'],'album']);
+ assert.equal((await f.api('addToAlbum',{albumKey:'album',mediaKeys:Array(26).fill('photo')})).ok,false);
+ const wrong=fixture(()=>[null,[],null,['other']]);assert.equal((await wrong.api('albumMembers',{albumKey:'album'})).ok,false);
+});
+test('video and Trash reads use page-session RPCs and refuse direct deletion commands',async()=>{
+ const f=fixture(id=>id==='VrseUb'?[['video'],'https://lh3.googleusercontent.com/video']:id==='zy0IHe'?[[['photo',null,null,'stable']],null]:null);
+ assert.equal((await call(f,'video',{mediaKey:'video'})).url,'https://lh3.googleusercontent.com/video');
+ assert.deepEqual((await call(f,'trashPage')).items,[{mediaKey:'photo',dedupKey:'stable'}]);
+ const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
+ const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
+});
+test('page merges preserve decisions, sent markers and older progress through latest refresh',()=>{
+ let state={...emptyReview(),items:[item('old',{decision:'remove',queueSent:true})]};
+ state=mergeReviewPage(state,{items:[item('old'),item('new')],nextPageId:'older'},null);
+ state=mergeReviewPage(state,{items:[item('head')],nextPageId:'head-cursor'},null,true);
+ assert.equal(state.cursor,'older');assert.equal(state.items[0].decision,'remove');assert.equal(state.items[0].queueSent,true);assert.equal(reviewDeck(state).length,2);
+ assert.throws(()=>mergeReviewPage(state,{items:[],nextPageId:'older'},'older'));
+ assert.throws(()=>mergeReviewPage(state,{items:[],nextPageId:'later'},'stale'));
+ const exhausted=mergeReviewPage(state,{items:[],nextPageId:null},'older');assert.equal(exhausted.exhausted,true);assert.equal(mergeReviewPage(exhausted,{items:[],nextPageId:'new'},null,true).exhausted,true);
+});
+test('decisions, undo, queue membership, saved job protection and quota accounting are pure',()=>{
+ let state={...emptyReview(),items:[item('a',{size:900,spaceTaken:100}),item('b',{size:400,takesUpSpace:false}),item('c')]};
+ for(const key of ['a','b','c'])state=decideReview(state,key,'remove',null);
+ assert.deepEqual(reviewStorage(reviewQueue(state)),{bytes:100,unknown:1});assert.equal(reviewDeck(state).length,0);
+ state=decideReview(state,'a',null,'remove');assert.equal(reviewDeck(state).length,1);
+ assert.throws(()=>decideReview(state,'a','keep','remove'));
+ assert.throws(()=>decideReview({...state,job:{mediaKeys:['a']}},'a','keep',null));
+ assert.equal(reviewQueue({...state,items:state.items.map(i=>({...i,queueSent:true}))}).length,0);
+});
+function albumWorkspace(items){let state={...emptyReview(),items};return {read:async()=>state,save:async next=>{state=structuredClone(next);return state;},state:()=>state};}
+test('partial album writes retain the whole queue and persisted checkpoint, then retry only missing items',async()=>{
+ const workspace=albumWorkspace([item('a',{decision:'remove'}),item('b',{decision:'remove'})]),members=new Set(),writes=[];let partial=true;
+ const call=async(operation,args)=>{
+  if(operation==='findAlbum')return {albumKey:null};if(operation==='createAlbum')return {albumKey:'album'};
+  if(operation==='albumMembers')return {keys:[...members],dedupKeys:[]};
+  if(operation==='addToAlbum'){writes.push(args.mediaKeys);for(const key of partial?args.mediaKeys.slice(0,1):args.mediaKeys)members.add(key);}
+ };
+ await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review · fake'}),/not confirmed/);
+ assert.equal(reviewQueue(workspace.state()).length,2);assert.equal(workspace.state().job.albumKey,'album');partial=false;
+ await sendReviewAlbum({...workspace,call,title:'ignored'});
+ assert.deepEqual(writes,[['a','b'],['b']]);assert.equal(workspace.state().job,null);assert.equal(reviewQueue(workspace.state()).length,0);assert.equal(workspace.state().items[0].decision,'remove');
+});
+test('failed album write responses still verify membership, stable IDs count, and batches are bounded to 25',async()=>{
+ const workspace=albumWorkspace(Array.from({length:27},(_,i)=>item(`k${i}`,{decision:'remove',dedupKey:`d${i}`}))),stable=new Set(),batches=[];
+ const call=async(operation,args)=>{
+  if(operation==='findAlbum')return {albumKey:'album'};
+  if(operation==='albumMembers')return {keys:[],dedupKeys:[...stable]};
+  if(operation==='addToAlbum'){batches.push(args.mediaKeys.length);for(const key of args.mediaKeys)stable.add(`d${key.slice(1)}`);throw Error('Fake lost response');}
+ };
+ await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review · fake'});assert.deepEqual(batches,[25,2]);assert.equal(reviewQueue(workspace.state()).length,0);
+ assert.throws(()=>finishReviewAlbum({...emptyReview(),items:[item('a')],job:{mediaKeys:['a'],albumKey:'album'}},{keys:[],dedupKeys:[]}));
+});
+test('Trash pagination and unknown reconciliation preserve local state and do not infer deletion from absence',async()=>{
+ const state={...emptyReview(),items:[item('a',{decision:'remove',dedupKey:'stable'}),item('b',{decision:'remove',state:'in_trash'}),item('c',{decision:'remove'})]};
+ const calls=[],call=async(operation,args)=>{calls.push(operation);return operation==='itemState'?{state:'unknown'}:args.cursor?{items:[{mediaKey:'alternate',dedupKey:'stable'}],nextPageId:null}:{items:[],nextPageId:'next'};};
+ const result=await reconcileReviewTrash(state,call);assert.deepEqual(result.items.map(i=>i.state),['in_trash','in_trash','active']);assert.deepEqual(calls,['trashPage','trashPage','itemState']);assert.equal(state.items[0].state,'active');
+ await assert.rejects(readReviewTrash(async()=>({items:[],nextPageId:'loop'})),/repeated/);
+ await assert.rejects(reconcileReviewTrash({...state,job:{}},call),/Finish/);
+});
+test('built userscript metadata, page isolation, no privileged APIs and reproducible artifact',async()=>{
+ const source=await readFile(new URL('../userscript/photos-swipe.user.js',import.meta.url),'utf8');
+ const url='https://raw.githubusercontent.com/sidlakkoju/GooglePhotosSwiper/main/userscript/photos-swipe.user.js';
+ for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant none','@inject-into page',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
+ assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/\bGM[_\.]|chrome\.|localhost|photos-swipe-request/);
+ assert.match(source,/attachShadow\(\{mode:'open'\}\)/);assert.ok(source.indexOf('id="card"')<source.indexOf('id="stats"'));
+ const body=source.slice(source.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);assert.doesNotMatch(body,/^\s*\/\/|\/\*/m);
+ new vm.Script(source);
+ vm.runInNewContext(source,{window:{top:{} ,fetch(){},crypto:{},setTimeout(){},clearTimeout(){}},document:{},location:{origin:'https://photos.google.com'}});
+ const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+});
+test('unavailable saved albums can be replaced without resetting sent decisions',async()=>{
+ const workspace=albumWorkspace([item('a',{decision:'remove'}),item('sent',{decision:'remove',queueSent:true})]);
+ await workspace.save({...workspace.state(),albumKey:'old-album'});const writes=[];
+ const call=async(operation,args)=>{
+  if(operation==='albumMembers'){if(args.albumKey==='old-album')throw Error('Fake unavailable album');return {keys:writes.flat(),dedupKeys:[]};}
+  if(operation==='findAlbum')return {albumKey:null};if(operation==='createAlbum')return {albumKey:'replacement'};
+  if(operation==='addToAlbum')writes.push(args.mediaKeys);
+ };
+ await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review · fake'});
+ assert.deepEqual(writes,[['a']]);assert.equal(workspace.state().albumKey,'replacement');assert.equal(workspace.state().items[1].queueSent,true);
+});
+test('an existing but unreadable album is retained for retry instead of creating a duplicate',async()=>{
+ const workspace=albumWorkspace([item('a',{decision:'remove'})]);await workspace.save({...workspace.state(),albumKey:'album'});const calls=[];
+ const call=async operation=>{calls.push(operation);if(operation==='albumMembers')throw Error('Fake read failure');if(operation==='findAlbum')return {albumKey:'album'};};
+ await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review · fake'}),/read failure/);
+ assert.equal(workspace.state().job.albumKey,'album');assert.equal(reviewQueue(workspace.state()).length,1);assert.ok(!calls.includes('createAlbum'));
+});
+test('fake library scanning passes reviewed overlaps and retains a bounded continuation',async()=>{
+ const {loadReviewPages}=await import('../lib/userscript-core.mjs');
+ const reviewed=Array.from({length:50},(_,i)=>item(`r${i}`,{decision:'keep'}));const workspace=albumWorkspace(reviewed),cursors=[];
+ const call=async(operation,args)=>{cursors.push(args.cursor);return cursors.length<3?{items:reviewed,nextPageId:`page${cursors.length}`}:{items:Array.from({length:50},(_,i)=>item(`n${i}`)),nextPageId:'older'};};
+ const result=await loadReviewPages({...workspace,call});assert.equal(result.added,50);assert.equal(result.scanned,150);assert.deepEqual(cursors,[null,'page1','page2']);
+ let limitPage=0;const limited=await loadReviewPages({...workspace,call:async()=>({items:reviewed,nextPageId:`limit${++limitPage}`}),maxPages:2});assert.equal(limited.limited,true);assert.equal(limited.added,0);
+});
+test('repeated library cursors do not commit their page, and refresh reads only one page',async()=>{
+ const {loadReviewPages}=await import('../lib/userscript-core.mjs');const workspace=albumWorkspace([]);let count=0;
+ await assert.rejects(loadReviewPages({...workspace,call:async()=>{count++;return {items:[item(`x${count}`)],nextPageId:'loop'};}}),/repeated/);
+ assert.equal(workspace.state().items.length,1);assert.equal(workspace.state().cursor,'loop');
+ count=0;await loadReviewPages({...workspace,refresh:true,call:async()=>{count++;return {items:[item('latest')],nextPageId:'head'};}});
+ assert.equal(count,1);assert.equal(workspace.state().cursor,'loop');
+});
+function fakeIndexedDB() {
+ const stores=new Map();let initialized=false;
+ const database={
+  createObjectStore:name=>stores.set(name,new Map()),close(){},
+  transaction(name){
+   const staged=new Map(stores.get(name));let aborted=false;
+   const tx={objectStore:()=>({
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    put:(value,key)=>staged.set(key,structuredClone(value))
+   }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
+   return tx;
+  }
+ };
+ return {open(){const request={result:database};queueMicrotask(()=>{if(!initialized){initialized=true;request.onupgradeneeded();}request.onsuccess();});return request;}};
+}
+test('fake IndexedDB persists account-isolated progress and rejects stale revisions and foreign leases',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),indexedDB=fakeIndexedDB();
+ const first=await openReviewDatabase(indexedDB),initial=await first.read('account-a');
+ const saved=await first.save('account-a',{...initial,cursor:'older',items:[item('a',{decision:'keep'})]});assert.equal(saved.revision,1);
+ const reopened=await openReviewDatabase(indexedDB);assert.deepEqual(await reopened.read('account-a'),saved);assert.deepEqual(await reopened.read('account-b'),emptyReview());
+ await assert.rejects(first.save('account-a',initial),/another tab/);assert.deepEqual(await first.read('account-a'),saved);
+ await first.lease('account-a','owner-a');await assert.rejects(reopened.lease('account-a','owner-b'),/busy/);
+ await reopened.lease('account-b','owner-b');await first.lease('account-a','owner-a',true);await reopened.lease('account-a','owner-b');
+});
+test('item revisions prevent stale undo after another tab changes or sends the same decision',()=>{
+ let state={...emptyReview(),items:[item('a')]};
+ state=decideReview(state,'a','remove',null,0);state=decideReview(state,'a','keep','remove',1);state=decideReview(state,'a','remove','keep',2);
+ assert.throws(()=>decideReview(state,'a',null,'remove',1),/changed/);
+ const completed=finishReviewAlbum({...state,job:{albumKey:'album',mediaKeys:['a']}},{keys:['a'],dedupKeys:[]});
+ assert.throws(()=>decideReview(completed,'a',null,'remove',3),/changed/);assert.equal(completed.items[0].queueSent,true);
+});
