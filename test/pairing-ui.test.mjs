@@ -31,3 +31,47 @@ test('custom Worker hand-off and manual codes claim and save the issuing origin'
   assert.equal(calls[0].url,'https://issuer.example/api/pair/claim');assert.equal(saved.url,'https://issuer.example');assert.equal(saved.token,'claimed-token');assert.equal(JSON.parse(calls[0].options.body)[manual?'short':'code'],manual?'123456':'abcdefghijklmnopqrstuv');
  }
 });
+
+test('poll failures retain the code, retry polling and burn it at expiry',async()=>{
+ const elements=dom(),timers=[],calls=[];let time=10000,fail=true;
+ const f=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'token'}),fetch:async(url,options)=>{calls.push(options.method);if(url.includes('status')&&fail)throw Error('Offline');return {ok:true,json:async()=>url.includes('status')?{claimed:false}:{id:'id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:20000}};},now:()=>time,setTimeout:callback=>{timers.push(callback);return callback;},clearTimeout:callback=>{const index=timers.indexOf(callback);if(index>=0)timers.splice(index,1);},renderQR:document=>document.createElement('canvas')});
+ await f.open();time=12500;await timers.shift()();assert.equal(f.modal.children[2].textContent,'123 456');assert.equal(f.modal.children[1].children.length,1);assert.equal(timers.length,1);fail=false;time=15000;await timers.shift()();assert.equal(calls.filter(method=>method==='GET').length,2);fail=true;time=20000;await timers.shift()();assert.equal(calls.at(-1),'DELETE');assert.equal(f.modal.children[0].textContent,'Code expired');assert.equal(timers.length,0);
+});
+
+test('expiry burns a code even while its status request is pending',async()=>{
+ const elements=dom(),timers=[],calls=[];let time=10000,resolve;
+ const f=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'token'}),fetch:async(url,options)=>{calls.push(options.method);if(url.includes('status'))return new Promise(done=>resolve=done);return {ok:true,json:async()=>({id:'id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:15000})};},now:()=>time,setTimeout:callback=>{timers.push(callback);return callback;},clearTimeout:callback=>{const index=timers.indexOf(callback);if(index>=0)timers.splice(index,1);},renderQR:document=>document.createElement('canvas')});
+ await f.open();time=12500;const pending=timers.shift()();time=15000;await timers.shift()();assert.equal(calls.at(-1),'DELETE');resolve({ok:true,json:async()=>({claimed:false})});await pending;assert.equal(timers.length,0);assert.equal(f.modal.children[0].textContent,'Code expired');
+});
+
+test('failed cleanup after cancellation exposes a retryable Cancel',async()=>{
+ const elements=dom();let resolve,fail=true,deletes=0;
+ const f=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'token'}),fetch:async(url,options)=>{if(options.method==='POST')return new Promise(done=>resolve=done);deletes++;if(fail)throw Error('Offline');return {ok:true,json:async()=>({ok:true})};},setTimeout,clearTimeout});
+ const pending=f.open();await new Promise(done=>setImmediate(done));await f.close();resolve({ok:true,json:async()=>({id:'late-code'})});await pending;assert.equal(f.modal.hidden,false);assert.match(f.modal.children[0].textContent,/Could not cancel/);fail=false;await f.modal.children[4].onclick();assert.equal(deletes,2);assert.equal(f.modal.hidden,true);
+});
+
+const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+test('pairing dialog traps Tab in both directions and blocks background activation',()=>{
+ let listener,focused,closed=0;
+ const buttons=Array.from({length:3},()=>({getClientRects:()=>[{}],focus(){focused=this;root.activeElement=this;}}));
+ const dialog={hidden:false,contains:element=>buttons.includes(element),querySelectorAll:()=>buttons,querySelector:()=>buttons[0]};
+ const root={activeElement:{}};
+ vm.runInNewContext(ui.slice(ui.indexOf(" window.addEventListener('keydown',event=>{"),ui.lastIndexOf('\n}')),{window:{addEventListener:(type,handler)=>listener=handler},root,activePairingDialog:()=>dialog,pairingModal:{modal:dialog,close:()=>closed++},handleViewerSpace:()=>false});
+ const press=(key,shiftKey=false)=>{const event={key,shiftKey,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;}};listener(event);assert.equal(event.prevented,true);assert.equal(event.stopped,true);};
+ press('Tab');assert.equal(focused,buttons[0]);press('Tab',true);assert.equal(focused,buttons[2]);press('Tab');assert.equal(focused,buttons[0]);root.activeElement={};press('Enter');assert.equal(focused,buttons[0]);press('Escape');assert.equal(closed,1);
+});
+
+test('repeated receiver activation reuses one panel and focuses it',()=>{
+ let panels=0,focuses=0;
+ const panel={hidden:false,querySelector:()=>({focus:()=>focuses++})};
+ const context={receivePairingLink:()=>{panels++;return panel;},document:{},root:{},location:{},window:{},environment:{},database:async()=>{},open(){},$:()=>({value:''})};
+ vm.createContext(context);vm.runInContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(' const pairThis='))+'\nglobalThis.receive=receivePairing;',context);
+ context.receive(true);context.receive(true);assert.equal(panels,1);assert.equal(focuses,1);panel.hidden=true;context.receive(true);assert.equal(panels,1);assert.equal(panel.hidden,false);
+});
+
+test('busy viewer controls leave pairing Cancel enabled',()=>{
+ const cancel={id:'',disabled:false},keep={id:'keep',disabled:false},receiverCancel={id:'',disabled:false};
+ const context={root:{querySelectorAll:()=>[cancel,keep,receiverCancel]},pairingModal:{modal:{contains:button=>button===cancel}},receivingPanel:{contains:button=>button===receiverCancel},busy:true,identity:null,$:()=>({setAttribute(){}})};
+ vm.runInNewContext(ui.slice(ui.indexOf(' function controls()'),ui.indexOf('\n',ui.indexOf(' function controls()')))+'\ncontrols();',context);
+ assert.equal(cancel.disabled,false);assert.equal(receiverCancel.disabled,false);assert.equal(keep.disabled,true);
+});
