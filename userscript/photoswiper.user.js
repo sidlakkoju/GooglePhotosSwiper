@@ -353,10 +353,12 @@ function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}
  const channel=crypto.randomUUID();
  const pending=new Map();
  window.addEventListener('message',event=>{
-  if(event.source!==window||event.data?.channel!==channel||event.data?.kind!=='photos-result')return;
+  if(event.source!==window||event.data?.channel!==channel||!['photos-result','photos-accepted'].includes(event.data?.kind))return;
   const entry=pending.get(event.data.id);
   if(!entry)return;
-  pending.delete(event.data.id);clearTimeout(entry.timer);entry.resolve(event.data.result);
+  clearTimeout(entry.timer);
+  if(event.data.kind==='photos-accepted')return;
+  pending.delete(event.data.id);entry.resolve(event.data.result);
  });
  const script=document.createElement('script');
  const nonce=document.querySelector('script[nonce]')?.nonce;
@@ -365,6 +367,7 @@ function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}
   window.addEventListener('message',async event=>{
    if(event.source!==window||event.data?.channel!==channel||event.data?.kind!=='photos-call')return;
    const {id,name,args}=event.data;
+   window.postMessage({channel,kind:'photos-accepted',id},location.origin);
    const result=await operation(name,args);
    window.postMessage({channel,kind:'photos-result',id,result},location.origin);
   });
@@ -709,7 +712,7 @@ function mountPhotosSwipe(environment) {
  }
 
  function toggleEnlarge(){$('card').classList.toggle('expanded');$('enlarge').textContent=$('card').classList.contains('expanded')?'Fit view':'Enlarge';}
- $('sync-save').onclick=()=>run(async()=>{const previous=await (await pairingPromise).settings();const url=$('sync-url').value.trim();const settings={...previous,...validateSyncSettings(url,$('sync-token').value||(url===previous.url?previous.token||'':''))};$('sync-token').value='';await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
+ $('sync-save').onclick=()=>run(async()=>{const previous=await (await pairingPromise).settings();const url=$('sync-url').value.trim();const normalized=url?new URL(url).origin:'';const settings={...previous,...validateSyncSettings(url,$('sync-token').value||(normalized===previous.url?previous.token||'':''))};await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});$('sync-token').value='';syncEnabled=!!(settings.url&&settings.token);syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=!syncEnabled;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});settingsPanel.open=false;message(idleMessage());});
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;render();};
@@ -749,7 +752,7 @@ function mountPhotosSwipe(environment) {
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:window.indexedDB,AbortController:window.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
-if(typeof unsafeWindow==='undefined'&&!window.WIZ_global_data)environment.photosCall=createPagePhotosBridge(environment);
+const environment={window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:window.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

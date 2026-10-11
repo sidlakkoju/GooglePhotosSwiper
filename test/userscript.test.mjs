@@ -911,7 +911,7 @@ test('privileged bundle keeps sync fetch and saved credentials away from the pag
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(calls,1);assert.equal(mounted.nodes.get('sync-token').value,'');assert.match(mounted.nodes.get('sync-status').textContent,/Synced/);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.deepEqual(await (await openReviewDatabase(pageWindow.indexedDB)).settings(),{});
- assert.ok(!JSON.stringify(Object.keys(pageWindow)).includes('synthetic-private-token'));
+ assert.ok(!JSON.stringify(Object.entries(pageWindow).filter(([key])=>key!=='top')).includes('synthetic-private-token'));
 });
 
 test('content-only manager bridges Google operations without passing pairing credentials',async()=>{
@@ -934,4 +934,80 @@ test('content-only manager bridges Google operations without passing pairing cre
  assert.deepEqual(requests,['lcxiM','zy0IHe','OXvT9d']);
  assert.ok(messages.every(message=>!JSON.stringify(message).includes('synthetic-private-token')));
  assert.equal((await call('unsupported')).ok,false);
+});
+
+test('sync saves reuse tokens for equivalent origins and retain typed tokens after storage failure',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment();mounted.environment.AbortSignal=AbortSignal;
+ let pairing={url:'https://sync.example',token:'saved-token',deviceId:'device'},fail=false,requests=0;
+ mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{if(fail)throw Error('Pairing write failed');pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ mounted.environment.fetch=async()=>{requests++;return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
+ vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ const save=async()=>{mounted.nodes.get('sync-save').onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(!mounted.nodes.get('keep').disabled)return;}throw Error('UI stayed busy');};
+ for(const url of ['https://sync.example/','https://sync.example:443','https://SYNC.EXAMPLE']){
+  mounted.nodes.get('sync-url').value=url;await save();assert.equal(pairing.url,'https://sync.example');assert.equal(pairing.token,'saved-token');assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
+ }
+ assert.equal(requests,4);
+ mounted.nodes.get('sync-url').value='https://other.example';await save();assert.equal(pairing.url,'https://sync.example');assert.equal(requests,4);
+ mounted.nodes.get('sync-url').value='https://sync.example/path';await save();assert.equal(requests,4);
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='replacement-token';fail=true;await save();
+ assert.equal(mounted.nodes.get('sync-token').value,'replacement-token');assert.match(mounted.nodes.get('status').textContent,/Pairing write failed/);assert.equal(pairing.token,'saved-token');
+ fail=false;await save();assert.equal(pairing.token,'replacement-token');assert.equal(mounted.nodes.get('sync-token').value,'');
+});
+
+function isolatedPageBridge(mounted,timers={setTimeout,clearTimeout},fetchOverride) {
+ const pageWindow=mounted.environment.window,pageListeners=[],contentListeners=[],messages=[];
+ const contentWindow=new Proxy(pageWindow,{get(target,key){if(key==='top')return contentWindow;if(key==='WIZ_global_data')return undefined;if(key==='addEventListener')return (type,listener)=>{if(type==='message')contentListeners.push(listener);};if(key==='postMessage')return data=>{messages.push(structuredClone(data));queueMicrotask(()=>pageListeners.forEach(listener=>listener({source:pageWindow,data:structuredClone(data)})));};return Reflect.get(target,key);}});
+ pageWindow.addEventListener=(type,listener)=>{if(type==='message')pageListeners.push(listener);};
+ pageWindow.postMessage=data=>{messages.push(structuredClone(data));queueMicrotask(()=>contentListeners.forEach(listener=>listener({source:contentWindow,data:structuredClone(data)})));};
+ const context={window:pageWindow,location:page,crypto:webcrypto,AbortController,...timers,TextEncoder,Uint8Array,URL,URLSearchParams,fetch:fetchOverride||pageWindow.fetch};
+ const document=mounted.environment.document,append=document.documentElement.append,createElement=document.createElement;
+ document.querySelector=()=>null;document.createElement=tag=>{const element=createElement(tag);element.remove=()=>{};return element;};
+ document.documentElement={append(element){if(element.tagName==='SCRIPT')vm.runInNewContext(element.textContent,context);else append(element);}};
+ return {pageWindow,contentWindow,messages};
+}
+
+test('bundle bridges hidden page data with or without unsafeWindow and migrates page storage',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ for(const hasUnsafeWindow of [true,false]){
+  const mounted=bundleEnvironment(),bridge=isolatedPageBridge(mounted);
+  const db=await openReviewDatabase(bridge.pageWindow.indexedDB);
+  await db.saveSettings({url:'https://sync.example',token:'legacy-private-token'});
+  mounted.environment.window={...bridge.contentWindow,indexedDB:fakeIndexedDB()};
+  mounted.environment.window.top=mounted.environment.window;
+  if(hasUnsafeWindow)mounted.environment.unsafeWindow=bridge.contentWindow;
+  else mounted.environment.window=bridge.contentWindow;
+  let pairing;
+  mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+  mounted.environment.AbortSignal=AbortSignal;mounted.environment.fetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
+  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+  assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);assert.equal(pairing.token,'legacy-private-token');assert.deepEqual(await db.settings(),{});
+  assert.ok(bridge.messages.some(message=>message.kind==='photos-call'));
+  assert.ok(bridge.messages.every(message=>!JSON.stringify(message).includes('legacy-private-token')));
+  assert.ok(!Object.values(bridge.pageWindow).includes('legacy-private-token'));
+ }
+});
+
+test('accepted bridge operations outlive the injection deadline while missing injection times out',async()=>{
+ const {createPagePhotosBridge}=await import('../lib/userscript-bridge.mjs');
+ let now=0,nextId=0;const scheduled=new Map();
+ const timers={setTimeout(callback,delay){const id=++nextId;scheduled.set(id,{callback,due:now+delay});return id;},clearTimeout(id){scheduled.delete(id);}};
+ const flush=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmediate(resolve));};
+ const advance=async duration=>{now+=duration;for(const [id,entry] of [...scheduled])if(entry.due<=now){scheduled.delete(id);entry.callback();}await flush();};
+ const mounted=bundleEnvironment(),requests=[];
+ const bridge=isolatedPageBridge(mounted,timers,async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
+  await new Promise(resolve=>timers.setTimeout(resolve,20000));
+  const row=['photo',['https://lh3.googleusercontent.com/fake'],1720000000000,'stable',0,{}];
+  return {ok:true,text:async()=>envelope(id,id==='lcxiM'?[[row],null]:[[null,[]]])};
+ });
+ const call=createPagePhotosBridge({window:bridge.contentWindow,document:mounted.environment.document,crypto:webcrypto,...timers});
+ let settled=false;const result=call('library').then(value=>{settled=true;return value;});await flush();
+ await advance(20000);assert.deepEqual(requests,['lcxiM','EWgK9e']);
+ await advance(15000);assert.equal(settled,false);
+ await advance(5000);assert.equal((await result).ok,true);assert.equal(scheduled.size,0);
+ let receiver,request;const missingWindow={addEventListener(type,listener){receiver=listener;},postMessage(data){request=data;}};
+ const missing=createPagePhotosBridge({window:missingWindow,document:{querySelector(){},createElement:()=>({remove(){}}),documentElement:{append(){}}},crypto:webcrypto,...timers});
+ const unavailable=missing('identity');receiver({source:{},data:{...request,kind:'photos-accepted'}});await advance(35000);assert.match((await unavailable).error,/bridge unavailable/);assert.equal(scheduled.size,0);
 });
