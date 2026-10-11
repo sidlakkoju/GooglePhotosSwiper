@@ -76,3 +76,4 @@ dialog.photo-viewer{width:calc(100vw - 40px);max-width:1600px;height:calc(100dvh
   .progress-line{margin-top:14px;margin-bottom:20px}
   .keyboard-hint{display:none}
 }
+#album-confirmation{overflow-wrap:anywhere}

@@ -8,7 +8,7 @@ const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8'
 const element=()=>({children:[],hidden:false,append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},setAttribute(){}});
 function queueContext(){
  const elements=Object.fromEntries(['queue-list','export','operations','album-link','send-album','album-confirmation','album-dialog','cancel-album','confirm-album'].map(id=>[id,element()]));
- const notices=[],item={id:'photo',name:'Synthetic photo.jpg',type:'photo',url:'/fake.jpg'},context={$:id=>elements[id],document:{createElement:element},IntersectionObserver:class{disconnect(){} observe(){}},queueObserver:null,queueGeneration:0,thumbnailTasks:[],items:[item],decisions:{photo:'remove'},history:[{id:'photo'}],workspace:{albumKey:'fake album',albumTitle:'Photos Swipe · Review · synthe',accountLabel:'Synthetic account',jobs:[]},mode:'google',busy:false,animating:false,bridgeConnected:true,date:()=>'',formatBytes:()=>'',googleLink:()=>'',render(){},dismissToast(){},toast:message=>notices.push(message),updateDecision:async(i,d)=>context.decisions[i.id]=d,albumCandidates:()=>[item],removalQueue:()=>context.decisions.photo==='remove'?[item]:[],loadQueueThumbnail(){}};
+ const notices=[],item={id:'photo',name:'Synthetic photo.jpg',type:'photo',url:'/fake.jpg'},context={$:id=>elements[id],document:{createElement:element},IntersectionObserver:class{disconnect(){} observe(){}},queueObserver:null,queueGeneration:0,thumbnailTasks:[],items:[item],decisions:{photo:'remove'},history:[{id:'photo'}],workspace:{albumKey:'fake album',albumTitle:'Photos Swipe · Review · synthetic-account',accountLabel:'Synthetic account',jobs:[]},mode:'google',busy:false,animating:false,bridgeConnected:true,date:()=>'',formatBytes:()=>'',googleLink:()=>'',render(){},dismissToast(){},toast:message=>notices.push(message),updateDecision:async(i,d)=>context.decisions[i.id]=d,albumCandidates:()=>[item],removalQueue:()=>context.decisions.photo==='remove'?[item]:[],loadQueueThumbnail(){}};
  vm.createContext(context);
  vm.runInContext(app.slice(app.indexOf('function renderQueue('),app.indexOf('function renderReconciliation(')),context);
  return {context,elements,notices,item};
@@ -27,7 +27,7 @@ test('Keep instead errors show failure without a success confirmation',async()=>
 test('send confirmation names the exact album, location and account, and Cancel only closes',()=>{
  const {context,elements}=queueContext();let opened=0,closed=0;elements['album-dialog'].showModal=()=>opened++;elements['album-dialog'].close=()=>closed++;
  vm.runInContext(app.slice(app.indexOf("$('send-album').onclick="),app.indexOf("$('import-next').onclick=")),context);
- elements['send-album'].onclick();assert.equal(opened,1);assert.equal(elements['album-confirmation'].textContent,'Add 1 removal candidate to “Photos Swipe · Review · synthe” in Google Photos → Albums (Synthetic account)?');
+ elements['send-album'].onclick();assert.equal(opened,1);assert.equal(elements['album-confirmation'].textContent,'Add 1 removal candidate to “Photos Swipe · Review · synthetic-account” in Google Photos → Albums (Synthetic account)?');
  elements['cancel-album'].onclick();assert.equal(closed,1);assert.equal(context.decisions.photo,'remove');assert.match(html,/id="cancel-album"[^>]*>Cancel<\/button>/);
 });
 test('guide is visible on first run, dismisses persistently and can be reopened',()=>{
