@@ -541,7 +541,7 @@ test('viewer controls block input during reload and pass the displayed id after 
  const viewerSource=await readFile(new URL('../public/viewer.js',import.meta.url),'utf8');
  const writes=[],shown=[];
  let loading=true;
- const context=vm.createContext({canReview:true,working:false,current:{id:'displayed'},request:0,actions:{},removeButton:{},keepButton:{},undoButton:{},review:{canDecide:()=>!loading,canUndo:()=>!loading,decide:async(decision,id)=>{writes.push([id,decision]);return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async item=>shown.push(item.id)});
+ const context=vm.createContext({canReview:true,working:false,current:{id:'displayed'},request:0,stage:{style:{}},actions:{},removeButton:{},keepButton:{},undoButton:{},review:{canDecide:()=>!loading,canUndo:()=>!loading,decide:async(decision,id)=>{writes.push([id,decision]);return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async item=>shown.push(item.id)});
  for(const name of ['controls','decide'])vm.runInContext(viewerSource.split('\n').find(line=>line.trimStart().startsWith(`function ${name}(`)||line.trimStart().startsWith(`async function ${name}(`)),context);
  context.controls();
  assert.equal(context.keepButton.disabled,true);

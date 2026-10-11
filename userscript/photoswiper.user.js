@@ -123,7 +123,13 @@ function animateSwipe(element,dx,commit,duration=320){
 }
 function throwSwipe(element,dx,duration){
   if(!element.cloneNode||!element.ownerDocument?.body)return;
-  const rect=element.getBoundingClientRect(),copy=element.cloneNode(true);
+  const transform=element.style.transform,transition=element.style.transition;
+  element.style.transition='none';
+  element.style.transform='none';
+  const rect=element.getBoundingClientRect();
+  element.style.transform=transform;
+  element.style.transition=transition;
+  const copy=element.cloneNode(true);
   if(globalThis.getComputedStyle){
     const originals=[element,...element.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
     originals.forEach((original,index)=>{const computed=globalThis.getComputedStyle(original);for(const property of computed)copies[index].style.setProperty(property,computed.getPropertyValue(property));});
@@ -132,7 +138,7 @@ function throwSwipe(element,dx,duration){
   for(const child of copy.querySelectorAll('[id]'))child.removeAttribute('id');
   copy.setAttribute('aria-hidden','true');
   copy.inert=true;
-  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',transform:'none',pointerEvents:'none',zIndex:'2147483647',transition:'none'});
+  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',boxSizing:'border-box',right:'auto',bottom:'auto',transform,pointerEvents:'none',zIndex:'2147483647',transition:'none'});
   (element.parentNode||element.ownerDocument.body).append(copy);
   const animation=animateSwipe(copy,dx,true,duration);
   if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
@@ -667,11 +673,14 @@ function mountPhotosSwipe(environment) {
   catch(error){identity=null;state=emptyReview();stopMedia();message(error.message);}finally{busy=false;render();controls();}
  }
  function close(){$('overlay').hidden=true;$('launcher').hidden=false;stopMedia();$('launcher').focus();}
- function decide(decision){
+ function decide(decision,swipeResult=null){
   if(busy)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
-  run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});
+  const card=$('card'),visibility=card.style.visibility;
+  if(swipeResult){throwSwipe(card,swipeResult.dx,swipeResult.duration);card.style.visibility='hidden';}
+  const operation=run(async()=>{const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);await save({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]});inspected=null;focused=null;message(decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`);});
+  if(swipeResult)operation.finally(()=>{card.style.visibility=visibility;});
  }
  function undo(){if(busy)return;run(async()=>{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;await save({...next,history});const restored=state.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;message(`Decision undone for ${restored.name}.`);});}
  async function load(refresh=false) {
@@ -693,7 +702,7 @@ function mountPhotosSwipe(environment) {
  for(const target of [$('media'),$('swipe')]){
   target.addEventListener('pointerdown',event=>{if(busy||swipeStart||event.isPrimary===false||event.button!==0||event.target.tagName==='VIDEO'||Number($('zoom').value)>1)return;for(const animation of $('card').getAnimations?.()||[])animation.cancel();swipeStart={id:event.pointerId,x:event.clientX,y:event.clientY,samples:sampleSwipe([],event)};target.setPointerCapture(event.pointerId);});
   target.addEventListener('pointermove',event=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;sampleSwipe(swipeStart.samples,event);const dx=event.clientX-swipeStart.x;$('card').style.transform=`translateX(${dx}px) rotate(${dx/20}deg)`;});
-  const release=(event,cancel=false)=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const result=releaseSwipe(swipeStart.samples,event,swipeStart.x,$('card').offsetWidth||$('card').getBoundingClientRect?.().width||300,cancel),dy=event.clientY-swipeStart.y;swipeStart=null;const commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.5;if(commit)throwSwipe($('card'),result.dx,result.duration);else animateSwipe($('card'),result.dx,false);$('card').style.transform='';if(commit)decide(result.dx>0?'keep':'remove');};
+  const release=(event,cancel=false)=>{if(!swipeStart||event.pointerId!==swipeStart.id)return;const result=releaseSwipe(swipeStart.samples,event,swipeStart.x,$('card').offsetWidth||$('card').getBoundingClientRect?.().width||300,cancel),dy=event.clientY-swipeStart.y;swipeStart=null;const commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.5;if(commit)decide(result.dx>0?'keep':'remove',result);else animateSwipe($('card'),result.dx,false);$('card').style.transform='';};
   target.addEventListener('pointerup',event=>release(event));
   target.addEventListener('pointercancel',event=>release(event,true));
   target.addEventListener('lostpointercapture',event=>release(event,true));

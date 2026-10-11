@@ -28,7 +28,7 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
       else{image.src=url;await image.decode();if(token!==request||!dialog.open)return;ready=true;image.hidden=false;status.hidden=true;fit();}
     }catch(error){if(token===request&&dialog.open)status.textContent=error.message;}
   }
-  async function decide(decision){if(!canReview||working||!current||review.canDecide?.()===false)return;working=true;controls();const token=request;try{const next=await review.decide(decision,current.id);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
+  async function decide(decision,swipeResult=null){if(!canReview||working||!current||review.canDecide?.()===false)return;working=true;controls();const visibility=stage.style.visibility;if(swipeResult){throwSwipe(stage,swipeResult.dx,swipeResult.duration);stage.style.visibility='hidden';}const token=request;try{const next=await review.decide(decision,current.id);if(dialog.open&&token===request)await show(next,{playing:next?.type==='video'});}catch(error){if(dialog.open){status.textContent=error.message;status.hidden=false;}}finally{if(swipeResult)stage.style.visibility=visibility;working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
   async function undo(){if(!canReview||working||!review.canUndo?.())return;working=true;controls();const token=request;try{const next=await review.undo();if(dialog.open&&token===request)await show(next);}finally{working=false;controls();if(dialog.open)dialog.focus({preventScroll:true});}}
   removeButton.onclick=()=>decide('remove');keepButton.onclick=()=>decide('keep');undoButton.onclick=undo;
   zoomIn.onclick=()=>zoom(scale*1.25);zoomOut.onclick=()=>zoom(scale/1.25);fitButton.onclick=fit;
@@ -49,7 +49,7 @@ export function createPhotoViewer(dialog, loadPreview, loadVideo, review = {}) {
     if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,localPoint(e));const next=metrics();if(gesture&&next){if(next.distance&&gesture.distance)zoom(scale*next.distance/gesture.distance,gesture.x,gesture.y);x+=next.x-gesture.x;y+=next.y-gesture.y;paint();}gesture=next;
   }
   function release(e,cancel=false){
-    if(swipe?.id===e.pointerId){const result=releaseSwipe(swipe.samples,e,swipe.x,stage.getBoundingClientRect().width,cancel),dy=e.clientY-swipe.y,commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.4;if(commit)throwSwipe(stage,result.dx,result.duration);else animateSwipe(stage,result.dx,false);stage.style.transform='';clearSwipe();if(commit)decide(result.dx>0?'keep':'remove');return;}
+    if(swipe?.id===e.pointerId){const result=releaseSwipe(swipe.samples,e,swipe.x,stage.getBoundingClientRect().width,cancel),dy=e.clientY-swipe.y,commit=result.commit&&Math.abs(result.dx)>Math.abs(dy)*1.4&&!working&&review.canDecide?.()!==false;if(commit)decide(result.dx>0?'keep':'remove',result);else animateSwipe(stage,result.dx,false);clearSwipe();return;}
     pointers.delete(e.pointerId);gesture=metrics();if(!pointers.size)stage.classList.remove('panning');
   }
   for(const target of [stage,swipeZone]){target.addEventListener('pointerdown',down);target.addEventListener('pointermove',move);target.addEventListener('pointerup',e=>release(e));target.addEventListener('pointercancel',e=>release(e,true));target.addEventListener('lostpointercapture',e=>release(e,true));}

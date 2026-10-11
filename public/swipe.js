@@ -18,7 +18,13 @@ export function animateSwipe(element,dx,commit,duration=320){
 }
 export function throwSwipe(element,dx,duration){
   if(!element.cloneNode||!element.ownerDocument?.body)return;
-  const rect=element.getBoundingClientRect(),copy=element.cloneNode(true);
+  const transform=element.style.transform,transition=element.style.transition;
+  element.style.transition='none';
+  element.style.transform='none';
+  const rect=element.getBoundingClientRect();
+  element.style.transform=transform;
+  element.style.transition=transition;
+  const copy=element.cloneNode(true);
   if(globalThis.getComputedStyle){
     const originals=[element,...element.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
     originals.forEach((original,index)=>{const computed=globalThis.getComputedStyle(original);for(const property of computed)copies[index].style.setProperty(property,computed.getPropertyValue(property));});
@@ -27,7 +33,7 @@ export function throwSwipe(element,dx,duration){
   for(const child of copy.querySelectorAll('[id]'))child.removeAttribute('id');
   copy.setAttribute('aria-hidden','true');
   copy.inert=true;
-  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',transform:'none',pointerEvents:'none',zIndex:'2147483647',transition:'none'});
+  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',boxSizing:'border-box',right:'auto',bottom:'auto',transform,pointerEvents:'none',zIndex:'2147483647',transition:'none'});
   (element.parentNode||element.ownerDocument.body).append(copy);
   const animation=animateSwipe(copy,dx,true,duration);
   if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
