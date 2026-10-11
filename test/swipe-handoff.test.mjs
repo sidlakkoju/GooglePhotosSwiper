@@ -24,17 +24,37 @@ for(const [surface,throwSwipe] of [['deck',throwPublicSwipe],['userscript',throw
 
 for(const surface of ['userscript','viewer']){
  const source=await readFile(new URL(surface==='userscript'?'../lib/userscript-ui.mjs':'../public/viewer.js',import.meta.url),'utf8');
- function fixture({busy=false,inspection=false,fail=false}={}){
+ function fixture({busy=false,inspection=false,fail=false,delayTask=false}={}){
   const card={hidden:false,style:{visibility:'',transform:'translateX(120px) rotate(6deg)'}},throws=[],writes=[];
-  let finish;
+  let finish,startTask;
   const waiting=new Promise(resolve=>{finish=resolve;});
+  const taskReady=new Promise(resolve=>{startTask=resolve;});
   const save=async()=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');};
-  const context=vm.createContext({identity:{account:'synthetic'},window:{setTimeout,clearTimeout,matchMedia:()=>globalThis.matchMedia?.()||{matches:false}},busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting,finish(){},cancel(){}};},run:async task=>{try{await task();}catch{}finally{context.render();if(surface==='userscript')context.clearCardAnimation();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
+  const context=vm.createContext({identity:{account:'synthetic'},window:{setTimeout,clearTimeout,matchMedia:()=>globalThis.matchMedia?.()||{matches:false}},busy,inspected:inspection?'first':null,current:surface==='userscript'?()=>({mediaKey:'first',name:'First'}):{id:'first'},$:()=>card,throwSwipe:(element,dx,duration)=>{throws.push({element,dx,duration});return {finished:waiting,finish(){},cancel(){}};},run:async task=>{try{if(delayTask)await taskReady;await task();}catch{}finally{context.render();if(surface==='userscript')context.clearCardAnimation();}},render:()=>{assert.equal(card.style.visibility,'hidden');},state:{history:[]},decideReview:()=>({}),save,message(){},focused:null,canReview:true,working:busy,controls(){},stage:card,request:0,review:{canDecide:()=>!busy,decide:async()=>{await save();return {id:'next'};}},dialog:{open:true,focus(){}},status:{},show:async()=>{assert.equal(card.style.visibility,'hidden');}});
   const start=source.indexOf(surface==='userscript'?' let reviewActions=':'  async function decide(');
   const end=source.indexOf(surface==='userscript'?' async function applyUndo(':'  async function undo(',start);
   vm.runInContext(source.slice(start,end),context);
-  return {context,card,throws,writes,finish};
+  return {context,card,throws,writes,finish,startTask};
  }
+ if(surface==='userscript')for(const fail of [false,true])test(`userscript hands off a committed swipe before a delayed task and ${fail?'failed':'successful'} save`,async()=>{
+  const {context,card,throws,writes,finish,startTask}=fixture({delayTask:true,fail});
+  const result=context.decide('keep',{dx:120,duration:240});
+  card.style.transform='';
+  assert.equal(throws.length,1);
+  assert.equal(card.style.visibility,'hidden');
+  assert.deepEqual(writes,[]);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(card.style.visibility,'hidden');
+  assert.deepEqual(writes,[]);
+  startTask();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(throws.length,1);
+  assert.equal(card.style.visibility,'hidden');
+  assert.deepEqual(writes,['save']);
+  finish();
+  await result;
+  assert.equal(card.style.visibility,'');
+ });
  test(`${surface} cancels a live spring before a button decision or outgoing measurement`,async()=>{
   for(const swipeResult of [null,{dx:120,duration:240}]){
    const {context,card,finish}=fixture();
