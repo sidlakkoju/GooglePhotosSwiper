@@ -23,8 +23,8 @@ test('local HTTP flow: login, one-time pairing, import, decisions, album checkpo
   let code=(await request('/api/pair-code',{})).b.code;clock+=300001;assert.equal((await request('/api/bridge/pair',{code,account:'account',label:'Account'})).r.status,401);
   code=(await request('/api/pair-code',{})).b.code;const pair=await request('/api/bridge/pair',{code,account:'account',label:'Account'});bridgeToken=pair.b.token;assert.equal((await request('/api/bridge/pair',{code,account:'account',label:'Account'})).r.status,401);
   assert.equal((await request('/api/bridge/import',{items:[sample()],nextPageId:'page-2'},{bridge:true})).r.status,200);
-  let w=(await request('/api/workspace')).b;assert.equal(w.trimJobs,undefined);assert.equal(w.cropProvider,undefined);assert.equal((await request('/api/trim-jobs',{})).r.status,404);assert.equal((await fetch(base+'/trim-workflow.js')).status,404);assert.equal(w.items.length,1);assert.equal(w.cursor,'page-2');assert.equal(w.account,'account');assert.equal(w.albumTitle,'Photos Swipe · Review · accoun');
-  await request('/api/decisions',{id:w.items[0].id,decision:'remove',revision:0});const job=(await request('/api/album-jobs',{ids:[w.items[0].id]})).b;
+  let w=(await request('/api/workspace')).b;assert.equal(w.trimJobs,undefined);assert.equal(w.cropProvider,undefined);assert.equal((await request('/api/trim-jobs',{})).r.status,404);assert.equal((await fetch(base+'/trim-workflow.js')).status,404);assert.equal(w.items.length,1);assert.equal(w.cursor,'page-2');assert.equal(w.account,'account');assert.equal(w.albumTitle,'Photos Swipe · Review · account');
+  await request('/api/decisions',{id:w.items[0].id,decision:'remove',revision:0});const job=(await request('/api/album-jobs',{ids:[w.items[0].id]})).b;assert.equal(job.title,w.albumTitle);
   assert.equal((await request(`/api/bridge/jobs/${job.id}`,{status:'completed',albumKey:'album',confirmed:['photoA']},{bridge:true})).r.status,200);
   w=(await request('/api/workspace')).b;assert.equal(w.albumTitle,job.title);assert.equal(w.items[0].albumKey,'album');assert.equal(w.jobs[0].status,'completed');
   // Bad/expired re-pair attempts must not revoke the existing account or jobs.
@@ -95,4 +95,20 @@ test('all public browser modules are served as JavaScript',async()=>{
  const app=createApp({loginCode:'asset-test'});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
  try{const base=`http://localhost:${app.server.address().port}`;for(const file of (await readdir(new URL('../public/',import.meta.url))).filter(f=>f.endsWith('.js'))){const response=await fetch(`${base}/${file}`);assert.equal(response.status,200,file);assert.match(response.headers.get('content-type'),/javascript/,file);assert.equal(await response.text(),await readFile(new URL(`../public/${file}`,import.meta.url),'utf8'),file);}}
  finally{await new Promise(r=>app.server.close(r));}
+});
+
+test('album titles retain the full synthetic account and preserve saved target names',()=>{
+ for(const savedTitle of [null,'Photos Swipe · Review · synthe','My saved review album']){
+  const store=createStore();
+  try{
+   store.setSetting('account','synthetic-account');
+   if(savedTitle)store.setSetting('albumTitle',savedTitle);
+   const expected=savedTitle||'Photos Swipe · Review · synthetic-account';
+   assert.equal(store.albumTitle(),expected);
+   store.importItems([sample()],'synthetic-account');
+   store.decide('synthetic-account:photoA','remove',0);
+   assert.equal(store.createJob(['synthetic-account:photoA']).title,expected);
+   assert.equal(store.getSetting('albumTitle'),expected);
+  }finally{store.close();}
+ }
 });
