@@ -22,7 +22,7 @@ The two installation methods and page-context metadata follow the [Userscripts d
 
 The media card appears above the stats on mobile. Swipe a photo horizontally or use **Queue** and **Keep**. For videos, use the separate swipe strip below the player so native playback and scrubbing controls stay usable. Photos support Enlarge, the Zoom slider, and browser pinch zoom. On desktop, left/right arrows queue/keep, Z undoes, F enlarges, Space toggles video playback, and Escape closes the overlay.
 
-Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** changes its decision; **Back to review** returns to the deck. Decisions and undo history survive reloads in IndexedDB.
+Open **Removal queue** and select a thumbnail to inspect it. **Keep instead** changes its decision; **Back to review** returns to the deck. Decisions and undo history survive reloads in IndexedDB. Undo names the restored item and shows it on the card, even when it was off-screen or the review order has changed. If Undo restores a removal decision, the card opens that item for queue inspection.
 
 **Load 50 more** scans through overlapping or reviewed pages until it finds 50 new review items, reaches the end, or checks 12 pages. **Refresh latest** reads the head page while retaining older-library progress. Filters and order apply to the current local batch.
 
