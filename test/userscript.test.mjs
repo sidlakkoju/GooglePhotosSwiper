@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,access} from 'node:fs/promises';
+import {readFile,access,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {webcrypto} from 'node:crypto';
 import vm from 'node:vm';
@@ -146,22 +148,58 @@ test('userscript installed without UTF-8 decoding preserves Unicode UI labels',a
  assert.equal(mounted.nodes.get('keep').textContent,'\u2713 Keep');
  assert.match(mounted.nodes.get('stats').textContent,/ to review \u00b7 /);
 });
-test('unavailable saved albums can be replaced without resetting sent decisions',async()=>{
- const workspace=albumWorkspace([item('a',{decision:'remove'}),item('sent',{decision:'remove',queueSent:true})]);
- await workspace.save({...workspace.state(),albumKey:'old-album'});const writes=[];
+test('unreadable legacy albums retain their target with title-sensitive lookup and resume safely',async()=>{
+ const workspace=albumWorkspace([item('a',{decision:'remove'}),item('sent',{decision:'remove',queueSent:true,albumKey:'legacy'})]);
+ await workspace.save({...workspace.state(),albumKey:'legacy'});
+ const calls=[],legacyTitle='Photos Swipe · Review · 9c2a3f30466c';let unreadable=true,added=false;
  const call=async(operation,args)=>{
-  if(operation==='albumMembers'){if(args.albumKey==='old-album')throw Error('Fake unavailable album');return {keys:writes.flat(),dedupKeys:[]};}
-  if(operation==='findAlbum')return {albumKey:null};if(operation==='createAlbum')return {albumKey:'replacement'};
-  if(operation==='addToAlbum')writes.push(args.mediaKeys);
+  calls.push({operation,args});
+  if(operation==='albumMembers'){assert.equal(args.albumKey,'legacy');if(unreadable)throw Error('Fake read failure');return {keys:added?['a','sent']:['sent'],dedupKeys:[]};}
+  if(operation==='findAlbum')return {albumKey:args.title===legacyTitle?'legacy':null};
+  if(operation==='createAlbum')throw Error('Unexpected duplicate album');
+  if(operation==='addToAlbum'){assert.equal(args.albumKey,'legacy');added=true;}
  };
- await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review · fake'});
- assert.deepEqual(writes,[['a']]);assert.equal(workspace.state().albumKey,'replacement');assert.equal(workspace.state().items[1].queueSent,true);
+ await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'}),/read failure/);
+ assert.equal(workspace.state().albumKey,'legacy');assert.equal(workspace.state().job.albumKey,'legacy');
+ assert.equal(reviewQueue(workspace.state()).length,1);assert.equal(workspace.state().items[1].queueSent,true);
+ assert.deepEqual(calls.map(entry=>entry.operation),['albumMembers','findAlbum']);
+ unreadable=false;await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'});
+ assert.equal(workspace.state().albumKey,'legacy');assert.equal(workspace.state().job,null);assert.equal(reviewQueue(workspace.state()).length,0);
 });
-test('an existing but unreadable album is retained for retry instead of creating a duplicate',async()=>{
- const workspace=albumWorkspace([item('a',{decision:'remove'})]);await workspace.save({...workspace.state(),albumKey:'album'});const calls=[];
- const call=async operation=>{calls.push(operation);if(operation==='albumMembers')throw Error('Fake read failure');if(operation==='findAlbum')return {albumKey:'album'};};
- await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review · fake'}),/read failure/);
- assert.equal(workspace.state().job.albumKey,'album');assert.equal(reviewQueue(workspace.state()).length,1);assert.ok(!calls.includes('createAlbum'));
+test('missing saved albums recreate under their original job title and finish the queue',async()=>{
+ const workspace=albumWorkspace([item('a',{decision:'remove'})]);
+ const title='Photos Swipe · Review · 9c2a3f30466c',calls=[];let added=false;
+ await workspace.save({...workspace.state(),albumKey:'missing',job:{title,mediaKeys:['a'],albumKey:'missing'}});
+ const call=async(operation,args)=>{
+  calls.push({operation,args});
+  if(operation==='albumMembers'){
+   if(args.albumKey==='missing')throw Error('Album is gone');
+   assert.equal(args.albumKey,'replacement');return {keys:added?['a']:[],dedupKeys:[]};
+  }
+  if(operation==='findAlbum'){assert.equal(args.title,title);return {albumKey:null};}
+  if(operation==='createAlbum'){assert.equal(args.title,title);return {albumKey:'replacement'};}
+  if(operation==='addToAlbum'){assert.equal(args.albumKey,'replacement');added=true;}
+ };
+ await sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'});
+ assert.equal(workspace.state().albumKey,'replacement');assert.equal(workspace.state().job,null);
+ assert.equal(reviewQueue(workspace.state()).length,0);
+ assert.equal(calls.filter(entry=>entry.operation==='createAlbum').length,1);
+});
+test('failed saved album reads preserve the key when title lookup finds any album',async()=>{
+ for(const foundKey of ['saved','different']){
+  const workspace=albumWorkspace([item('a',{decision:'remove'})]);
+  const title='Photos Swipe · Review · 9c2a3f30466c',calls=[];
+  await workspace.save({...workspace.state(),albumKey:'saved',job:{title,mediaKeys:['a'],albumKey:'saved'}});
+  const call=async(operation,args)=>{
+   calls.push(operation);
+   if(operation==='albumMembers')throw Error('Read failed');
+   if(operation==='findAlbum'){assert.equal(args.title,title);return {albumKey:foundKey};}
+   throw Error('Unexpected album mutation');
+  };
+  await assert.rejects(sendReviewAlbum({...workspace,call,title:'Photos Swipe · Review'}),/Read failed/);
+  assert.equal(workspace.state().job.albumKey,'saved');assert.equal(workspace.state().albumKey,'saved');
+  assert.deepEqual(calls,['albumMembers','findAlbum']);
+ }
 });
 test('fake library scanning passes reviewed overlaps and retains a bounded continuation',async()=>{
  const {loadReviewPages}=await import('../lib/userscript-core.mjs');
@@ -462,12 +500,118 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  await mounted.click('send');
  assert.equal((await mounted.read()).items[0].queueSent,true);
  assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
- const content=mounted.nodes.get('overlay').childNodes[0],footer=content.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or select Enable Move to Trash above.');
- assert.equal(footer.childNodes[0].textContent,'Swipes never delete media. Send candidates to a review album, or select Enable Move to Trash above.');
+ const content=mounted.nodes.get('overlay').childNodes[0],footer=content.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
+ assert.equal(footer.childNodes[0].textContent,'Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
  const toolbar=content.childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash')));
  assert.ok(content.childNodes.indexOf(mounted.nodes.get('status'))<content.childNodes.indexOf(toolbar));
- assert.ok(content.childNodes.indexOf(toolbar)<content.childNodes.indexOf(footer));
+ assert.ok(content.childNodes.indexOf(footer)<content.childNodes.indexOf(toolbar));
+ assert.ok(content.childNodes.indexOf(mounted.nodes.get('trash-candidates'))<content.childNodes.indexOf(toolbar));
  assert.ok(toolbar.childNodes.some(node=>node.childNodes.includes(mounted.nodes.get('trash-opt-in'))));
  assert.equal(mounted.nodes.get('move-trash').hidden,true);
  assert.ok(!requests.includes('XwAOJf'));
+});
+test('phone controls keep zoom together, order in a grid and Trash below the library controls',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const css=mounted.root.childNodes[0].childNodes[0].textContent;
+ const content=mounted.nodes.get('overlay').childNodes[0];
+ const actions=content.childNodes.find(node=>node.class==='actions');
+ const zoom=actions.childNodes.find(node=>node.class==='zoom-control');
+ assert.equal(zoom.childNodes[0].textContent,'Zoom ');
+ assert.equal(zoom.childNodes[1],mounted.nodes.get('zoom'));
+ const library=content.childNodes.find(node=>node.class==='toolbar library-controls');
+ assert.ok(library.childNodes.includes(mounted.nodes.get('filter')));
+ assert.ok(library.childNodes.includes(mounted.nodes.get('sort')));
+ const footer=content.childNodes.at(-1);
+ assert.equal(footer.class,'toolbar album-controls');
+ assert.ok(footer.childNodes.includes(mounted.nodes.get('move-trash')));
+ assert.ok(footer.childNodes.some(node=>node.class==='trash-toggle'));
+ assert.match(css,/\.zoom-control,\.trash-toggle\{display:flex;align-items:center/);
+ assert.match(css,/@media\(max-width:599px\)/);
+ assert.match(css,/\.library-controls\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+ assert.match(css,/\.album-controls\{position:fixed;bottom:0/);
+ assert.match(css,/\.trash-toggle\{min-height:44px/);
+ assert.match(css,/\.trash-toggle\{[^}]*white-space:normal/);
+});
+test('album control resizing reserves its height in the scrolling overlay',async()=>{
+ let callback,footer;
+ const mounted=await mountedReview([item('a')],{ResizeObserver:class{
+  constructor(handler){callback=handler;}
+  observe(element){footer=element;}
+ }});
+ const overlay=mounted.nodes.get('overlay'),values={};
+ overlay.style.setProperty=(key,value)=>{values[key]=value;};
+ footer.getBoundingClientRect=()=>({height:168});callback();
+ assert.equal(values['--album-controls-height'],'168px');
+ footer.getBoundingClientRect=()=>({height:0});callback();
+ assert.equal(values['--album-controls-height'],'168px');
+ footer.getBoundingClientRect=()=>({height:212});callback();
+ assert.equal(values['--album-controls-height'],'212px');
+});
+test('mounted album send creates a readable title and saves the verified album',async()=>{
+ const titles=[],requests=[];let added=false;
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],id=entry[0],args=JSON.parse(entry[1]);
+  requests.push(id);
+  if(id==='OXvT9d')titles.push(args[0]);
+  if(id==='E1Cajb')added=true;
+  const result=id==='Z5xsfc'?[[],null]:id==='OXvT9d'?[['album']]:id==='snAcKc'?[null,added?[['a',null,null,'stable']]:[],null,['album']]:[];
+  return {ok:true,text:async()=>envelope(id,result)};
+ };
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],fetch);
+ mounted.environment.window.confirm=()=>true;
+ await mounted.click('send');
+ assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
+ assert.deepEqual(titles,['Photos Swipe · Review']);
+ assert.equal((await mounted.read()).albumKey,'album');
+ assert.equal((await mounted.read()).job,null);
+ assert.equal(reviewQueue(await mounted.read()).length,0);
+ assert.ok(requests.includes('E1Cajb'));
+});
+
+test('phone layout keeps library controls clear and Trash text inside its cell in Chrome',async t=>{
+ const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
+ if(!browser){t.skip('Chrome is unavailable');return;}
+ const mounted=await mountedReview([item('a')]);
+ mounted.nodes.get('overlay').hidden=false;mounted.nodes.get('move-trash').hidden=false;
+ const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+ const serialize=node=>{
+  if(!node.tagName)return escape(node.textContent||'');
+  const tag=node.tagName.toLowerCase();
+  const attributes=['id','class','type','min','max','step','value'].filter(key=>typeof node[key]==='string'&&node[key]).map(key=>` ${key}="${escape(node[key])}"`).join('');
+  return `<${tag}${attributes}${node.hidden?' hidden':''}>${escape(node.textContent||'')}${node.childNodes.map(serialize).join('')}</${tag}>`;
+ };
+ const markup=mounted.root.childNodes.map(serialize).join('');
+ const directory=await mkdtemp(join(tmpdir(),'photos-layout-'));
+ try{
+  const html=`<!doctype html><body><script>
+  const results=[];
+  for(const [width,height] of [[400,713],[400,633],[320,633]]){
+   const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
+   const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
+   const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
+   const footer=root.querySelector('.album-controls'),overlay=root.querySelector('.overlay'),label=root.querySelector('.trash-toggle');
+   const bounds=element=>element.getBoundingClientRect();
+   const controls=['load','refresh','filter','sort'].map(id=>root.getElementById(id)).filter(Boolean);
+   const clear=()=>controls.every(control=>bounds(control).bottom<=bounds(footer).top);
+   const range=doc.createRange();range.selectNodeContents(label);
+   const textFits=range.getBoundingClientRect().right<=bounds(label).right+1;
+   const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
+   const zoomFits=bounds(slider).right<=bounds(zoom).right+1&&bounds(slider).top>=bounds(zoom).top&&bounds(slider).bottom<=bounds(zoom).bottom;
+   const toggleVisible=bounds(label).top>=bounds(overlay).top&&bounds(label).bottom<=bounds(overlay).bottom;
+   const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
+   results.push({width,height,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+  }
+  document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
+  </script>`;
+  const path=join(directory,'layout.html');await writeFile(path,html);
+  const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
+  if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
+  assert.equal(result.status,0,result.stderr);
+  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
+  for(const measurement of measurements){
+   assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
+   assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
+   assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
+  }
+ }finally{await rm(directory,{recursive:true,force:true});}
 });
