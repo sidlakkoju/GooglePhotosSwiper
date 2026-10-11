@@ -700,14 +700,25 @@ test('mounted photo and video captions show file size with explicit unknown meta
 });
 
 test('enlarged video owns Space down and up without scrolling, closing or replacing media',async()=>{
- const requests=[];
+ const requests=[],response=Promise.withResolvers();
+ const waitFor=async(predicate,message)=>{
+  const deadline=Date.now()+5000;
+  while(!predicate()){
+   assert.ok(Date.now()<deadline,message);
+   await new Promise(resolve=>setImmediate(resolve));
+  }
+ };
  const mounted=await mountedReview([item('video',{type:'video'})],async(url,options)=>{
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);
   assert.equal(entry[0],'VrseUb');
+  await response.promise;
   return {ok:true,text:async()=>envelope(entry[0],[['video'],'https://lh3.googleusercontent.com/synthetic-video'])};
  });
- await new Promise(resolve=>setTimeout(resolve,0));
+ await waitFor(()=>requests.length===1,'Video source request did not start');
  const {nodes,root}=mounted,video=nodes.get('media').querySelector('video');
+ assert.ok(video);assert.equal(video.paused,true);assert.equal(video.src,undefined);
+ response.resolve();
+ await waitFor(()=>video.src&&video.paused===false,'Mounted video did not start playing');
  const dispatch=(type,key,extra={})=>{
   const event={type,key,prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;},...extra};
   mounted.environment.window.listeners[type](event);
