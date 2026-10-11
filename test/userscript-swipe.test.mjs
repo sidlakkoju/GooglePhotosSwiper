@@ -129,3 +129,12 @@ test('window cancellation after capture loss resets the gesture for another swip
  s.send('pointerdown',0);s.sendWindow('pointerup',-120);
  assert.deepEqual(s.decisions,['remove']);
 });
+
+for(const direction of [-1,1])test(`a pause before a short fling uses only recent samples in direction ${direction}`,()=>{
+ const s=setup();
+ s.send('pointerdown',0,0,1,0);
+ s.send('pointermove',direction*10,0,1,1000);
+ s.send('pointermove',direction*40,0,1,1030);
+ s.send('pointerup',direction*50,0,1,1040);
+ assert.deepEqual(s.decisions,[direction>0?'keep':'remove']);
+});

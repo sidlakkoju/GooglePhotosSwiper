@@ -221,10 +221,10 @@ function fakeIndexedDB(fault={}) {
   objectStoreNames:{contains:name=>stores.has(name)},
   createObjectStore:name=>stores.set(name,new Map()),close(){},
   transaction(name){
-   const staged=new Map(stores.get(name));let aborted=false;
+   const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(()=>{if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');staged.set(key,structuredClone(value));}
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    put:(value,key)=>{if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -315,7 +315,7 @@ test('mounted bundle keeps album links in the page account and undo skips stale 
  await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('album').href,'https://photos.google.com/u/2/album/album');
- const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  mounted.nodes.get('keep').onclick();await idle();mounted.nodes.get('keep').onclick();await idle();
  const state=await db.read(account);await db.save(account,{...state,items:state.items.map(row=>row.mediaKey==='b'?{...row,state:'in_trash',revision:row.revision+1}:row)});
  fault.failSave=true;mounted.nodes.get('undo').onclick();await idle();
@@ -327,11 +327,12 @@ async function mountedReview(items,windowOverrides={}) {
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
+ if(windowOverrides?.indexedDB)mounted.environment.window.indexedDB=windowOverrides.indexedDB;
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
  Object.assign(mounted.environment.window,windowOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const settle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('keep').disabled===false)return;}throw Error('Fake UI stayed busy');};
+ const settle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  const click=async id=>{mounted.nodes.get(id).onclick();await settle();};
  return {...mounted,click,settle,read:()=>db.read(account)};
 }
@@ -375,13 +376,13 @@ test('mounted undo survives a fresh script instance with the same IndexedDB',asy
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
  second.nodes.get('undo').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
  assert.equal(second.nodes.get('status').textContent,'Decision undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
@@ -395,7 +396,7 @@ test('mounted Trash is opt-in, confirms the exact count and verifies synthetic T
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
- for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
 });
 test('Trash completion status resets on reload and cached-page restore while estimates retain a running total',async()=>{
@@ -486,7 +487,7 @@ test('shadow overlay puts the card above stats and touch swipes persist decision
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
  const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:120,clientY:25});
- for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ for(let count=0;count<100&&mounted.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
 });
 
@@ -924,4 +925,58 @@ test('overlay stops pointer touch and wheel propagation without cancelling brows
  for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','touchstart','touchmove','touchend','touchcancel','wheel']){
   let stopped=false;mounted.nodes.get('overlay').listeners[type]({stopPropagation(){stopped=true;},preventDefault(){assert.fail('Browser defaults must remain available');}});assert.equal(stopped,true);
  }
+});
+
+for(const delayed of ['identity','save'])test(`swipes, arrow keys and buttons advance immediately during a delayed ${delayed}`,async()=>{
+ const fault={},indexedDB=fakeIndexedDB(fault);let release,holdIdentity=false;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holdIdentity)await gate;return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview(['a','b','c','d','e'].map(key=>item(key)),{indexedDB,crypto});
+ if(delayed==='identity')holdIdentity=true;
+ else fault.saveGate=gate;
+ const {nodes}=mounted,media=nodes.get('media'),top=nodes.get('card').childNodes.find(node=>node.class==='top-card');
+ const swipe=dx=>{media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});media.listeners.pointerup({pointerId:1,clientX:dx,clientY:0});};
+ const shown=name=>{assert.equal(media.querySelector('img').alt,name);assert.equal(top.style.visibility,'');assert.equal(nodes.get('keep').disabled,false);assert.equal(nodes.get('remove').disabled,false);};
+ try {
+  swipe(150);shown('b');
+  await new Promise(resolve=>setTimeout(resolve,5));
+  assert.equal(nodes.get('overlay')['aria-busy'],'true');
+  swipe(-150);shown('c');
+  mounted.environment.window.listeners.keydown({key:'ArrowRight',preventDefault(){},stopImmediatePropagation(){}});shown('d');
+  nodes.get('remove').onclick();shown('e');
+  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null,null,null,null]);
+ }finally{release();}
+ await mounted.settle();
+ const saved=await mounted.read();
+ assert.deepEqual(saved.items.map(row=>row.decision),['keep','remove','keep','remove',null]);
+ assert.deepEqual(saved.history.map(entry=>[entry.key,entry.decision,entry.revision]),[['a','keep',1],['b','remove',1],['c','keep',1],['d','remove',1]]);
+ shown('e');
+});
+
+test('a failed decision save restores every unsaved card without recording queued decisions',async()=>{
+ const fault={},mounted=await mountedReview(['a','b','c'].map(key=>item(key)),{indexedDB:fakeIndexedDB(fault)});
+ fault.failSave=true;
+ mounted.nodes.get('keep').onclick();mounted.nodes.get('remove').onclick();
+ await mounted.settle();
+ assert.equal(mounted.nodes.get('media').querySelector('img').alt,'a');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null,null]);
+ assert.match(mounted.nodes.get('status').textContent,/Fake storage failure/);
+ fault.failSave=false;
+ await mounted.click('remove');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove',null,null]);
+});
+
+test('a decision arriving as the save operation finishes remains queued for its own item',async()=>{
+ const fault={},mounted=await mountedReview(['a','b','c'].map(key=>item(key)),{indexedDB:fakeIndexedDB(fault)});
+ let release;fault.releaseGate=new Promise(resolve=>{release=resolve;});
+ try {
+  mounted.nodes.get('keep').onclick();
+  for(let count=0;count<100;count++){if((await mounted.read()).items[0].decision==='keep')break;await new Promise(resolve=>setTimeout(resolve,1));}
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
+  mounted.nodes.get('remove').onclick();
+  assert.equal(mounted.nodes.get('media').querySelector('img').alt,'c');
+ }finally{release();}
+ await mounted.settle();
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','remove',null]);
 });
