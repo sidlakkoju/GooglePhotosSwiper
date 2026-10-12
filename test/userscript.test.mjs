@@ -2156,7 +2156,7 @@ test('mounted shell restores exact card and Escape closes settings and enlarged 
 
 test('video resume is throttled, flushed on close and seeks after metadata on reload',async()=>{
  const fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])});
- const mounted=await mountedReview([item('synthetic-video',{type:'video'})],{fetch});
+ const mounted=await mountedReview([item('synthetic-video',{type:'video',urlFetchedAt:Date.now()-41*60*1000})],{fetch});
  await new Promise(resolve=>setTimeout(resolve,20));
  const video=mounted.nodes.get('media').querySelector('video');video.duration=120;video.listeners.loadedmetadata();
  video.currentTime=12.5;video.listeners.timeupdate();
@@ -2269,4 +2269,45 @@ test('failed sync remains visible alongside keep, queue and undo confirmations',
   assert.equal(mounted.nodes.get('settings').classList.contains('gear-error'),true);
  }
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
+});
+
+test('URL refreshes preserve resume settings and inspection across close and reopen',async()=>{
+ const fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-preview',['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://lh3.googleusercontent.com/synthetic-video'])});
+ const mounted=await mountedReview([item('synthetic-preview',{urlFetchedAt:Date.now()-41*60*1000}),item('synthetic-queued',{decision:'remove'})],{fetch});
+ await settlePreviews();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ for(const [id,value] of [['filter','photo'],['sort','largest'],['review-every','7'],['delete-method','trash']]){mounted.nodes.get(id).value=value;mounted.nodes.get(id).onchange();}
+ await mounted.settle();
+ mounted.nodes.get('queue').childNodes[0].onclick();
+ await mounted.nodes.get('close').onclick();
+ const saved=await db.resume(account);
+ assert.equal(saved.filter,'photo');assert.equal(saved.sort,'largest');assert.equal(saved.reviewEvery,7);assert.equal(saved.deleteMethod,'trash');assert.equal(saved.inspected,true);assert.equal(saved.currentId,'synthetic-queued');
+ await mounted.nodes.get('launcher').onclick();
+ await settlePreviews();
+ await mounted.nodes.get('close').onclick();
+ assert.deepEqual(await db.resume(account),saved);
+});
+
+test('URL refresh during a decision save advances resume only after the snapshot commits',async()=>{
+ for(const laterDecision of [false,true]){
+  const fault={},fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-refresh',['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://lh3.googleusercontent.com/synthetic-video'])});
+  const mounted=await mountedReview([item('synthetic-a'),item('synthetic-b'),item('synthetic-c')],{fetch},fault);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await settlePreviews();
+  let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
+  try{
+   mounted.nodes.get('keep').onclick();await settlePreviews();
+   const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
+   try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+   if(laterDecision)mounted.nodes.get('keep').onclick();
+   mounted.nodes.get('sort').value='largest';mounted.nodes.get('sort').onchange();
+   await settlePreviews();
+   assert.equal((await db.resume(account)).currentId,'synthetic-a');
+   fault.saveGate=null;release();await mounted.settle();await settlePreviews();
+   assert.equal((await db.resume(account)).currentId,laterDecision?'synthetic-c':'synthetic-b');
+   assert.equal((await db.resume(account)).sort,'largest');
+  }finally{fault.saveGate=null;release();await mounted.nodes.get('close').onclick();}
+ }
 });
