@@ -276,6 +276,8 @@ async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},tar
  return {scanned,added,warning,limited,exhausted:state.exhausted};
 }
 
+const LEASE_HEARTBEAT_MS=4000;
+const LEASE_EXPIRY_MS=12000;
 async function openReviewDatabase(indexedDB) {
  const db=await new Promise((resolve,reject)=>{
   const request=indexedDB.open('photos-swipe-userscript',2);
@@ -307,8 +309,10 @@ async function openReviewDatabase(indexedDB) {
    if((current?.revision||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
    return {...state,revision:state.revision+1};
   }),
-  lease:(account,owner,release=false)=>transaction('leases',account,()=>{
-   return {owner,expires:release?0:Date.now()+90000};
+  lease:(account,owner,release=false)=>transaction('leases',account,current=>{
+   if(release&&current?.owner!==owner)return current;
+   if(current?.owner!==owner&&current?.expires>Date.now())throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+   return {owner,expires:release?0:Date.now()+LEASE_EXPIRY_MS};
   })
  };
 }
@@ -1140,6 +1144,7 @@ function mountPhotosSwipe(environment) {
  revokeOthers.onclick=()=>{if(window.confirm('Revoke all other devices? They will stop syncing immediately, including the legacy shared token.'))return run(async()=>{await syncClient.revokeOthers();await showDevices();});};
  pairAgain.onclick=()=>{openSettings();settingsPanel.open=true;pairingPanel.open=true;$('pair-code').focus();};dismissUnpaired.onclick=()=>{unpairedBanner.hidden=true;};pairedNotice.onclick=()=>{openSettings();settingsPanel.open=true;devicesPanel.open=true;return run(showDevices);};
  pairSubmit.onclick=()=>run(async()=>{const url=validateSyncSettings($('sync-url').value.trim(),'pairing').url,code=$('pair-code').value.trim(),name=$('pair-name').value.trim();if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');const result=await syncClient.pair(url,code,name,window.navigator?.platform||'Browser');const settings={url,token:result.token,onboardingDismissed:true};await (await pairingPromise).saveSettings(settings);$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;unpairedBanner.hidden=true;pairingPanel.open=false;await synchronize();await showDevices();});
+ let pageActive=true;
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
@@ -1198,18 +1203,20 @@ function mountPhotosSwipe(environment) {
  async function assertSaveAccount(){
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
   await assertAccount();
+  if(!pageActive||document.hidden)throw Error('Session changed. Close and reopen Photos Swipe.');
+  try{await db.lease(identity.account,owner);}catch(error){lockedAccount=null;leaseError=error;startRenewal();message(error.message);throw error;}
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
  function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer)return;
-  leaseTimer=setInterval(()=>{refreshLease();},20000);
+  leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
   leaseTimer?.unref?.();
  }
  async function renewLease(){
   const token=leaseGeneration,account=identity?.account;
-  if(!account)return false;
+  if(!account||!pageActive||document.hidden)return false;
   try{
    await assertAccount();
    if(token!==leaseGeneration||account!==identity?.account)return false;
@@ -1218,19 +1225,20 @@ function mountPhotosSwipe(environment) {
    if(token!==leaseGeneration||account!==identity?.account)return false;
    lockedAccount=account;leaseError=null;startRenewal();return true;
   }catch(error){
-   if(token===leaseGeneration){leaseError=error;message(error.message);}
+   if(token===leaseGeneration){lockedAccount=null;leaseError=error;message(error.message);startRenewal();}
    return false;
   }finally{if(token===leaseGeneration)acquiringAccount=null;}
  }
  async function refreshLease(){
-  const token=leaseGeneration;
+  const token=leaseGeneration,recovering=!!leaseError;
+  if(!pageActive||document.hidden||$('overlay').hidden||(recovering&&(busy||activeOperation)))return;
   if(!await renewLease()||token!==leaseGeneration)return;
+  if(recovering){await open();return;}
   writes.flush();refill();
-  if(++leaseTicks%3===0&&syncEnabled&&!busy&&!activeOperation&&!$('overlay').hidden)synchronize();
+  if(++leaseTicks%15===0&&syncEnabled&&!busy&&!activeOperation&&!$('overlay').hidden)synchronize();
  }
  async function recoverLease(){
   if(!identity)return true;
-  if(!leaseError&&lockedAccount){startRenewal();return true;}
   return renewLease();
  }
  async function withAccountLease(task) {
@@ -1578,14 +1586,14 @@ function mountPhotosSwipe(environment) {
  $('overlay').addEventListener('dragstart',event=>event.preventDefault());
  $('media').addEventListener('dblclick',event=>{if(event.target.tagName!=='VIDEO')toggleEnlarge();});
  function leavePage(){
-  releaseLease();
+  pageActive=false;releaseLease();
   stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
  }
  window.addEventListener('pagehide',leavePage);
  window.addEventListener('unload',leavePage);
  window.addEventListener('focus',()=>{if(identity&&!busy&&!$('overlay').hidden)synchronize();});
- document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){refreshLease();refreshStalePreviews();}});
- window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();pageActive=false;releaseLease();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else{pageActive=true;if(identity&&!$('overlay').hidden){startRenewal();if(!busy&&!activeOperation){refreshLease();refreshStalePreviews();}}}});
+ window.addEventListener('pageshow',()=>{pageActive=true;if(!document.hidden&&!$('overlay').hidden)return open();});
  const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
  function handleViewerSpace(event){
   if(activePairingDialog()||!sheet.hidden)return false;

@@ -1,3 +1,4 @@
+import {LEASE_HEARTBEAT_MS,LEASE_EXPIRY_MS} from '../lib/userscript-db.mjs';
 import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -1190,7 +1191,7 @@ test('foreign unexpired leases allow library writes and visible pages renew owne
  const mounted=await mountedReview([item('a')]);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
- await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:Date.now()+90000},account);tx.oncomplete=resolve;});
+ await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:Date.now()+LEASE_EXPIRY_MS},account);tx.oncomplete=resolve;});
  await mounted.click('load');
  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
  assert.equal((await mounted.read()).items.length,1);
@@ -2117,12 +2118,12 @@ test('durable unpair preserves settings on reopen and saving a new token clears 
   mounted.environment.window.fetch=async()=>reject?new Response('{}',{status:401}):new Response(JSON.stringify({decisions:[],history:[],progress:{}}));
   vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();return mounted;
  };
- const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);revoked.nodes.get('close').onclick();
+ const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);await revoked.nodes.get('close').onclick();
  const reopened=await mount();assert.equal(reopened.nodes.get('sync-url').value,'https://sync.example');assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);
  reject=false;reopened.nodes.get('sync-token').value='synthetic-new-token';reopened.nodes.get('sync-save').onclick();await waitForReview(()=>reopened.nodes.get('overlay')['aria-busy']==='false');
  assert.equal(pairing.token,'synthetic-new-token');assert.equal(pairing.deviceId,'synthetic-device');assert.equal(pairing.deviceName,'Synthetic phone');assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);assert.match(reopened.nodes.get('sync-status').textContent,/Synced/);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.equal((await (await openReviewDatabase(indexedDB)).settings()).unpaired,undefined);
- reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
+ await reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
 });
 
 test('mixed decisions and Undo retain input order across a delayed save',async()=>{
@@ -2418,5 +2419,60 @@ test('URL refresh during a decision save advances resume only after the snapshot
    assert.equal((await db.resume(account)).currentId,laterDecision?'synthetic-c':'synthetic-b');
    assert.equal((await db.resume(account)).sort,'largest');
   }finally{fault.saveGate=null;release();await mounted.nodes.get('close').onclick();}
+ }
+});
+
+
+test('killed owners expire and foreign release cannot replace fresh ownership',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(fakeIndexedDB());
+ const actualNow=Date.now;let now=100000;Date.now=()=>now;
+ try{
+  await db.lease('account','killed');
+  now+=LEASE_EXPIRY_MS-1;
+  await assert.rejects(db.lease('account','next'),/busy in another tab/);
+  now++;
+  await db.lease('account','next');
+  await db.lease('account','killed',true);
+  await assert.rejects(db.lease('account','killed'),/busy in another tab/);
+ }finally{Date.now=actualNow;}
+});
+
+test('blocked review retries each heartbeat and loads progress after a killed owner expires',async()=>{
+ const timers=new Map();let timerId=0;
+ const mounted=await mountedReview([item('a')],{},undefined,{setInterval:(handler,delay)=>{assert.equal(delay,LEASE_HEARTBEAT_MS);timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();
+ const actualNow=Date.now;let now=actualNow();Date.now=()=>now;
+ try{
+  await db.lease(account,'killed');
+  await mounted.nodes.get('launcher').onclick();
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  now+=LEASE_HEARTBEAT_MS;await [...timers.values()][0]();
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  now+=LEASE_EXPIRY_MS-LEASE_HEARTBEAT_MS;await [...timers.values()][0]();
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.match(mounted.nodes.get('caption').textContent,/^a ·/);
+  now+=LEASE_EXPIRY_MS-1;await [...timers.values()][0]();
+  now+=LEASE_EXPIRY_MS-1;
+  await assert.rejects(db.lease(account,'other'),/busy in another tab/);
+ }finally{Date.now=actualNow;await mounted.nodes.get('close').onclick();}
+});
+
+test('hidden and pagehide release ownership and resumed pages cannot steal a fresh lease',async()=>{
+ for(const lifecycle of ['hidden','pagehide']){
+  const mounted=await mountedReview([item('a')]);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+  else mounted.environment.window.listeners.pagehide();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  await db.lease(account,'live');
+  if(lifecycle==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
+  else await mounted.environment.window.listeners.pageshow({persisted:true});
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  await mounted.click('keep');assert.equal((await db.read(account)).items[0].decision,null);
+  await assert.rejects(db.lease(account,'third'),/busy in another tab/);
+  await mounted.nodes.get('close').onclick();
  }
 });
