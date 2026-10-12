@@ -425,6 +425,10 @@ test('mounted bundle keeps album links and Undo responds before failed storage',
  fault.failSave=false;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
  assert.equal((await db.read(account)).items[0].decision,'keep');
 });
+function dismissReviewPairing(mounted){
+ const receiver=mounted.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet'&&!node.hidden);
+ if(receiver){receiver.childNodes.find(node=>node.className==='toolbar').childNodes.find(node=>node.textContent==='Cancel').onclick();mounted.nodes.get('close').focus();}
+}
 async function mountedReview(items,windowOverrides={},syncSettings,environmentOverrides={}) {
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(syncSettings?.url?{}:syncSettings);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
@@ -435,6 +439,7 @@ async function mountedReview(items,windowOverrides={},syncSettings,environmentOv
  await db.saveSettings(syncSettings?.url?syncSettings:{onboardingDismissed:true,...(syncSettings?.onboardingDismissed===false?{onboardingDismissed:false}:{})});
  Object.assign(mounted.environment.window,windowOverrides);Object.assign(mounted.environment,environmentOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
+ if(syncSettings?.onboardingDismissed!==false)dismissReviewPairing(mounted);
  const settle=async()=>{await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
  const click=async id=>{if(id==='move-trash'&&mounted.nodes.get('review-panel').hidden)mounted.nodes.get('review').onclick();mounted.nodes.get(id).onclick();await new Promise(resolve=>setTimeout(resolve,10));await settle();};
  return {...mounted,click,settle,read:()=>db.read(account)};
@@ -2319,6 +2324,7 @@ test('mounted shell restores exact card and Escape closes settings and enlarged 
  await new Promise(resolve=>setTimeout(resolve,20));
  await db.saveResume(account,{currentId:'synthetic-second',reviewEvery:7});
  await mounted.nodes.get('launcher').onclick();
+ dismissReviewPairing(mounted);
  assert.match(mounted.nodes.get('caption').textContent,/synthetic-second/);
  assert.equal(mounted.nodes.get('review-every').value,'7');
  const escape=()=>mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
@@ -2717,6 +2723,28 @@ test('unpaired launcher shows the receiver with another Photos tab open',async()
  }
  assert.equal(code.value,'123456');
  await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
+});
+
+test('unpaired script opens the receiver despite a paired script dismissing shared onboarding',async()=>{
+ const credentials={url:'https://worker.example',token:'paired-script-token',onboardingDismissed:true};
+ const first=await mountedReview([item('a')],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})},credentials,{GM:{getValue:async()=>credentials,setValue:async()=>{},deleteValue:async()=>{}}});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(first.environment.window.indexedDB);
+ assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+ assert.equal(first.root.childNodes.some(node=>node.className==='pairing-receiver settings-sheet'&&!node.hidden),false);
+ const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
+ second.environment.GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ try{
+  await second.nodes.get('launcher').onclick();
+  const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
+  assert.ok(receiver);assert.equal(receiver.hidden,false);
+  assert.equal(second.root.activeElement,second.nodes.get('pairing-short-code'));
+  await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
+  await second.nodes.get('launcher').onclick();
+  assert.equal(second.root.childNodes.findLast(node=>node.className==='pairing-receiver settings-sheet').hidden,false);
+  assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+ }finally{await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();}
 });
 
 test('Settings pairing sends six digits and preserves credentials on failure',async()=>{
