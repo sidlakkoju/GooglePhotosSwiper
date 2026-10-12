@@ -957,30 +957,35 @@ function paint(o,b,th){const t=tOf(b),{w,h,f}=dims(t),R=w/2;
   g.sp.style.transform=`translate(${(x-g.w/2).toFixed(2)}px,${(-g.sz*0.5).toFixed(2)}px) scaleX(${Math.max(.02,c).toFixed(3)})`}
  return t}
 
-const HOLD=900,TURN=550;function spinAngle(t){const k=t%(HOLD+TURN);if(k<HOLD)return 0;const p=(k-HOLD)/TURN;const c1=1.85,c3=c1+1,e=1+c3*Math.pow(p-1,3)+c1*Math.pow(p-1,2);return 2*Math.PI*e}
+const TURN=550;
 
  const o=mkOrb(orb),motion=renderingWindow.matchMedia?.('(prefers-reduced-motion: reduce)');
- let current=0,target=0,from=0,started=0,frame=null,last=0,origin=0,y=0,vy=0;
+ let current=0,target=0,from=0,started=0,frame=null,direction=0,initialized=false;
+ function render(angle=0){
+  const t=paint(o,current,angle),{w,h}=dims(t);element.style.setProperty('--chipc',col(t));chip.style.top=(h/2+3)+'px';chip.style.left=(w/2+4)+'px';
+ }
+ function stop(){if(frame!==null)renderingWindow.cancelAnimationFrame(frame);frame=null;direction=0;}
  function paintFrame(now){
   frame=null;
   if(!isVisible()||document.hidden)return;
-  if(!origin)origin=now;
-  const reduced=motion?.matches,dt=Math.min(.033,Math.max(0,(now-last)/1000));last=now;
-  const k=reduced?1:Math.min(1,(now-started)/550);current=from+(target-from)*(1-Math.pow(1-k,3));
-  vy+=(-320*y-11*vy)*dt;y+=vy*dt;
-  orb.style.setProperty('--s',(1+(reduced?0:y)).toFixed(4));orb.style.setProperty('--sy',(1-(reduced?0:y)*1.3).toFixed(4));
-  const t=paint(o,current,reduced?0:spinAngle(now-origin)),{w,h}=dims(t);element.style.setProperty('--chipc',col(t));chip.style.top=(h/2+3)+'px';chip.style.left=(w/2+4)+'px';
-  if(!reduced||k<1)frame=renderingWindow.requestAnimationFrame(paintFrame);
+  const k=motion?.matches?1:Math.min(1,Math.max(0,(now-started)/TURN)),progress=1-Math.pow(1-k,3);
+  current=from+(target-from)*progress;
+  render(k<1?direction*2*Math.PI*progress:0);
+  if(k<1)frame=renderingWindow.requestAnimationFrame(paintFrame);else direction=0;
  }
- function wake(){if(frame===null&&isVisible()&&!document.hidden)frame=renderingWindow.requestAnimationFrame(paintFrame);}
+ function wake(){if(direction&&frame===null&&isVisible()&&!document.hidden)frame=renderingWindow.requestAnimationFrame(paintFrame);}
  document.addEventListener('visibilitychange',wake);
- return {update(bytes,{animate=false,delta=0}={}){
-  if(bytes!==target){from=animate?current:bytes;target=bytes;started=renderingWindow.performance.now();if(!animate)current=bytes;}
+ motion?.addEventListener?.('change',()=>{if(motion.matches){stop();current=target;chip.classList.remove('go');render();}});
+ return {update(bytes,{animate=initialized,delta=0}={}){
+  const changed=bytes!==target;
+  if(changed){
+   const previous=target;stop();from=current;target=bytes;started=renderingWindow.performance.now();
+   if(animate&&!motion?.matches){direction=Math.sign(bytes-previous);wake();}else{current=bytes;render();}
+  }else if(!initialized)render();
+  wake();initialized=true;
   element.setAttribute('aria-label',`${formatStorageBytes(bytes)} approximate storage freed this session`);
-  if(animate&&delta>0){chip.textContent='+'+formatStorageBytes(delta);chip.classList.remove('go');if(!motion?.matches){void chip.offsetWidth;chip.classList.add('go');vy+=2.4;}}
-  if(!animate)paint(o,current,0);
-  wake();
- },reset(){current=target=from=0;y=vy=0;chip.classList.remove('go');this.update(0);}};
+  if(changed&&animate&&delta>0){chip.textContent='+'+formatStorageBytes(delta);chip.classList.remove('go');if(!motion?.matches){void chip.offsetWidth;chip.classList.add('go');}}
+ },reset(){stop();current=target=from=0;chip.classList.remove('go');render();this.update(0);}};
 }
 
 function mountPhotosSwipe(environment) {
