@@ -190,6 +190,17 @@ test('Keep and undo-to-keep replace synced removes through both write endpoints'
  }
 });
 
+test('sign-in HTML allows origin referrers while JSON auth responses suppress referrers',async()=>{
+ const env={DB:new D1()},state='s'.repeat(43);
+ const session=await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ assert.equal(session.status,200);
+ assert.equal(session.headers.get('Referrer-Policy'),'no-referrer');
+ const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('Referrer-Policy'),'strict-origin-when-cross-origin');
+ assert.match(await response.text(),/<meta name="referrer" content="strict-origin-when-cross-origin">/);
+});
+
 test('sign-in page permits GIS styles while restricting scripts and framing',async()=>{
  const env={DB:new D1()},state='q'.repeat(43);
  await request(env,'/auth/session',{state,name:'Test',platform:'test'});
