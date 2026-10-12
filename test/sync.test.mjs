@@ -694,3 +694,29 @@ test('progress PUT reconciles a server tie introduced after the client pull',asy
  const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
  assert.equal(restored.items[0].state,'in_trash');
 });
+
+test('legacy token bootstraps short-code pairing and the new token reads and writes sync state',async()=>{
+ const e=env(),pairing=await start(e);
+ const response=await claim(e,{short:pairing.short});
+ assert.equal(response.status,200);
+ const device=await response.json();
+ assert.match(device.deviceId,/^[0-9a-f-]{36}$/);
+ assert.match(device.token,/^[A-Za-z0-9_-]{43}$/);
+ const headers=withToken(device.token);
+ assert.equal((await call(e,'state','GET',undefined,headers)).status,200);
+ const decisions=[{id:'paired-device-item',decision:'keep'}];
+ assert.equal((await call(e,'decisions','PUT',{decisions},headers)).status,200);
+ const state=await call(e,'state','GET',undefined,headers);
+ assert.equal(state.status,200);
+ assert.deepEqual((await state.json()).decisions,decisions);
+});
+
+test('claim reports pairing misconfiguration when the IP key is unset',async()=>{
+ const e=env(),pairing=await start(e);
+ delete e.PAIRING_IP_KEY;
+ const response=await claim(e,{short:pairing.short});
+ assert.equal(response.status,500);
+ assert.deepEqual(await response.json(),{error:'pairing_misconfigured'});
+ assert.equal(e.DB.sqlite.prepare('SELECT count(*) AS n FROM devices WHERE is_legacy = 0').get().n,0);
+ assert.equal(e.DB.sqlite.prepare('SELECT used_at FROM pairing_codes WHERE id = ?').get(pairing.id).used_at,null);
+});

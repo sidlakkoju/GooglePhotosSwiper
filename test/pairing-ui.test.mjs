@@ -34,7 +34,8 @@ const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLeng
 const centeredShellGrowthBytes=12000;
 const prePairingCurrentBytes=performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const recoveryGrowthBudgetBytes=4*1024;
-const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes;
+const pairingServerErrorGrowthBytes=256;
+const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
 test('pairing bundle stays within the 15 KB pairing and 4 KB recovery growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
 test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
@@ -191,4 +192,26 @@ test('pasting a displayed pairing code preserves all six digits in the claim',as
   await pairingSubmit(panel).onclick();
   assert.equal(body.short,expected);assert.equal(body.code,undefined);
  }
+});
+
+test('pairing claims distinguish server failures from unavailable codes and allow retry',async()=>{
+ for(const manual of [true,false])for(const status of [400,429,500,503]){
+  const elements=dom();let saves=0,paired=0;
+  const panel=receivePairingLink({...elements,manual,location:{hash:manual?'':'#pswipe-pair=abcdefghijklmnopqrstuv',pathname:'/',search:''},window:{navigator:{},history:{replaceState(){}}},fetch:async()=>({ok:false,status}),saveSettings:async()=>{saves++;},onPaired:async()=>{paired++;}});
+  if(manual)pairingField(panel,'pairing-short-code').value='123456';
+  const button=pairingSubmit(panel);
+  await button.onclick();
+  assert.equal(descendants(panel).find(node=>node.role==='status').textContent,status>=500?'Pairing is unavailable on the sync server (server misconfigured)':'Code expired or unavailable. Ask the paired device for a new code.');
+  assert.equal(button.disabled,false);
+  assert.equal(panel.hidden,false);
+  assert.equal(saves,0);assert.equal(paired,0);
+ }
+});
+
+test('pairing code creation reports server misconfiguration for server failures',async()=>{
+ const elements=dom();
+ const pairing=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'test-token'}),fetch:async()=>({ok:false,status:500}),setTimeout,clearTimeout});
+ await pairing.open();
+ assert.equal(pairing.modal.children[0].textContent,'Pairing is unavailable on the sync server (server misconfigured)');
+ assert.equal(pairing.modal.children[1].children.length,0);
 });

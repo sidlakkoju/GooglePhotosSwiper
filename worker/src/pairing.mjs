@@ -43,7 +43,7 @@ export async function pairingRequest(request,env,device,readBody,respond) {
  const url=new URL(request.url),route=url.pathname,method=request.method,db=env.DB,now=nowSeconds();
  const limited=()=>respond({error:'rate_limited'},429,{'Retry-After':String(3600-now%3600)});
  if(route==='/api/pair/claim'&&method==='POST'){
-  if(!env.PAIRING_IP_KEY)return respond({error:'Pairing IP key unset'},500);
+  if(!env.PAIRING_IP_KEY)return respond({error:'pairing_misconfigured'},500);
   const key=await crypto.subtle.importKey('raw',encoder.encode(env.PAIRING_IP_KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);
   const ipHash=new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(request.headers.get('CF-Connecting-IP')||'unknown')));
   if(!await limit(db,ipHash,now,30))return limited();
