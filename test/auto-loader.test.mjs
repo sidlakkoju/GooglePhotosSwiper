@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {compareVersions} from '../lib/userscript-loader.mjs';
 import {startAutoLoader,showUpdateBanner,loaderAPIVersion} from '../lib/userscript-auto-loader.mjs';
 function fixture(latest,cached){
  const nodes=[],writes=[],trusted=new WeakMap(),window={};
@@ -40,6 +41,7 @@ test('update banner compares numeric versions and prereleases and ignores invali
 test('main install artifact is a small loader with both manager API grants',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  assert.ok(source.length<15000);
+ assert.ok(compareVersions(/^\/\/ @version (\S+)$/m.exec(source)[1],'1.2.53')>0);
  for(const grant of ['GM.xmlHttpRequest','GM.getValue','GM.setValue','GM_xmlhttpRequest','unsafeWindow'])assert.ok(source.includes('@grant '+grant));
  assert.ok(source.includes('startAutoLoader'));assert.ok(!source.includes('mountPhotosSwipe'));
 });

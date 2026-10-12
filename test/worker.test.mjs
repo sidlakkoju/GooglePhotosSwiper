@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {register} from 'node:module';
+import {startAutoLoader,loaderAPIVersion} from '../lib/userscript-auto-loader.mjs';
 import {startAutoLoader as startLegacyAutoLoader} from './fixtures/legacy-auto-loader.mjs';
 import {compareVersions} from '../lib/userscript-loader.mjs';
 
@@ -87,13 +88,14 @@ test('Worker publishes headerless app and matching live version with CORS and fr
  }
 });
 
-test('served app runs without an update banner in installed 1.2.51 and 1.2.52 loaders',async()=>{
+test('served app advances the release version and runs without a banner in the updated loader',async()=>{
  const installed=await worker.fetch(new Request(installURL));
  const installVersion=/^\/\/ @version (\S+)$/m.exec(await installed.text())[1];
- for(const scriptVersion of ['1.2.51','1.2.52']){
+ for(const [start,scriptVersion,bannerCount] of [[startLegacyAutoLoader,'1.2.51',1],[startLegacyAutoLoader,'1.2.52',1],[startAutoLoader,installVersion,0]]){
   const response=await worker.fetch(new Request(new URL('/app.js',installURL)));
   const version=response.headers.get('X-Photoswiper-Version');
-  assert.ok(compareVersions(installVersion,scriptVersion)>0);
+  assert.ok(compareVersions(installVersion,'1.2.53')>0);
+  assert.ok(compareVersions(version,'1.2.53')>0);
   const code=await response.text(),nodes=[],writes=[];
   let executed=false;
   const environment={window:{},document:{documentElement:{dataset:{}},body:{appendChild:node=>nodes.push(node)},getElementById:id=>nodes.find(node=>node.id===id),createElement:()=>({style:{}})},setTimeout,clearTimeout,eval(source){
@@ -105,9 +107,9 @@ test('served app runs without an update banner in installed 1.2.51 and 1.2.52 lo
   },GM:{info:{script:{version:scriptVersion}},getValue:async()=>null,setValue:async(key,value)=>writes.push({key,value}),xmlHttpRequest(options){
    options.onload({status:response.status,responseText:code,responseHeaders:[...response.headers].map(([key,value])=>key+': '+value).join('\r\n')});
   }}};
-  assert.equal(await startLegacyAutoLoader(environment),true);
+  assert.equal(await start(environment),true);
   assert.equal(executed,true);
-  assert.equal(nodes.length,0);
-  assert.deepEqual(writes,[{key:'photoswiper-app',value:{code,version}}]);
+  assert.equal(nodes.length,bannerCount);
+  assert.deepEqual(writes,[{key:'photoswiper-app',value:{code,version,...(start===startAutoLoader?{requiredLoaderVersion:loaderAPIVersion}:{})}}]);
  }
 });

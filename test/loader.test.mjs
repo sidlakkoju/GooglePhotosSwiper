@@ -176,3 +176,20 @@ test('loader sources never use the Function constructor',async()=>{
   assert.doesNotMatch(source,/new\s+Function\b|\bFunction\s*\(/);
  }
 });
+
+test('built app releases upgrade signed caches from 1.2.52 and 1.2.53',async()=>{
+ const code=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
+ const version=/^\/\/ @version (\S+)$/m.exec(code)[1];
+ for(const cachedVersion of ['1.2.52','1.2.53']){
+  assert.ok(compareVersions(version,cachedVersion)>0);
+  const latest=signed(version,code);
+  const {env,writes}=environment(signed(cachedVersion),latest);
+  env.eval=source=>{
+   assert.ok(source.includes(code));
+   return (gm,page,window,document,location,fetch,releaseVersion)=>{window.releaseVersion=releaseVersion;};
+  };
+  assert.equal(await startLoader(env,key),true);
+  assert.equal(env.window.releaseVersion,version);
+  assert.deepEqual(writes,[latest]);
+ }
+});
