@@ -1278,7 +1278,7 @@ function mountPhotosSwipe(environment) {
   leaseTimer?.unref?.();
  }
  function pauseForOtherTab(){
-  leaseGeneration++;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();
+  leaseGeneration++;libraryLoading=null;libraryFailure=null;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();
  }
  async function renewLease(takeover=false){
   const token=leaseGeneration,account=identity?.account;
@@ -1403,7 +1403,8 @@ function mountPhotosSwipe(environment) {
  function fillLibrary(){
   if(libraryLoading||libraryFailure||closingPromise||busy||leaseError||leaseRecoveryPending||!pageActive||document.hidden||!lockedAccount||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
   const token=leaseGeneration;
-  libraryLoading=load().catch(error=>{if(token!==leaseGeneration||!pageActive||document.hidden)return;libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{libraryLoading=null;render();});
+  const loading=load().catch(error=>{if(token!==leaseGeneration||!pageActive||document.hidden)return;libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{if(libraryLoading!==loading)return;libraryLoading=null;render();});
+  libraryLoading=loading;
  }
  function refill(){
   if(idlePending||!window.Image||$('overlay').hidden)return;
@@ -1595,7 +1596,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   await suspendingPromise;
   if(busy||!pageActive||document.hidden)return;
   const token=++leaseGeneration;
-  otherTab=false;useHere.hidden=true;
+  libraryLoading=null;libraryFailure=null;otherTab=false;useHere.hidden=true;
   await resumeWrite;preloader.clear();busy=true;controls();$('overlay').hidden=false;lockPage();$('launcher').hidden=true;buffer.clear();await syncRunning;
   try{
    const result=await rawCall('identity');
@@ -1668,10 +1669,14 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  async function undo(){if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
  async function load(refresh=false) {
+  const token=leaseGeneration;
+  const assertLoadSession=()=>{if(token!==leaseGeneration)throw Error('Library loading session changed.');};
+  const loadCall=async(operation,args)=>{assertLoadSession();const result=await call(operation,args);assertLoadSession();return result;};
   buffer.clear();previousKey=null;
   libraryFailure=null;
-  const savePage=async(next,page,cursor,refresh)=>{await syncRunning;await assertSaveAccount();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
-  const result=await loadReviewPages({read:async()=>state,save:savePage,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
+  const result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  assertLoadSession();
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
 

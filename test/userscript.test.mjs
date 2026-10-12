@@ -1372,6 +1372,42 @@ test('automatic library fill yields to a foreign lease during focus, visibility 
   }finally{finish();await mounted.nodes.get('close').onclick();}
  }
 });
+test('Use here restarts automatic library fill and discards pages from the previous owner session',async()=>{
+ for(const finishBeforeTakeover of [true,false]){
+  let finish,started;const cursors=[];
+  const pending=new Promise(resolve=>{started=resolve;});
+  const mounted=await mountedReview([],{fetch:async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+   if(entry[0]!=='lcxiM')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+   const cursor=JSON.parse(entry[1])[0];cursors.push(cursor);
+   if(cursor==='old'){started();await new Promise(resolve=>{finish=resolve;});}
+   const key=cursor==='old'?'stale':'fresh';
+   return {ok:true,text:async()=>envelope(entry[0],[[[key,['https://lh3.googleusercontent.com/'+key,800,600],1720000000000,'stable-'+key]],null])};
+  }});
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await mounted.nodes.get('close').onclick();
+  await db.save(account,{...await db.read(account),started:true,exhausted:false,cursor:'old'});
+  await mounted.nodes.get('launcher').onclick();await pending;
+  try{
+   await db.lease(account,(await db.readLease(account)).owner,true);
+   await db.lease(account,'other-tab');
+   await db.save(account,{...await db.read(account),cursor:'new'});
+   const saved=await db.read(account);
+   mounted.environment.document.listeners.visibilitychange();
+   await waitForReview(()=>mounted.nodes.get('status').textContent==='Open in another tab');
+   if(finishBeforeTakeover){finish();await mounted.settle();assert.deepEqual(await db.read(account),saved);}
+   await db.lease(account,'other-tab',true);
+   await mounted.nodes.get('use-here').onclick();
+   await waitForReview(async()=> (await db.read(account)).items.some(row=>row.mediaKey==='fresh'));
+   if(!finishBeforeTakeover){finish();await mounted.settle();}
+   assert.deepEqual(cursors,['old','new']);
+   assert.deepEqual((await db.read(account)).items.map(row=>row.mediaKey),['fresh']);
+   assert.doesNotMatch(mounted.nodes.get('caption').textContent,/loading|failed/i);
+   assert.doesNotMatch(mounted.nodes.get('status').textContent,/conflict|failed|another tab/i);
+  }finally{finish();await mounted.nodes.get('close').onclick();}
+ }
+});
 test('lease timer reclaims expired ownership and preserves in-flight Trash, album and library results',async()=>{
  for(const operation of ['move-trash','send','load']){
   const timers=new Map();let timerId=0,finish,started,added=false;
