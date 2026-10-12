@@ -435,6 +435,23 @@ async function mountedReview(items,windowOverrides={},syncSettings,environmentOv
  const click=async id=>{if(id==='move-trash'&&mounted.nodes.get('review-panel').hidden)mounted.nodes.get('review').onclick();mounted.nodes.get(id).onclick();await new Promise(resolve=>setTimeout(resolve,10));await settle();};
  return {...mounted,click,settle,read:()=>db.read(account)};
 }
+test('preview repeated Trash preserves swipe Undo and repeated Keep preserves state',async()=>{
+ const mounted=await mountedReview([item('a')]);await mounted.click('remove');await mounted.click('review');
+ mounted.nodes.get('trash-review-grid').childNodes[0].childNodes[0].onclick();
+ const before=await mounted.read();mounted.nodes.get('trash-preview').childNodes.at(-1).childNodes[1].onclick();await mounted.settle();
+ assert.deepEqual(await mounted.read(),before);assert.equal(canUndoReview(before,before.history.at(-1)),true);assert.equal(mounted.nodes.get('undo').disabled,false);
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.click('remove');await mounted.click('review');mounted.nodes.get('trash-review-grid').childNodes[0].childNodes[0].onclick();
+ mounted.nodes.get('trash-preview').childNodes.at(-1).childNodes[0].onclick();await mounted.settle();const kept=await mounted.read();
+ mounted.nodes.get('trash-preview').childNodes.at(-1).childNodes[0].onclick();await mounted.settle();assert.deepEqual(await mounted.read(),kept);
+});
+test('preview repeated Trash preserves legacy marking on the next open',async()=>{
+ const mounted=await mountedReview([item('legacy',{decision:'remove',queueSent:true,revision:3})]);await mounted.click('review');
+ mounted.nodes.get('trash-review-grid').childNodes[0].childNodes[0].onclick();const before=await mounted.read();
+ mounted.nodes.get('trash-preview').childNodes.at(-1).childNodes[1].onclick();await mounted.settle();assert.deepEqual(await mounted.read(),before);
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('review');
+ assert.equal(mounted.nodes.get('trash-review-grid').childNodes[0].childNodes.at(-1).textContent,'Previously marked');
+});
 test('review Keep invalidates stale swipe Undo and retains the faded tile',async()=>{
  const mounted=await mountedReview([item('a')]);await mounted.click('remove');await mounted.click('review');
  const grid=mounted.nodes.get('trash-review-grid');grid.childNodes[0].childNodes[1].onclick();await mounted.settle();
