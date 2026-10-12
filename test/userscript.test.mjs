@@ -432,7 +432,7 @@ async function mountedReview(items,windowOverrides={},syncSettings,environmentOv
  if(windowOverrides?.indexedDB)mounted.environment.window.indexedDB=windowOverrides.indexedDB;
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
- if(syncSettings?.url)await db.saveSettings(syncSettings);
+ await db.saveSettings(syncSettings?.url?syncSettings:{onboardingDismissed:true,...(syncSettings?.onboardingDismissed===false?{onboardingDismissed:false}:{})});
  Object.assign(mounted.environment.window,windowOverrides);Object.assign(mounted.environment,environmentOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  const settle=async()=>{await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
@@ -1121,7 +1121,7 @@ test('pairing settings failure after sign-in preserves the loaded review session
 });
 
 test('sync setup lives in the gear sheet and local dismissal survives reopening',async()=>{
- const mounted=await mountedReview([item('a')]);
+ const mounted=await mountedReview([item('a')],{},{onboardingDismissed:false});
  const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
  assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
  mounted.nodes.get('settings').onclick();assert.equal(mounted.nodes.get('settings-sheet').hidden,false);
@@ -1855,13 +1855,15 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
  const mounted=await mountedReview([item('photo')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({id:'pair-id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:Date.now()+60000})};}});
  mounted.environment.AbortSignal=AbortSignal;
  const {nodes,root}=mounted;
- const panel=root.childNodes.find(node=>node['aria-label']==='Pair another device');
- assert.ok(panel);
+ const dialog=(node)=>node['aria-label']==='Pair another device'?node:node.childNodes?.map(dialog).find(Boolean);
+ const pairingPanel= root.childNodes.map(dialog).find(Boolean);
+ assert.ok(pairingPanel);
+ assert.equal(pairingPanel.className,'pairing-issuer settings-sheet');
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(mounted.environment.window.indexedDB);
  await db.saveSettings({url:'https://worker.example',token:'secret-token'});
  await nodes.get('pair-another').onclick();
- assert.equal(panel.hidden,false);
+ assert.equal(pairingPanel.hidden,false);
  const before=await mounted.read();
  for(const key of ['ArrowLeft','ArrowRight','z','f',' ']){
   const event={type:'keydown',key,preventDefault(){throw Error('Pairing key swallowed');},stopImmediatePropagation(){throw Error('Pairing key stopped');}};
@@ -1869,7 +1871,7 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
  }
  assert.deepEqual(await mounted.read(),before);assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('card').classList.contains('expanded'),false);
  mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
- await new Promise(resolve=>setImmediate(resolve));assert.equal(panel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(pairingPanel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
  assert.equal(calls.at(-2).options.method,'DELETE');assert.equal(calls.at(-2).options.body,JSON.stringify({id:'pair-id'}));
 });
 test('userscript cancels the live snap-back before a filter renders another photo',async()=>{
@@ -2694,4 +2696,33 @@ test('chained review undo uploads valid history and progress without remaining d
   assert.ok(uploads.slice(before).some(upload=>upload.path==='/api/progress'));
  }
  assert.equal((await mounted.read()).history.length,0);
+});
+
+test('unpaired launcher shows the receiver with another Photos tab open',async()=>{
+ const first=await mountedReview([item('a')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(first.environment.window.indexedDB);await db.saveSettings({});
+ const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ await second.nodes.get('launcher').onclick();
+ const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
+ assert.ok(receiver);assert.equal(receiver.hidden,false);assert.ok(second.nodes.get('pairing-short-code'));
+ await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
+});
+
+test('Settings pairing sends six digits and preserves credentials on failure',async()=>{
+ const calls=[],mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:false,status:400};}});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const saved={url:'https://worker.example',token:'existing-token'};await db.saveSettings(saved);
+ mounted.environment.window.fetch=async(url,options)=>{calls.push({url,options});return {ok:false,status:400};};
+ mounted.nodes.get('sync-url').value='';mounted.nodes.get('pair-code').value='123 456';
+ await mounted.nodes.get('pair-submit').onclick();
+ assert.equal(calls[0].url,'https://worker.example/api/pair/claim');assert.equal(JSON.parse(calls[0].options.body).short,'123456');
+ assert.deepEqual(await db.settings(),saved);
+ const feedback=mounted.nodes.get('enter-pairing-code').childNodes.at(-1);
+ assert.match(feedback.textContent,/Code expired or unavailable/);assert.equal(mounted.nodes.get('pair-submit').disabled,false);
+ mounted.nodes.get('sync-url').value='invalid';await mounted.nodes.get('pair-submit').onclick();
+ assert.match(feedback.textContent,/valid HTTPS Worker origin/);assert.equal(calls.length,1);assert.deepEqual(await db.settings(),saved);
+ await mounted.nodes.get('close').onclick();
 });

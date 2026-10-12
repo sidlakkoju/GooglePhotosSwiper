@@ -39,7 +39,8 @@ const layoutAndTrashReviewGrowthBytes=20*1024;
 const prePairingCurrentBytes=layoutAndTrashReviewGrowthBytes+continuousLibraryGrowthBytes+keyboardIsolationGrowthBytes+performanceGrowthBytes+centeredShellGrowthBytes+mobileLayoutGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const recoveryGrowthBudgetBytes=4*1024;
 const pairingServerErrorGrowthBytes=256;
-const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes;
+const pairingLeaseFixGrowthBytes=2048;
+const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
 test('pairing bundle stays within the 15 KB pairing and 4 KB recovery growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
 test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
@@ -133,10 +134,10 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  const card=context.card;
  assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
- const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('  }catch(error)',ui.indexOf(' async function openSession()')));
+ const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('   if(!await renewLease())return;',ui.indexOf(' async function openSession()')));
  for(const settings of [{},{onboardingDismissed:true},{url:'https://worker.example',token:'synthetic-token'}]){
   const nodes={},node=id=>nodes[id]||(nodes[id]={});
-  const state={$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,message(){},idleMessage:()=>''};
+  const state={$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){},renewLease:async()=>true,message(){},idleMessage:()=>''};
   await vm.runInNewContext('(async()=>{'+opening+'})()',state);
   assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');
  }
@@ -237,3 +238,4 @@ test('receiver cancellation, Escape and successful pairing notify shortcut suppr
   assert.equal(panel.hidden,true);assert.equal(closes,1);
  }
 });
+test('background suspension expires from the server deadline on the next tick',async()=>{const f=fixture();await f.open();f.setTime(310000);await f.timers.shift()();assert.equal(f.modal.children[0].textContent,'Code expired');assert.equal(f.timers.length,0);assert.equal(f.calls.at(-2).options.method,'DELETE');});
