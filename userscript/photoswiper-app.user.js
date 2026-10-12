@@ -970,7 +970,8 @@ const TURN=550;
   if(!isVisible()||document.hidden)return;
   const k=motion?.matches?1:Math.min(1,Math.max(0,(now-started)/TURN)),progress=1-Math.pow(1-k,3);
   current=from+(target-from)*progress;
-  render(k<1?direction*2*Math.PI*progress:0);
+  const turnProgress=1+2.85*Math.pow(k-1,3)+1.85*Math.pow(k-1,2);
+  render(k<1?direction*2*Math.PI*turnProgress:0);
   if(k<1)frame=renderingWindow.requestAnimationFrame(paintFrame);else direction=0;
  }
  function wake(){if(direction&&frame===null&&isVisible()&&!document.hidden)frame=renderingWindow.requestAnimationFrame(paintFrame);}

@@ -56,6 +56,18 @@ for(const [name,initial,next,direction] of [['right',0,1e6,1],['left',1e6,0,-1]]
  const settled=transforms();tick(2000);assert.deepEqual(transforms(),settled);
 });
 
+for(const [initial,next,direction] of [[0,1e6,1],[1e6,0,-1]])test(`capsule overshoots and bounces back to the front on ${direction>0?'increase':'decrease'}`,()=>{
+ const animated=capsuleFixture(),resting=capsuleFixture();
+ resting.capsule.update(next);const restingX=resting.centerX();
+ animated.capsule.update(initial);animated.capsule.update(next);animated.tick(350);
+ const overshoot=direction*(animated.centerX()-restingX);
+ assert.ok(overshoot>10);
+ animated.tick(450);const returning=direction*(animated.centerX()-restingX);
+ assert.ok(returning>0);assert.ok(returning<overshoot);
+ animated.tick(550);assert.equal(animated.frames.size,0);assert.deepEqual(animated.transforms(),resting.transforms());
+ animated.tick(2000);assert.deepEqual(animated.transforms(),resting.transforms());
+});
+
 test('capsule follows logarithmic heat, count-up and immediate reset',()=>{
  const {capsule,svg,element,chip,frames,tick}=capsuleFixture();
  capsule.update(0);assert.equal(svg.attributes.width,78);assert.equal(svg.attributes.height,32);assert.equal(svg.children[1].attributes.fill,'rgba(52,199,89,1)');
