@@ -196,11 +196,11 @@ test('sign-in page permits GIS styles while restricting scripts and framing',asy
  const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
  assert.equal(response.status,200);
  const html=await response.text(),csp=Object.fromEntries(response.headers.get('Content-Security-Policy').split(';').map(part=>part.trim().split(/\s+/)).map(([name,...sources])=>[name,sources]));
- const style=html.match(/<style>([\s\S]*?)<\/style>/)[1],script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+ const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
  const sourceHash=async value=>"'sha256-"+Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))).toString('base64')+"'";
  assert.deepEqual(csp['style-src'],['https://accounts.google.com/gsi/style',"'unsafe-inline'"]);
  assert.deepEqual(csp['style-src-attr'],["'unsafe-inline'"]);
- assert.deepEqual(csp['style-src-elem'],['https://accounts.google.com/gsi/style',await sourceHash(style)]);
+ assert.deepEqual(csp['style-src-elem'],['https://accounts.google.com/gsi/style',"'unsafe-inline'"]);
  assert.deepEqual(csp['script-src'],['https://accounts.google.com',await sourceHash(script)]);
  assert.deepEqual(csp['default-src'],["'none'"]);
  assert.deepEqual(csp['frame-src'],['https://accounts.google.com']);
