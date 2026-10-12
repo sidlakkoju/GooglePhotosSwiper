@@ -422,7 +422,7 @@ test('mounted bundle keeps album links and Undo responds before failed storage',
  assert.equal(mounted.root.getElementById('album').href,'https://photos.google.com/u/2/album/album');
  assert.equal(mounted.nodes.get('keep').disabled,false);
  assert.equal(mounted.nodes.get('remove').disabled,false);
- mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ mounted.nodes.get('keep').onclick();await waitForReview(async()=>(await db.read(account)).items[0].decision==='keep');
  assert.equal((await db.read(account)).items[0].decision,'keep');
  fault.failSave=true;mounted.nodes.get('undo').onclick();
  assert.match(mounted.nodes.get('caption').textContent,/^a · /);
@@ -430,8 +430,9 @@ test('mounted bundle keeps album links and Undo responds before failed storage',
  await waitForReview(()=>/Local save failed.*pending changes/.test(mounted.nodes.get('status').textContent));
  assert.match(mounted.nodes.get('status').textContent,/Local save failed.*pending changes/);
  assert.equal((await db.read(account)).items[0].decision,'keep');
- fault.failSave=false;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ fault.failSave=false;mounted.nodes.get('keep').onclick();await waitForReview(async()=>(await db.read(account)).items[0].decision==='keep');
  assert.equal((await db.read(account)).items[0].decision,'keep');
+ await mounted.nodes.get('close').onclick();
 });
 function dismissReviewPairing(mounted){
  const receiver=mounted.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet'&&!node.hidden);
@@ -1408,6 +1409,31 @@ test('Use here restarts automatic library fill and discards pages from the previ
   }finally{finish();await mounted.nodes.get('close').onclick();}
  }
 });
+test('close cancels automatic library fill and leaves lease renewal stopped',async()=>{
+ const timers=new Map();let timerId=0,finish,started;
+ const pending=new Promise(resolve=>{started=resolve;});
+ const mounted=await mountedReview([],{fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='lcxiM'){started();await new Promise(resolve=>{finish=resolve;});}
+  return {ok:true,text:async()=>envelope(entry[0],[[],null])};
+ }},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();assert.equal(timers.size,0);
+ await db.save(account,{...await db.read(account),started:true,exhausted:false,cursor:'next'});
+ await mounted.nodes.get('launcher').onclick();await pending;
+ const tick=[...timers.values()][0];
+ try{
+  const saved=await db.read(account);
+  await mounted.nodes.get('close').onclick();
+  assert.equal(timers.size,0);assert.equal(mounted.nodes.get('overlay').hidden,true);
+  await tick();assert.equal(timers.size,0);
+  finish();await mounted.settle();
+  assert.deepEqual(await db.read(account),saved);
+  assert.equal(timers.size,0);
+ }finally{finish();await mounted.nodes.get('close').onclick();}
+});
+
 test('lease timer reclaims expired ownership and preserves in-flight Trash, album and library results',async()=>{
  for(const operation of ['move-trash','send','load']){
   const timers=new Map();let timerId=0,finish,started,added=false;
@@ -2992,6 +3018,7 @@ test('undoing a review Keep returns to swipe review across reopen',async()=>{
 test('chained review undo uploads valid history and progress without remaining dirty',async()=>{
  let scheduledSync;
  const uploads=[];
+ const remote={decisions:[],history:[],progress:{}};
  const mounted=await mountedReview([item('a'),item('b')],{
   setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
   clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
@@ -3000,8 +3027,11 @@ test('chained review undo uploads valid history and progress without remaining d
    if(path==='/api/undo'&&options.method==='PUT'){
     assert.ok(value.history.every(entry=>Object.keys(entry).every(key=>['key','previous','decision','revision'].includes(key))));
    }
+   if(path==='/api/decisions'&&value)remote.decisions=value.decisions.filter(entry=>entry.decision!==null);
+   if(path==='/api/undo'&&value)remote.history=value.history;
+   if(path==='/api/progress'&&value)remote.progress=value;
    if(value)uploads.push({path,value});
-   return {ok:true,json:async()=>path==='/api/progress'&&options.method==='PUT'?{items:value.items}:{decisions:[],history:[],progress:{}}};
+   return {ok:true,json:async()=>path==='/api/progress'&&options.method==='PUT'?{items:value.items}:remote};
   }
  },{url:'https://sync.example',token:'synthetic-token'},{AbortSignal});
  await mounted.click('remove');await mounted.click('review');
@@ -3009,14 +3039,16 @@ test('chained review undo uploads valid history and progress without remaining d
  mounted.nodes.get('review-panel').childNodes[0].childNodes[1].onclick();await mounted.settle();
  mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();
  for(const decision of ['keep','remove',null]){
+  const before=uploads.length;
   await mounted.click('undo');
   assert.equal((await mounted.read()).items[0].decision,decision);
-  const before=uploads.length;scheduledSync();
+  scheduledSync();
   await waitForReview(async()=>!(await mounted.read()).syncDirty);
   assert.ok(uploads.slice(before).some(upload=>upload.path==='/api/undo'));
   assert.ok(uploads.slice(before).some(upload=>upload.path==='/api/progress'));
  }
  assert.equal((await mounted.read()).history.length,0);
+ await mounted.nodes.get('close').onclick();
 });
 
 test('unpaired launcher shows the receiver with another Photos tab open',async()=>{
