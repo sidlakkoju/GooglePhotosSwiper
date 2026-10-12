@@ -2128,15 +2128,18 @@ test('signed-in privileged bundle uses page AbortSignals for library, album and 
  assert.equal(under.hidden,true);
  });
 
-test('a failed under-card preview refreshes and exposes Retry on another failure',async()=>{
+test('a failed display after a broken under-card preview refreshes and exposes Retry on another failure',async()=>{
  const calls=[],mounted=await mountedReview([item('a'),item('b'),item('c')],async(url,options)=>{
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
   return {ok:true,text:async()=>envelope('VrseUb',[[key,['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://video-downloads.google.com/download'])};
  });
  const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');preview.complete=true;preview.naturalWidth=0;
  await mounted.click('keep');await settlePreviews();
+ assert.deepEqual(calls,[]);
+ const media=mounted.nodes.get('media'),displayed=media.querySelector('img');assert.ok(displayed);assert.notEqual(displayed,preview);
+ await displayed.onerror();await settlePreviews();
  assert.deepEqual(calls,['b']);
- const media=mounted.nodes.get('media'),refreshed=media.querySelector('img');assert.ok(refreshed);assert.notEqual(refreshed,preview);
+ const refreshed=media.querySelector('img');assert.ok(refreshed);assert.notEqual(refreshed,displayed);
  assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
  await refreshed.onerror();assert.equal(media.querySelector('button').textContent,'Retry');
  media.querySelector('button').onclick();await settlePreviews();
