@@ -5,6 +5,7 @@ import {readFileSync,readdirSync} from 'node:fs';
 import {googleAuthRequest,verifyGoogleToken,googleClientId,syncOrigin} from '../worker/src/google-auth.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
 import {hash} from '../worker/src/pairing.mjs';
+import {runInNewContext} from 'node:vm';
 class D1 {
  constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of readdirSync(new URL('../worker/migrations/',import.meta.url)).sort())this.sqlite.exec(readFileSync(new URL('../worker/migrations/'+file,import.meta.url),'utf8'));}
  prepare(sql){const statement=this.sqlite.prepare(sql);const bound=args=>({first:async()=>statement.get(...args)||null,all:async()=>({results:statement.all(...args)}),run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:this.sqlite.prepare('SELECT changes() AS n').get().n}})});return {...bound([]),bind:(...args)=>{if(/\bLIKE\s+\?/i.test(sql)&&args.some(arg=>typeof arg==='string'&&arg.endsWith('%')&&arg.length>50))throw Error('LIKE pattern too long');return bound(args);}};}
@@ -187,4 +188,33 @@ test('Keep and undo-to-keep replace synced removes through both write endpoints'
   assert.equal((await (await api('trash-check','POST',{ids:['photo']})).json()).safe,false);
   assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions').get().decision,'keep');
  }
+});
+
+test('sign-in page permits GIS styles while restricting scripts and framing',async()=>{
+ const env={DB:new D1()},state='q'.repeat(43);
+ await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ assert.equal(response.status,200);
+ const html=await response.text(),csp=Object.fromEntries(response.headers.get('Content-Security-Policy').split(';').map(part=>part.trim().split(/\s+/)).map(([name,...sources])=>[name,sources]));
+ const style=html.match(/<style>([\s\S]*?)<\/style>/)[1],script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+ const sourceHash=async value=>"'sha256-"+Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))).toString('base64')+"'";
+ assert.deepEqual(csp['style-src'],['https://accounts.google.com/gsi/style',"'unsafe-inline'"]);
+ assert.deepEqual(csp['style-src-attr'],["'unsafe-inline'"]);
+ assert.deepEqual(csp['style-src-elem'],['https://accounts.google.com/gsi/style',await sourceHash(style)]);
+ assert.deepEqual(csp['script-src'],['https://accounts.google.com',await sourceHash(script)]);
+ assert.deepEqual(csp['default-src'],["'none'"]);
+ assert.deepEqual(csp['frame-src'],['https://accounts.google.com']);
+ assert.deepEqual(csp['connect-src'],["'self'",'https://accounts.google.com']);
+ assert.deepEqual(csp['frame-ancestors'],["'none'"]);
+ assert.deepEqual(csp['base-uri'],["'none'"]);
+ assert.doesNotMatch(html,/\sstyle\s*=/i);
+ assert.match(html,/name="viewport"/);
+ const elements={status:{},code:{hidden:true},button:{}};
+ let callback;
+ runInNewContext(script,{google:{accounts:{id:{initialize:options=>callback=options.callback,renderButton:element=>assert.equal(element,elements.button)}}},document:{getElementById:id=>elements[id]},fetch:async()=>Response.json({code:'r'.repeat(43)})});
+ await callback({credential:'test'});
+ assert.equal(elements.status.textContent,'Copy this code back into Photos Swipe.');
+ assert.equal(elements.code.hidden,false);
+ assert.equal(elements.code.value,'r'.repeat(43));
+ assert.match(html,/<input id="code"[^>]*readonly hidden>/);
 });
