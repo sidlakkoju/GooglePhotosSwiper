@@ -941,8 +941,9 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     const playback=Array.from(media.querySelectorAll('[data-video-control]'));
     const opaque=doc.defaultView.getComputedStyle(top).backgroundColor===background&&doc.defaultView.getComputedStyle(media).backgroundColor===background;
     const covered=doc.defaultView.getComputedStyle(top).opacity==='1'&&doc.defaultView.getComputedStyle(top).visibility==='visible'&&front.left<=behind.left&&front.right>=behind.right&&front.top<=behind.top&&front.bottom>=behind.bottom&&doc.defaultView.getComputedStyle(top).zIndex>doc.defaultView.getComputedStyle(under).zIndex;
+    const captionVisible=caption.parentElement===content&&filename.height>=caption.scrollHeight&&filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
     const clearOfControls=playback.every(button=>bounds(button).bottom<=filename.top&&bounds(button).left>=box.left&&bounds(button).right<=box.right);
-    videoChecks.push({loading,background,opaque,covered,clearOfControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
+    videoChecks.push({loading,background,opaque,covered,captionVisible,clearOfControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
    }
    sheet.hidden=false;
    const controls=['filter','sort','review-every','delete-method'].map(id=>root.getElementById(id));
@@ -966,7 +967,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,5,result.stdout);
   for(const measurement of measurements){
-   for(const check of measurement.videoChecks)for(const key of ['opaque','covered','clearOfControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
+   for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(540,measurement.width),JSON.stringify(measurement));
@@ -1029,6 +1030,24 @@ test('mounted Keep names the decided item after advancing and during candidate i
  await mounted.click('keep');
  assert.equal(mounted.nodes.get('status').textContent,'Kept next.jpg.');
 });
+test('filename stays below the card through status changes, decisions and undo',async()=>{
+ const first='holiday <photo> & family.jpg',second='next-photo.jpg';
+ const mounted=await mountedReview([item('first',{name:first}),item('second',{name:second})]);
+ const caption=mounted.nodes.get('caption'),card=mounted.nodes.get('card');
+ const findParent=node=>node.childNodes?.includes(card)?node:(node.childNodes||[]).map(findParent).find(Boolean);
+ const content=findParent(mounted.root);
+ assert.ok(content?.childNodes.includes(caption));
+ assert.equal(content.childNodes.indexOf(caption),content.childNodes.indexOf(card)+1);
+ assert.ok(caption.textContent.startsWith(first));
+ mounted.nodes.get('status').textContent='';
+ assert.ok(caption.textContent.startsWith(first));
+ await mounted.click('keep');
+ assert.ok(caption.textContent.startsWith(second));
+ assert.equal(mounted.nodes.get('status').textContent,`Kept ${first}.`);
+ await mounted.click('undo');
+ assert.ok(caption.textContent.startsWith(first));
+});
+
 test('mounted photo and video captions show file size with explicit unknown metadata',async()=>{
  for(const type of ['photo','video']){
   for(const [size,label] of [[112000,'112 KB'],[2500000,'2.5 MB'],[1200000000,'1.2 GB'],[0,'0 KB'],[undefined,'Unknown size'],[null,'Unknown size']]){
