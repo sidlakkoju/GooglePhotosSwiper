@@ -381,11 +381,13 @@ test('mounted undo restores undecided after queue, keep instead, and two undos',
  await mounted.click('keep');
  assert.equal((await mounted.read()).items[0].decision,'keep');
  await mounted.click('undo');
+ await waitForReview(async()=>{const state=await mounted.read();return state.items[0].decision==='remove'&&state.history.length===1;});
  assert.equal((await mounted.read()).items[0].decision,'remove');
  assert.equal(mounted.nodes.get('queue').childNodes.length,1);
  assert.match(mounted.nodes.get('caption').textContent,/^Candidate inspection · a · /);
  assert.equal(mounted.nodes.get('keep').textContent,'Keep instead');
  await mounted.click('undo');
+ await waitForReview(async()=>{const state=await mounted.read();return state.items[0].decision===null&&state.history.length===0;});
  const state=await mounted.read();
  assert.equal(state.items[0].decision,null);assert.equal(state.items[0].revision,4);
  assert.equal(mounted.nodes.get('queue').childNodes.length,0);
@@ -419,7 +421,7 @@ test('Undo after a synced Keep keeps its confirmation through the next sync',asy
  releaseSync();
  await waitForReview(()=>syncStatus.textContent==='Synced · 0 reviewed IDs');
  assert.match(status.textContent,/Last swipe undone/);
- await mounted.settle();
+ await waitForReview(async()=>{const state=await mounted.read();return state.items[0].decision===null&&state.history.length===0;});
  assert.equal((await mounted.read()).items[0].decision,null);
  assert.ok(uploads.some(value=>value.decisions?.some(row=>row.id==='synthetic-undo'&&row.decision===null)));
 });
@@ -440,19 +442,20 @@ test('Trash writes require confirmation and bounded valid stable identifiers',as
 });
 test('mounted undo survives a fresh script instance with the same IndexedDB',async()=>{
  const first=await mountedReview([item('a',{size:1}),item('b',{size:100})]);await first.click('keep');
+ await waitForReview(async()=>{const state=await first.read();return state.items[0].decision==='keep'&&state.history.length===1;});
  await first.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
  second.nodes.get('undo').onclick();
- await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await waitForReview(async()=>{const state=await first.read();return state.items[0].decision===null&&state.history.length===0;});
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
  assert.equal(second.nodes.get('status').textContent,'Last swipe undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
- await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await waitForReview(async()=>{const state=await first.read();return state.items[0].decision==='keep'&&state.items[1].decision===null&&state.history.length===1;});
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
@@ -1891,7 +1894,8 @@ function controlledCardAnimations(mounted){
  return animations;
 }
 async function waitForReview(predicate){
- for(let count=0;count<200;count++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,1));}
+ const deadline=Date.now()+10000;
+ while(Date.now()<deadline){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,10));}
  assert.fail('Synthetic review did not settle');
 }
 function pressReviewKey(mounted,key){mounted.environment.window.listeners.keydown({key,preventDefault(){},stopImmediatePropagation(){}});}
@@ -2304,6 +2308,7 @@ test('failed sync remains visible alongside keep, queue and undo confirmations',
   assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
   assert.equal(mounted.nodes.get('settings').classList.contains('gear-error'),true);
  }
+ await waitForReview(async()=>{const state=await mounted.read();return state.items[0].decision==='keep'&&state.items[1].decision===null&&state.history.length===1;});
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
 });
 
