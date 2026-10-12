@@ -2707,6 +2707,12 @@ test('unpaired launcher shows the receiver with another Photos tab open',async()
  await second.nodes.get('launcher').onclick();
  const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
  assert.ok(receiver);assert.equal(receiver.hidden,false);assert.ok(second.nodes.get('pairing-short-code'));
+ const code=second.nodes.get('pairing-short-code');assert.equal(second.root.activeElement,code);
+ for(const key of '123456'){
+  let prevented=false;second.environment.window.listeners.keydown({key,preventDefault(){prevented=true;},stopImmediatePropagation(){}});
+  assert.equal(prevented,false);assert.equal(second.root.activeElement,code);code.value+=key;code.oninput();
+ }
+ assert.equal(code.value,'123456');
  await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
 });
 
@@ -2771,4 +2777,27 @@ test('receiver claim during session opening activates the saved pairing after le
   assert.equal(mounted.nodes.get('sync-url').value,'https://photoswiper-sync.sidlakkoju.workers.dev');
   assert.ok(calls.some(({url,options})=>new URL(url).pathname==='/api/state'&&options.headers.Authorization==='Bearer receiver-token'));
  }finally{fault.leaseGate=null;release();await opening;await claiming;await mounted.nodes.get('close').onclick();}
+});
+
+
+test('Settings pairing retains the claimed token after an in-flight sync returns 401',async()=>{
+ let release,started=false,claimed=false,rejectOld=false;
+ const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
+  if(url.endsWith('/api/pair/claim')){claimed=true;return {ok:true,json:async()=>({token:'claimed-token'})};}
+  if(rejectOld&&options.headers.Authorization==='Bearer old-token'){started=true;return new Promise(resolve=>{release=()=>resolve({ok:false,status:401});});}
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{},items:[{mediaKey:'a'}]})};
+ }},{url:'https://worker.example',token:'old-token'});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ rejectOld=true;await mounted.click('keep');let pairing;
+ try{
+  await waitForReview(()=>started);
+  mounted.nodes.get('pair-code').value='123456';pairing=mounted.nodes.get('pair-submit').onclick();
+  await waitForReview(()=>claimed);
+  await new Promise(resolve=>setTimeout(resolve,10));
+  release();await pairing;
+  assert.deepEqual(await db.settings(),{url:'https://worker.example',token:'claimed-token',onboardingDismissed:true});
+  assert.equal(mounted.nodes.get('unpaired-banner').hidden,true);
+  assert.match(mounted.nodes.get('enter-pairing-code').childNodes.at(-1).textContent,/Device paired/);
+ }finally{release?.();await pairing;await mounted.nodes.get('close').onclick();}
 });
