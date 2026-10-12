@@ -2515,3 +2515,48 @@ for(const interruption of ['hidden','load','refresh'])test(`blocked review retri
   assert.match(mounted.nodes.get('caption').textContent,/^recovered ·/);
  }finally{holding=false;releaseRecovery();releaseOperation();mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();}
 });
+
+for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} drains a swipe awaiting identity before releasing ownership`,async()=>{
+ let holding=false,started,finish;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview([item('a')],{crypto});
+ mounted.nodes.get('keep').onclick();holding=true;await checking;
+ if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+ else mounted.environment.window.listeners.pagehide();
+ holding=false;finish();await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,'other');await db.lease(account,'other',true);
+ mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();
+});
+
+test('Close cancels a busy lease recovery awaiting identity',async()=>{
+ const timers=new Map();let timerId=0,holding=false,started,finish;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview([item('a')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();await db.lease(account,'other');await mounted.nodes.get('launcher').onclick();await db.lease(account,'other',true);
+ holding=true;const recovering=[...timers.values()][0]();await checking;
+ const closing=mounted.nodes.get('close').onclick();holding=false;finish();await Promise.all([recovering,closing]);await mounted.settle();
+ assert.equal(mounted.nodes.get('overlay').hidden,true);assert.equal(timers.size,0);await db.lease(account,'other');
+});
+
+for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} stops album RPCs after an in-flight mutation`,async()=>{
+ const requests=[];let started,finish;
+ const creating=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],{confirm:()=>true,fetch:async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
+  if(id==='OXvT9d'){started();await gate;}
+  return {ok:true,text:async()=>envelope(id,id==='Z5xsfc'?[[],null]:id==='OXvT9d'?[['album']]:[])};
+ }});
+ const operation=mounted.nodes.get('send').onclick();await creating;
+ if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+ else mounted.environment.window.listeners.pagehide();
+ const before=requests.length;finish();await operation;await mounted.settle();
+ assert.equal(requests.length,before);assert.match(mounted.nodes.get('status').textContent,/Session changed/);
+ mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();
+});

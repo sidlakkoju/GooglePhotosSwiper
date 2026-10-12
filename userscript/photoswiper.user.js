@@ -873,7 +873,7 @@ function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
   }).finally(()=>{running=null;});
   return running;
  }
- return {enqueue(){pending=true;return flush();},flush,get pending(){return pending;}};
+ return {enqueue(){pending=true;return flush();},flush,get pending(){return pending;},get flushing(){return !!running;}};
 }
 
 function mountPhotosSwipe(environment) {
@@ -1144,7 +1144,7 @@ function mountPhotosSwipe(environment) {
  revokeOthers.onclick=()=>{if(window.confirm('Revoke all other devices? They will stop syncing immediately, including the legacy shared token.'))return run(async()=>{await syncClient.revokeOthers();await showDevices();});};
  pairAgain.onclick=()=>{openSettings();settingsPanel.open=true;pairingPanel.open=true;$('pair-code').focus();};dismissUnpaired.onclick=()=>{unpairedBanner.hidden=true;};pairedNotice.onclick=()=>{openSettings();settingsPanel.open=true;devicesPanel.open=true;return run(showDevices);};
  pairSubmit.onclick=()=>run(async()=>{const url=validateSyncSettings($('sync-url').value.trim(),'pairing').url,code=$('pair-code').value.trim(),name=$('pair-name').value.trim();if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');const result=await syncClient.pair(url,code,name,window.navigator?.platform||'Browser');const settings={url,token:result.token,onboardingDismissed:true};await (await pairingPromise).saveSettings(settings);$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;unpairedBanner.hidden=true;pairingPanel.open=false;await synchronize();await showDevices();});
- let pageActive=true;
+ let pageActive=true,suspendingPromise=null;
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
@@ -1177,9 +1177,12 @@ function mountPhotosSwipe(environment) {
  function persistResume(){if(!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value=structuredClone(resume);resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
  function captureVideo(){const video=$('media').querySelector('video');if(video&&video.dataset.resumeReady!=='pending'&&shown&&Number.isFinite(video.currentTime)){resume={...resume,video:{key:shown,time:video.currentTime}};persistResume();}}
  async function call(operation,args={}) {
+  if(!pageActive||document.hidden)throw Error('Session changed. Close and reopen Photos Swipe.');
   if(leaseError)throw leaseError;
+  const token=leaseGeneration;
   const result=await rawCall(operation,{...args,...(identity?{account:identity.account}:{})});
   if(!result.ok)throw Error(result.error);
+  if(!pageActive||document.hidden||token!==leaseGeneration)throw Error('Session changed. Close and reopen Photos Swipe.');
   if(leaseError)throw leaseError;
   return result.data;
  }
@@ -1203,7 +1206,6 @@ function mountPhotosSwipe(environment) {
  async function assertSaveAccount(){
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
   await assertAccount();
-  if(!pageActive||document.hidden)throw Error('Session changed. Close and reopen Photos Swipe.');
   try{await db.lease(identity.account,owner);}catch(error){lockedAccount=null;leaseError=error;startRenewal();message(error.message);throw error;}
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
  }
@@ -1234,7 +1236,7 @@ function mountPhotosSwipe(environment) {
   if(!pageActive||document.hidden||$('overlay').hidden||(recovering&&(busy||activeOperation)))return;
   if(recovering)leaseRecoveryPending=true;
   if(!await renewLease()||token!==leaseGeneration)return;
-  if(recovering){await open();return;}
+  if(recovering){if(closingPromise||$('overlay').hidden)return;await open();return;}
   writes.flush();refill();
   if(++leaseTicks%15===0&&syncEnabled&&!busy&&!activeOperation&&!$('overlay').hidden)synchronize();
  }
@@ -1488,7 +1490,9 @@ function mountPhotosSwipe(environment) {
   try{await Promise.race([animation.finished,new Promise(resolve=>{timer=window.setTimeout(()=>{animation.finish();resolve();},350);})]);}catch{}finally{window.clearTimeout(timer);}
  }
  async function openSession() {
-  if(closingPromise)await closingPromise;
+  const requestedGeneration=leaseGeneration;
+  if(closingPromise){await closingPromise;if(requestedGeneration!==leaseGeneration)return;}
+  await suspendingPromise;
   if(busy)return;
   await resumeWrite;preloader.clear();busy=true;controls();$('overlay').hidden=false;$('launcher').hidden=true;buffer.clear();await syncRunning;
   const token=++leaseGeneration;
@@ -1587,14 +1591,22 @@ function mountPhotosSwipe(environment) {
  const swipeFeedback=createSwipeFeedback({window,targets:[$('media'),$('swipe')],card:topCard,under:underCard,keep:stamps[0],remove:stamps[1],canSwipe:()=>!!current()&&!busy&&!inspected&&!$('overlay').hidden&&!$('card').classList.contains('expanded')&&Number($('zoom').value)<=1,onDecide:decide,playbackOnClick:true});
  $('overlay').addEventListener('dragstart',event=>event.preventDefault());
  $('media').addEventListener('dblclick',event=>{if(event.target.tagName!=='VIDEO')toggleEnlarge();});
+ function suspendPage(){
+  pageActive=false;
+  clearInterval(leaseTimer);leaseTimer=null;
+  if(suspendingPromise)return suspendingPromise;
+  if(!writes.pending&&!writes.flushing)return releaseLease();
+  suspendingPromise=writes.flush().finally(()=>releaseLease()).finally(()=>{suspendingPromise=null;});
+  return suspendingPromise;
+ }
  function leavePage(){
-  pageActive=false;releaseLease();
+  suspendPage();
   stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
  }
  window.addEventListener('pagehide',leavePage);
  window.addEventListener('unload',leavePage);
  window.addEventListener('focus',()=>{if(identity&&!busy&&!$('overlay').hidden)synchronize();});
- document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();pageActive=false;releaseLease();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else{pageActive=true;if(identity&&!$('overlay').hidden){startRenewal();if(!busy&&!activeOperation){refreshLease();refreshStalePreviews();}}}});
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else{pageActive=true;if(identity&&!$('overlay').hidden){startRenewal();if(!busy&&!activeOperation){refreshLease();refreshStalePreviews();}}}});
  window.addEventListener('pageshow',()=>{pageActive=true;if(!document.hidden&&!$('overlay').hidden)return open();});
  const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
  function handleViewerSpace(event){
