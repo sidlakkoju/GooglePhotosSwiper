@@ -24,10 +24,11 @@ const prePairingMainBytes=84533;
 const photoURLRefreshGrowthBytes=3194;
 const themeGrowthBytes=3078;
 const loaderPairingOnboardingGrowthBytes=701;
+const iosSwipeCancelGrowthBytes=200;
 const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
 const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
 const centeredShellGrowthBytes=12000;
-const prePairingCurrentBytes=centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+isolationBytes;
+const prePairingCurrentBytes=centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const pairingGrowthBudgetBytes=15*1024;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
 test('pairing bundle stays within the 15 KB growth budget without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});

@@ -692,8 +692,8 @@ test('overlay isolates pointer touch wheel and all key events while preserving n
  }
  const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
  const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
- assert.match(source,/\.card\{touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
- assert.match(source,/\.media\{touch-action:pan-y;[^}]*overflow:auto/);
+ assert.match(source,/\.card\{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media\{touch-action:none;[^}]*overflow:auto/);
  assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
  assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
