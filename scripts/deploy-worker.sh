@@ -30,4 +30,9 @@ fi
 if [[ -n "${PAIRING_IP_KEY:-}" ]]; then
   printf '%s' "$PAIRING_IP_KEY" | npx --yes wrangler@4 secret put PAIRING_IP_KEY --config "$config_path"
 fi
+secret_list="$(npx --yes wrangler@4 secret list --config "$config_path")"
+if [[ -z "${PAIRING_IP_KEY:-}" ]] && ! printf '%s' "$secret_list" | node -e 'let input="";process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>process.exit(JSON.parse(input).some(secret=>secret.name==="PAIRING_IP_KEY")?0:1));'; then
+  printf '%s\n' "Deployment blocked: PAIRING_IP_KEY is missing from the Worker. Supply it before deploying; see docs/sync.md." >&2
+  exit 1
+fi
 npx --yes wrangler@4 deploy --config "$config_path"
