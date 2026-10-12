@@ -278,15 +278,25 @@ async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},tar
 
 const LEASE_HEARTBEAT_MS=4000;
 const LEASE_EXPIRY_MS=12000;
-function createLeaseOwner(window,crypto) {
- let owner=crypto.randomUUID();
- try {
-  const key='photos-swipe-lease-owner',navigation=window.performance?.getEntriesByType('navigation')[0]?.type;
-  if(navigation==='reload'||navigation==='back_forward')owner=window.sessionStorage.getItem(key)||owner;
-  window.sessionStorage.removeItem(key);
-  window.addEventListener('pagehide',()=>{try{window.sessionStorage.setItem(key,owner);}catch{}});
-  window.addEventListener('pageshow',()=>{try{window.sessionStorage.removeItem(key);}catch{}});
- }catch{}
+async function createLeaseOwner(window,crypto) {
+ const key='photos-swipe-lease-owner';
+ let owner=crypto.randomUUID(),saved;
+ try{saved=window.sessionStorage.getItem(key);window.sessionStorage.removeItem(key);}catch{}
+ const locks=window.navigator?.locks;
+ if(locks){
+  async function claim(candidate){
+   return new Promise((resolve,reject)=>{
+    locks.request(`photos-swipe-owner:${candidate}`,{ifAvailable:true},lock=>{
+     resolve(!!lock);
+     if(lock)return new Promise(()=>{});
+    }).catch(reject);
+   });
+  }
+  if(saved&&await claim(saved))owner=saved;
+  else await claim(owner);
+ }
+ window.addEventListener?.('pagehide',()=>{try{window.sessionStorage.setItem(key,owner);}catch{}});
+ window.addEventListener?.('pageshow',()=>{try{window.sessionStorage.removeItem(key);}catch{}});
  return owner;
 }
 async function openReviewDatabase(indexedDB) {
@@ -900,7 +910,9 @@ function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
 function mountPhotosSwipe(environment) {
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
- const rawCall=environment.photosCall||createPhotosAPI(environment),owner=createLeaseOwner(window,environment.crypto);
+ const rawCall=environment.photosCall||createPhotosAPI(environment);
+ let owner;
+ const ownerReady=createLeaseOwner(window,environment.crypto).then(value=>{owner=value;});
  const host=document.createElement('div');host.id='photos-swipe-userscript-host';
  host.style.cssText='position:fixed;inset:0;z-index:2147483647;pointer-events:none';
  const root=host.attachShadow({mode:'open'});
@@ -1295,6 +1307,7 @@ function mountPhotosSwipe(environment) {
   leaseGeneration++;cancelLibraryFill();window.clearTimeout(syncTimer);syncTimer=null;libraryFailure=null;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();
  }
  async function renewLease(takeover=false,claim=false){
+  await ownerReady;
   const token=leaseGeneration,account=identity?.account;
   if(!account||otherTab||!pageActive||document.hidden)return false;
   try{
