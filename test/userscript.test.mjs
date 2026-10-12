@@ -2557,3 +2557,40 @@ test('library loading crosses more than twelve fully reviewed pages without a ma
  }});
  assert.equal(calls,15);assert.equal(result.exhausted,true);assert.deepEqual(reviewDeck(state).map(row=>row.mediaKey),['fresh']);
 });
+
+for(const scenario of ['empty','oldest','largest'])test(`prefetched cards render before decisions while loading continues: ${scenario}`,async()=>{
+ const second=Promise.withResolvers(),third=Promise.withResolvers();
+ let secondRequested=false,thirdRequested=false;
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e'){
+   const detail=['incoming',[]];detail[1][3]='incoming';detail[1][9]=500;
+   return {ok:true,text:async()=>envelope(entry[0],[[null,[detail]]])};
+  }
+  assert.equal(entry[0],'lcxiM');
+  if(args[0]==='second'){secondRequested=true;await second.promise;}
+  if(args[0]==='third'){thirdRequested=true;await third.promise;}
+  const keys=args[0]===null?Array.from({length:50},(_,index)=>`initial-${index}`):args[0]==='second'?['incoming']:[];
+  const date=args[0]===null?1720000000000:1710000000000;
+  return {ok:true,text:async()=>envelope(entry[0],[keys.map(key=>[key,['https://lh3.googleusercontent.com/synthetic'],date,key+'-dedup',0,{}]),args[0]===null?'second':args[0]==='second'?'third':null])};
+ };
+ const mounted=await mountedReview([],{fetch});
+ try{
+  await mounted.click('refresh');
+  if(scenario!=='empty'){mounted.nodes.get('sort').value=scenario;mounted.nodes.get('sort').onchange();}
+  for(let index=0;index<40;index++)mounted.nodes.get('keep').onclick();
+  await waitForReview(()=>secondRequested);
+  if(scenario==='empty')for(let index=0;index<10;index++)mounted.nodes.get('keep').onclick();
+  second.resolve();
+  await waitForReview(()=>thirdRequested);
+  assert.match(mounted.nodes.get('caption').textContent,/^incoming · /);
+  assert.equal(mounted.nodes.get('media').querySelector('img').alt,'incoming');
+  if(scenario==='oldest')pressReviewKey(mounted,'ArrowLeft');
+  else if(scenario==='largest')pressReviewKey(mounted,'ArrowRight');
+  else mounted.nodes.get('keep').onclick();
+  third.resolve();
+  await waitForReview(async()=>(await mounted.read()).items.find(row=>row.mediaKey==='incoming')?.decision===(scenario==='oldest'?'remove':'keep'));
+  const state=await mounted.read();
+  assert.equal(state.items.filter(row=>row.mediaKey.startsWith('initial-')&&row.decision).length,scenario==='empty'?50:40);
+ }finally{second.resolve();third.resolve();await mounted.nodes.get('close').onclick();}
+});

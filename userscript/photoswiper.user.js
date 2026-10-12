@@ -1559,7 +1559,7 @@ function mountPhotosSwipe(environment) {
  async function load(refresh=false) {
   buffer.clear();previousKey=null;
   libraryFailure=null;
-  const savePage=async(next,page,cursor,refresh)=>{await syncRunning;await assertSaveAccount();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
+  const savePage=async(next,page,cursor,refresh)=>{await syncRunning;await assertSaveAccount();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
   const result=await loadReviewPages({read:async()=>state,save:savePage,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
