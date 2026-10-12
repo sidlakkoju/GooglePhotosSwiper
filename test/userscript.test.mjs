@@ -882,7 +882,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   if(!node.tagName)return escape(node.textContent||'');
   const tag=node.tagName.toLowerCase();
   const attributes=['id','class','type','min','max','step','value'].filter(key=>typeof node[key]==='string'&&node[key]).map(key=>` ${key}="${escape(node[key])}"`).join('');
-  return `<${tag}${attributes}${node.style?.cssText?` style="${escape(node.style.cssText)}"`:''}${node.dataset?.videoControl?` data-video-control="${node.dataset.videoControl}"`:''}${node.hidden?' hidden':''}>${(node.textContent!==undefined?escape(node.textContent):'')+node.childNodes.filter(child=>parents.get(child)===node).map(serialize).join('')}</${tag}>`;
+  return `<${tag}${attributes}${node.className&&!node.class?` class="${escape(node.className)}"`: ''}${node.style?.cssText?` style="${escape(node.style.cssText)}"`:''}${node.dataset?.videoControl?` data-video-control="${node.dataset.videoControl}"`:''}${node.hidden?' hidden':''}>${(node.textContent!==undefined?escape(node.textContent):'')+node.childNodes.filter(child=>parents.get(child)===node).map(serialize).join('')}</${tag}>`;
  };
  const markup=mounted.root.childNodes.map(serialize).join('');
  const directory=await mkdtemp(join(tmpdir(),'photos-layout-'));
@@ -890,7 +890,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   const html=`<!doctype html><body><script>
   const results=[];
   for(const [width,height,expanded] of [[1440,900,false],[400,713,true],[320,633,true],[390,844,false],[320,480,false]]){
-   const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
+   const frame=document.createElement('iframe');frame.style.cssText='position:fixed;inset:0';frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
    const content=root.querySelector('.content'),overlay=root.querySelector('.overlay'),sheet=root.getElementById('settings-sheet');
@@ -925,19 +925,24 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
    });
    const controlsFit=controls.every(control=>bounds(control).left>=sheetBounds.left&&bounds(control).right<=sheetBounds.right+1);
-   results.push({width,height,syncFields,videoChecks,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
+   const issuer=root.querySelector('.pairing-issuer');issuer.hidden=false;
+   const pairingTargets=Array.from(issuer.children).slice(1,4);
+   pairingTargets[0].innerHTML='<canvas width=270 height=270></canvas>';pairingTargets[1].textContent='123 456';pairingTargets[2].textContent='01:00';
+   const pairingAboveSettings=Number(doc.defaultView.getComputedStyle(issuer).zIndex)>Number(doc.defaultView.getComputedStyle(sheet).zIndex);
+   const pairingVisible=pairingTargets.every(target=>{const box=bounds(target),hit=root.elementFromPoint(box.left+box.width/2,box.top+box.height/2);return box.width>0&&box.height>0&&(hit===target||target.contains(hit));});
+   results.push({width,height,syncFields,videoChecks,pairingAboveSettings,pairingVisible,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
   const path=join(directory,'layout.html');await writeFile(path,html);
-  const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
+  const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking','--window-size=1600,1200',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
   if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,5,result.stdout);
   for(const measurement of measurements){
    for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
-   for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder'])assert.equal(measurement[key],true,JSON.stringify(measurement));
+   for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder','pairingAboveSettings','pairingVisible'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(440,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
@@ -1867,8 +1872,12 @@ for(const dismissal of ['Escape','backdrop'])test(`pairing dialog blocks viewer 
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(mounted.environment.window.indexedDB);
  await db.saveSettings({url:'https://worker.example',token:'secret-token'});
+ nodes.get('settings').onclick();
+ assert.equal(nodes.get('settings-sheet').hidden,false);
  await nodes.get('pair-another').onclick();
  assert.equal(pairingPanel.hidden,false);
+ assert.equal(pairingPanel.style.cssText,'z-index:9;pointer-events:auto');
+ assert.equal(nodes.get('settings-sheet').hidden,false);
  const before=await mounted.read();
  for(const key of ['ArrowLeft','ArrowRight','z','f',' ']){
   const event={type:'keydown',key,preventDefault(){throw Error('Pairing key swallowed');},stopImmediatePropagation(){throw Error('Pairing key stopped');}};
