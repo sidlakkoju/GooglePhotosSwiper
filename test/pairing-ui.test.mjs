@@ -262,8 +262,37 @@ for(const action of ['sync-save','sync-local'])test(`settings pairing serializes
 });
 
 test('settings pairing releases the shared busy lock after a failed claim',async()=>{
- const context={busy:false,pairSubmit:{disabled:false},pairFeedback:{},controls(){context.pairSubmit.disabled=context.busy;},pairingPromise:Promise.resolve({settings:async()=>({})}),$:()=>({value:''}),syncClient:{pair:async()=>{throw Error('Offline');}},window:{navigator:{}}};
+ const context={busy:false,activeOperation:null,pairSubmit:{disabled:false},pairFeedback:{},controls(){context.pairSubmit.disabled=context.busy;},pairingPromise:Promise.resolve({settings:async()=>({})}),$:()=>({value:''}),syncClient:{pair:async()=>{throw Error('Offline');}},window:{navigator:{}}};
  vm.runInNewContext(ui.slice(ui.indexOf(' let pendingPairSettings;'),ui.indexOf(' let leaseTimer,')),context);
  await context.pairSubmit.onclick();
  assert.equal(context.busy,false);assert.equal(context.pairSubmit.disabled,false);assert.equal(context.pairFeedback.textContent,'Offline');
+});
+
+for(const outcome of ['success','failure'])test(`Close waits for settings pairing ${outcome} before hiding and syncing`,async()=>{
+ let stored={url:'https://worker.example',token:'old-token'},configured=stored,releaseClaim,releaseSave;
+ const syncTokens=[];
+ const nodes=Object.fromEntries(['overlay','launcher','sync-url','sync-token','pair-code','pair-name'].map(id=>[id,{value:'',hidden:false,focus(){}}]));
+ nodes['sync-url'].value=stored.url;nodes['pair-code'].value='123456';
+ const context={busy:false,activeOperation:null,openingPromise:null,syncRunning:null,pairSubmit:{disabled:false},pairFeedback:{},controls(){context.pairSubmit.disabled=context.busy;},$:id=>nodes[id],pairingPromise:Promise.resolve({settings:async()=>({...stored}),saveSettings:async value=>{await new Promise(resolve=>releaseSave=resolve);stored={...value};}}),syncClient:{pair:async()=>new Promise((resolve,reject)=>releaseClaim=()=>outcome==='success'?resolve({token:'new-token'}):reject(Error('Offline'))),configure:value=>configured=value},window:{navigator:{},clearTimeout(){}},URL,syncEnabled:true,leaseError:null,lockedAccount:'account',onboarding:{},syncLocal:{},unpairedBanner:{},message(){},idleMessage:()=>'',synchronize:async()=>{syncTokens.push(configured.token);if(configured.token==='old-token')stored={...stored,token:''};},captureVideo(){},persistResume(){},sheet:{},preloader:{clear(){}},finishCardAnimation(){},clearCardAnimation(){},writes:{flush:async()=>{}},leaseGeneration:0,leaseTimer:null,clearInterval(){},stopMedia(){},dropWarmVideo(){},buffer:{clear(){}},syncTimer:null,recoverLease:async()=>true,releaseLease:async()=>{}};
+ vm.runInNewContext(ui.slice(ui.indexOf(' let pendingPairSettings;'),ui.indexOf(' let leaseTimer,'))+ui.slice(ui.indexOf(' async function closeSession(){'),ui.indexOf(' function close(){')),context);
+ const pairing=context.pairSubmit.onclick();
+ while(!releaseClaim)await new Promise(resolve=>setImmediate(resolve));
+ assert.ok(context.activeOperation);
+ const closing=context.closeSession();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(nodes.overlay.hidden,false);assert.deepEqual(syncTokens,[]);
+ releaseClaim();
+ if(outcome==='success'){
+  while(!releaseSave)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(nodes.overlay.hidden,false);assert.deepEqual(syncTokens,[]);
+  releaseSave();
+ }
+ await pairing;await closing;
+ assert.equal(context.activeOperation,null);assert.equal(context.busy,false);assert.equal(nodes.overlay.hidden,true);
+ if(outcome==='success'){
+  assert.equal(stored.token,'new-token');assert.deepEqual(syncTokens,['new-token','new-token']);
+  assert.match(context.pairFeedback.textContent,/Device paired/);
+ }else{
+  assert.equal(context.pairFeedback.textContent,'Offline');assert.deepEqual(syncTokens,['old-token']);
+ }
 });

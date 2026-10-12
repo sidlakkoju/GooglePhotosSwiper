@@ -1173,6 +1173,7 @@ function mountPhotosSwipe(environment) {
  pairSubmit.onclick=async()=>{
   if(busy||pairSubmit.disabled){pairFeedback.textContent='Pairing is already in progress.';return;}
   busy=true;controls();pairFeedback.textContent='Pairing\u2026';
+  activeOperation=(async()=>{
   try{
    if(!pendingPairSettings){
     const previous=await (await pairingPromise).settings(),url=$('sync-url').value.trim()||previous.url||'https://photoswiper-sync.sidlakkoju.workers.dev',code=$('pair-code').value.replace(/\s/g,''),name=$('pair-name').value.trim()||'New browser';
@@ -1188,6 +1189,8 @@ function mountPhotosSwipe(environment) {
    pairFeedback.textContent='Device paired. Sync will resume when this tab can access local progress.';
    if(!leaseError&&lockedAccount)await synchronize();
   }catch(error){pairFeedback.textContent=pendingPairSettings?`${error.message}. Device claimed; choose Pair and sync to retry saving.`:error.message;}finally{busy=false;controls();}
+  })();
+  await activeOperation;activeOperation=null;
  };
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
