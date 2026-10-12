@@ -7,7 +7,7 @@ import {syncRequest} from '../worker/src/sync.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 class D1 {
  constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of readdirSync(new URL('../worker/migrations/',import.meta.url)).sort())this.sqlite.exec(readFileSync(new URL('../worker/migrations/'+file,import.meta.url),'utf8'));}
- prepare(sql){const statement=this.sqlite.prepare(sql);const bound=args=>({first:async()=>statement.get(...args)||null,all:async()=>({results:statement.all(...args)}),run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:this.sqlite.prepare('SELECT changes() AS n').get().n}})});return {...bound([]),bind:(...args)=>bound(args)};}
+ prepare(sql){const statement=this.sqlite.prepare(sql);const bound=args=>({first:async()=>statement.get(...args)||null,all:async()=>({results:statement.all(...args)}),run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:this.sqlite.prepare('SELECT changes() AS n').get().n}})});return {...bound([]),bind:(...args)=>{if(/\bLIKE\s+\?/i.test(sql)&&args.some(arg=>typeof arg==='string'&&arg.endsWith('%')&&arg.length>50))throw Error('LIKE pattern too long');return bound(args);}};}
  async batch(statements){this.sqlite.exec('BEGIN');try{const results=statements.map(s=>s.execute());this.sqlite.exec('COMMIT');return results;}catch(error){this.sqlite.exec('ROLLBACK');throw error;}}
 }
 const keys=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);
@@ -89,4 +89,55 @@ test('a paired space joins an account that already signed in on another device',
   const response=await syncRequest(new Request(syncOrigin+'/api/state',{headers:{Authorization:'Bearer '+token}}),env);
   assert.equal((await response.json()).decisions[0].id,'legacy-photo');
  }
+});
+
+test('linking a hashed Photos scope preserves shared and per-device undo and permits clearing old decisions',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},scope='a'.repeat(64),state='i'.repeat(43);
+ const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path+'?scope='+scope,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
+ await api('legacy-test','state');
+ const device=env.DB.sqlite.prepare('SELECT id FROM devices').get();
+ const entry={key:'old',previous:null,decision:'remove',revision:1};
+ env.DB.sqlite.prepare('INSERT INTO decisions VALUES (?,?,?)').run(scope,'old','remove');
+ env.DB.sqlite.prepare('INSERT INTO decisions VALUES (?,?,?)').run(scope,'clear-before-link','remove');
+ assert.equal((await api('legacy-test','decisions/clear-before-link','DELETE')).status,200);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions WHERE id = ?').get('clear-before-link').n,0);
+ env.DB.sqlite.prepare('INSERT INTO review_state VALUES (?,?,?)').run(scope,JSON.stringify({started:true,reviewed:1}),JSON.stringify([entry]));
+ assert.deepEqual((await (await api('legacy-test','state')).json()).history,[entry]);
+ const {createSyncClient}=await import('../lib/userscript-sync.mjs');
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),env)});
+ client.configure({url:syncOrigin,token:'legacy-test'});
+ const pulled=await client.sync(scope,{started:true,history:[entry],items:[{mediaKey:'old',decision:'remove',revision:1}],syncDirty:false,syncPending:{},syncDecisions:{old:'remove'}},async value=>value);
+ assert.deepEqual(pulled.history,[entry]);
+ const existing=await signIn(env,'l'.repeat(43));
+ const existingSpace=env.DB.sqlite.prepare('SELECT space FROM device_spaces WHERE device_id = ?').get(existing.deviceId).space;
+ env.DB.sqlite.prepare('INSERT INTO review_state VALUES (?,?,?)').run(existingSpace+':shared','{}','[]');
+ const ownEntry={...entry,key:'own'};
+ await api('legacy-test','undo','PUT',{history:[entry,ownEntry]});
+ await request(env,'/auth/session',{state,name:'Linked',platform:'test',sourceScope:scope},'legacy-test');
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ assert.equal((await request(env,'/auth/complete',{state,credential:await token(pending.nonce)})).status,200);
+ const claim=await request(env,'/auth/claim',{state});assert.equal(claim.status,200);const linked=await claim.json();
+ assert.deepEqual((await (await api('legacy-test','state')).json()).history,[entry,ownEntry]);
+ assert.deepEqual((await (await api(linked.token,'state')).json()).history,[entry]);
+ const mapping=env.DB.sqlite.prepare('SELECT space FROM device_spaces WHERE device_id = ?').get(device.id);
+ assert.deepEqual(JSON.parse(env.DB.sqlite.prepare('SELECT history FROM review_state WHERE scope = ?').get(mapping.space+':shared:device:'+device.id).history),[entry,ownEntry]);
+ await api(linked.token,'decisions','PUT',{decisions:[{id:'old',decision:null}]});
+ assert.deepEqual((await (await api(linked.token,'state')).json()).decisions,[]);
+ await api(linked.token,'decisions/old','PUT',{decision:'keep'});
+ assert.deepEqual((await (await api(linked.token,'state')).json()).decisions,[{id:'old',decision:'keep'}]);
+});
+
+test('overlapping paired sign-ins cannot copy a legacy library to two Google accounts',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'};
+ await syncRequest(new Request(syncOrigin+'/api/state',{headers:{Authorization:'Bearer legacy-test'}}),env);
+ env.DB.sqlite.exec("INSERT INTO decisions VALUES ('default','private-photo','remove')");
+ const states=['j'.repeat(43),'k'.repeat(43)];
+ for(const state of states)assert.equal((await request(env,'/auth/session',{state,name:'Paired',platform:'test'},'legacy-test')).status,200);
+ const credentials=await Promise.all(states.map(async(state,index)=>{const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();return token(pending.nonce,{sub:'overlap-'+index});}));
+ const responses=await Promise.all(states.map((state,index)=>request(env,'/auth/complete',{state,credential:credentials[index]})));
+ assert.deepEqual(responses.map(response=>response.status),[200,200]);
+ const claims=await Promise.all(states.map(async state=>(await request(env,'/auth/claim',{state})).json()));
+ const libraries=await Promise.all(claims.map(async device=>(await syncRequest(new Request(syncOrigin+'/api/state',{headers:{Authorization:'Bearer '+device.token}}),env)).json()));
+ assert.deepEqual(libraries.map(library=>library.decisions.length).sort(),[0,1]);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_space_links').get().n,1);
 });

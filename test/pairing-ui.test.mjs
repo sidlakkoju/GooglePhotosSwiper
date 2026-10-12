@@ -57,13 +57,13 @@ test('pairing budget rejects runtime dependencies even below the size limit',()=
  for(const directive of ['require','connect'])assert.throws(()=>assertPairingBundleBudget(Buffer.from(`// @${directive} https://synthetic.example/dependency.js`)),assert.AssertionError);
 });
 
-test('custom Worker hand-off and manual codes claim and save the issuing origin',async()=>{
+test('pairing ignores untrusted hand-off origins and hidden server edits',async()=>{
  for(const manual of [false,true]){
   const elements=dom(),calls=[];let saved;
   const panel=receivePairingLink({...elements,manual,url:'https://configured.example',location:{hash:manual?'':'#pswipe-pair=abcdefghijklmnopqrstuv&origin=https%3A%2F%2Fissuer.example',pathname:'/',search:''},window:{history:{replaceState(){}},navigator:{}},fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({token:'claimed-token'})};},saveSettings:async value=>saved=value,onPaired:async()=>{}});
   if(manual){pairingField(panel,'pairing-short-code').value='123 456';assert.equal(pairingField(panel,'pairing-server').value,'https://configured.example');pairingField(panel,'pairing-server').value='https://issuer.example/';}
   await pairingSubmit(panel).onclick();
-  assert.equal(calls[0].url,'https://issuer.example/api/pair/claim');assert.equal(saved.url,'https://issuer.example');assert.equal(saved.token,'claimed-token');assert.equal(JSON.parse(calls[0].options.body)[manual?'short':'code'],manual?'123456':'abcdefghijklmnopqrstuv');
+  assert.equal(calls[0].url,'https://configured.example/api/pair/claim');assert.equal(saved.url,'https://configured.example');assert.equal(saved.token,'claimed-token');assert.equal(JSON.parse(calls[0].options.body)[manual?'short':'code'],manual?'123456':'abcdefghijklmnopqrstuv');
  }
 });
 
@@ -126,7 +126,7 @@ test('hash changes in an already mounted Photos tab open consent for the latest 
  assert.equal(elements.parent.children.length,0);
  for(const code of ['abcdefghijklmnopqrstuv','zyxwvutsrqponmlkjihgfe']){
   location.hash='#pswipe-pair='+code+'&origin=https%3A%2F%2Fissuer.example';listeners.hashchange();assert.equal(location.hash,'');assert.equal(elements.parent.children.length,1);assert.equal(calls.length,code.startsWith('a')?0:1);
-  await pairingSubmit(elements.parent.children[0]).onclick();assert.equal(calls.at(-1).body.code,code);assert.equal(saved.url,'https://issuer.example');
+  await pairingSubmit(elements.parent.children[0]).onclick();assert.equal(calls.at(-1).body.code,code);assert.equal(saved.url,'https://photoswiper-sync.sidlakkoju.workers.dev');
  }
  location.hash='#unrelated';listeners.hashchange();assert.equal(elements.parent.children[0].hidden,true);
 });
