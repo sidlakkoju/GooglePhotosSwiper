@@ -33,7 +33,8 @@ const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFil
 const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
 const centeredShellGrowthBytes=12000;
 const keyboardIsolationGrowthBytes=1024;
-const prePairingCurrentBytes=keyboardIsolationGrowthBytes+performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
+const mobileLayoutGrowthBytes=512;
+const prePairingCurrentBytes=keyboardIsolationGrowthBytes+performanceGrowthBytes+centeredShellGrowthBytes+mobileLayoutGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const recoveryGrowthBudgetBytes=4*1024;
 const pairingServerErrorGrowthBytes=256;
 const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes;

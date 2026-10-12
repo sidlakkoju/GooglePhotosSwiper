@@ -12,7 +12,7 @@ const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawn
 
 test('status reserves space even when empty and bounds wrapping messages',()=>{
  assert.doesNotMatch(shell,/\.status:empty\{[^}]*display:none/);
- assert.match(shell,/\.status\{[^}]*height:38px;overflow:auto/);
+ assert.match(shell,/\.status\{[^}]*height:60px;min-height:60px;overflow:auto/);
  assert.match(source,/statusElement\.setAttribute\("role","status"\)/);
  assert.match(source,/statusElement\.setAttribute\("aria-live","polite"\)/);
 });
@@ -37,7 +37,7 @@ test('status changes preserve window and decision control positions on desktop a
    const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',`--user-data-dir=${join(dir,`chrome-${width}-${height}`)}`,'--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
    assert.equal(result.status,0,result.stderr);
    const {initial,snapshots}=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);
-   assert.equal(initial['.status'][3],38);
+   assert.equal(initial['.status'][3],60);
    for(const snapshot of snapshots)assert.deepEqual(snapshot.bounds,initial,`${width}×${height}: ${snapshot.text}`);
    assert.equal(snapshots[2].scrollable,true);
    assert.equal(snapshots[3].text,'');
