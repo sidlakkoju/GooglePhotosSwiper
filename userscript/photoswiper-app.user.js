@@ -2,13 +2,16 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.52
+// @version 1.2.53
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
 // @grant GM.getValue
 // @grant GM.setValue
 // @grant GM.deleteValue
+// @grant GM.xmlHttpRequest
+// @grant GM.openInTab
+// @connect photoswiper-sync.sidlakkoju.workers.dev
 // @grant unsafeWindow
 // @inject-into content
 // @noframes
@@ -377,15 +380,16 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   let checkpoint=state;
   try {
    const remote=pull?await syncRequest(scope,'api/state'):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress||{}};
-   const decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
+   let decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
    const pending={...state.syncPending};
    if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey))pending[item.mediaKey]=item.decision;
    const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
    const historyKeys=new Set([...(state.syncHistoryKeys||[]),...Object.keys(pending),...(dirty?state.history.map(entry=>entry.key):[])]);
    const remaining={...pending};
    for(const batch of decisionBatches(pending)){
-    await syncRequest(scope,'api/decisions','PUT',{decisions:batch});
+    const accepted=await syncRequest(scope,'api/decisions','PUT',{decisions:batch});
     for(const {id,decision} of batch){delete remaining[id];if(decision===null)delete decisions[id];else decisions[id]=decision;}
+    if(accepted.merged&&accepted.decisions)decisions=Object.fromEntries(accepted.decisions.map(item=>[item.id,item.decision]));
     checkpoint={...state,syncDecisions:{...decisions},syncPending:{...remaining},syncDirty:dirty,syncHistoryKeys:[...historyKeys]};
    }
    const history=(dirty?mergeHistory(remote.history,state.history,historyKeys):remote.history).slice(-2000);
@@ -397,7 +401,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    });
    for(const item of checkpointItems.values())mergedItems.push({...item,name:item.mediaKey,type:item.type||'photo',needsPreview:true});
    const items=mergedItems.map(item=>{
-    const value=Object.hasOwn(pending,item.mediaKey)?pending[item.mediaKey]:decisions[item.mediaKey]??(Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
+    const value=decisions[item.mediaKey]??(Object.hasOwn(pending,item.mediaKey)||Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
     const entry=history.findLast(entry=>entry.key===item.mediaKey&&entry.decision===value);
     return {...item,decision:value,revision:!dirty&&entry&&(value!==item.decision||!item.revision)?Math.max(entry.revision,checkpointRevisions.get(item.mediaKey)||0):item.revision};
    });
@@ -430,7 +434,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
- return {configure,sync,devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST'),async pair(url,code,name,platform){
+ return {configure,sync,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST'),async pair(url,code,name,platform){
   let worker;try{worker=new URL(url);}catch{throw Error('Enter a valid HTTPS Worker origin.');}
   if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');
   if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');
@@ -515,12 +519,23 @@ function decisionBatches(pending) {
  return batches;
 }
 
+function privateSyncFetch(GM){
+ return (url,options={})=>new Promise((resolve,reject)=>{
+  const abort=()=>{handle?.abort?.();reject(new DOMException('Sync cancelled','AbortError'));};
+  let handle;
+  if(options.signal?.aborted){abort();return;}
+  options.signal?.addEventListener('abort',abort,{once:true});
+  const finish=callback=>value=>{options.signal?.removeEventListener('abort',abort);callback(value);};
+  handle=GM.xmlHttpRequest({url,method:options.method||'GET',headers:options.headers,data:options.body,timeout:10000,onload:finish(response=>resolve({ok:response.status>=200&&response.status<300,status:response.status,json:async()=>JSON.parse(response.responseText)})),onerror:finish(()=>reject(Error('Sync request failed'))),ontimeout:finish(()=>reject(new DOMException('Sync timed out','TimeoutError')))});
+ });
+}
+
 async function createPairingStore({GM,database,crypto}) {
  const durable=!!GM&&['getValue','setValue','deleteValue'].every(name=>typeof GM[name]==='function');
  const key='photos-swipe-pairing';
  const dismissalKey='photos-swipe-onboarding-dismissed';
  const complete=value=>typeof value?.url==='string'&&!!value.url&&typeof value?.token==='string'&&!!value.token;
- const select=value=>Object.fromEntries(['url','token','deviceId','deviceName'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
+ const select=value=>Object.fromEntries(['url','token','deviceId','deviceName','email'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
  async function settings() {
   const db=await database();
   if(!durable)return db.settings();
@@ -804,11 +819,11 @@ function receivePairingLink({document,parent,location,window,fetch,saveSettings,
  if(manual){
   field(shortCode,'pairing-short-code','6-digit code from a paired device');shortCode.setAttribute('inputmode','numeric');shortCode.setAttribute('pattern','[0-9]{6}');shortCode.setAttribute('autocomplete','one-time-code');shortCode.oninput=()=>{shortCode.value=shortCode.value.replace(/[^0-9]/g,'').slice(0,6);};
   const hint=document.createElement('p');hint.setAttribute('id','pairing-code-hint');hint.textContent="Get a code from Settings > Sync on a device that's already paired";shortCode.setAttribute('aria-describedby','pairing-code-hint');panel.append(hint);
-  const advanced=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Advanced';advanced.open=false;advanced.append(summary);origin.type='url';origin.value=url;field(origin,'pairing-server','Sync server',advanced);panel.append(advanced);
+  const advanced=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Advanced';advanced.open=false;advanced.append(summary);origin.type='url';origin.value=url;origin.readOnly=true;advanced.hidden=true;field(origin,'pairing-server','Sync server',advanced);panel.append(advanced);
  }
  const actions=document.createElement('div');actions.className='toolbar';button.textContent='Pair this device';cancel.textContent='Cancel';actions.append(button,cancel);status.setAttribute('role','status');panel.append(actions,status);
  cancel.onclick=()=>{panel.hidden=true;onClose();};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);(manual?shortCode:name).focus();
- button.onclick=async()=>{button.disabled=true;try{const worker=new URL(match?.[2]?decodeURIComponent(match[2]):manual?origin.value:url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error(response.status>=500?pairingServerError:'Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;onClose();await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
+ button.onclick=async()=>{button.disabled=true;try{const worker=new URL(url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error(response.status>=500?pairingServerError:'Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;onClose();await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
  return panel;
 }
 
@@ -990,6 +1005,7 @@ const TURN=550;
 }
 
 function mountPhotosSwipe(environment) {
+ if(typeof environment.GM?.xmlHttpRequest==='function')environment.syncFetch=privateSyncFetch(environment.GM);
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
  const rawCall=environment.photosCall||createPhotosAPI(environment);
@@ -1189,11 +1205,11 @@ function mountPhotosSwipe(environment) {
  const settingsPanel=document.createElement('details');settingsPanel.setAttribute('id','sync-settings');const settingsTitle=document.createElement('summary');settingsTitle.textContent='Sync settings';settingsPanel.append(settingsTitle);
  const syncExplanation=document.createElement('p');syncExplanation.textContent='Optional sync shares decisions and undo history between devices. Enter your Worker URL and token, or continue locally on this browser.';settingsPanel.append(syncExplanation);
  const onboarding=document.createElement('section');onboarding.setAttribute('id','pair-onboarding');onboarding.hidden=true;
- const onboardingTitle=document.createElement('h2');onboardingTitle.textContent='Pair this device';
- const onboardingText=document.createElement('p');onboardingText.textContent='Open Photos Swipe on a paired device (e.g. your Mac), choose Pair a device, then scan the QR or enter the 6-digit code here';
- const onboardPair=document.createElement('button');onboardPair.textContent='Pair this device';onboardPair.onclick=()=>receivePairing(true);onboarding.append(onboardingTitle,onboardingText,onboardPair);divElement4.insertBefore(onboarding,cardElement);
+ const onboardingTitle=document.createElement('h2');onboardingTitle.textContent='Sync across devices';
+ const onboardingText=document.createElement('p');onboardingText.textContent='Sign in once on each device to sync with your Google account.';
+ const onboardPair=document.createElement('button');onboardPair.textContent='Enter a code from another device';onboardPair.onclick=()=>receivePairing(true);onboarding.append(onboardingTitle,onboardingText,onboardPair);divElement4.insertBefore(onboarding,cardElement);
  const syncLocal=document.createElement('button');syncLocal.setAttribute('id','sync-local');syncLocal.textContent='Continue locally';onboarding.append(syncLocal);
- for(const [id,title,type] of [['sync-url','Sync URL','url'],['sync-token','Sync token','password']]){const label=document.createElement('label'),input=document.createElement('input');label.textContent=title+' ';input.setAttribute('id',id);input.type=type;input.autocomplete='off';label.append(input);settingsPanel.append(label);}
+ for(const [id,title,type] of [['sync-url','Sync URL','url'],['sync-token','Sync token','password']]){const label=document.createElement('label'),input=document.createElement('input');label.textContent=title+' ';input.setAttribute('id',id);input.type=type;input.autocomplete='off';if(id==='sync-url'){input.value='https://photoswiper-sync.sidlakkoju.workers.dev';input.readOnly=true;label.hidden=true;}label.append(input);settingsPanel.append(label);}
  const syncSave=document.createElement('button');syncSave.setAttribute('id','sync-save');syncSave.textContent='Save and sync';settingsPanel.append(syncSave);
  const pairAnother=document.createElement('button');pairAnother.textContent='Pair a device';pairAnother.setAttribute('id','pair-another');settingsPanel.append(pairAnother);
  let viewerShortcutsBlockedUntil=0;
@@ -1268,6 +1284,40 @@ function mountPhotosSwipe(environment) {
   try{await store.settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}
   return store;
  });
+ const accountMismatch=document.createElement('p');accountMismatch.hidden=true;divElement4.insertBefore(accountMismatch,cardElement);
+ const showSyncAccount=settings=>{pairingNotice.textContent=settings.email?'Sync account: '+settings.email:'';accountMismatch.hidden=!settings.email||!identity?.label||identity.label===settings.email.toLowerCase();accountMismatch.textContent=accountMismatch.hidden?'':'This device syncs as '+settings.email+'; Photos is showing '+identity.label+'. Use Sign in with Google / switch account in Settings.';};
+ const googleSignIn=document.createElement('button');googleSignIn.textContent='Sign in with Google';onboarding.insertBefore(googleSignIn,onboardPair);
+ const googleSettings=document.createElement('button');googleSettings.textContent='Sign in with Google / switch account';settingsPanel.append(googleSettings);
+ const signInGoogle=async()=>{
+  openSettings();
+  const gm=environment.GM,store=await pairingPromise;
+  if(!store.durable||typeof gm?.xmlHttpRequest!=='function'||typeof gm?.openInTab!=='function'){pairingNotice.textContent='Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.';return;}
+  googleSignIn.disabled=true;googleSettings.disabled=true;
+  const state=btoa(String.fromCharCode(...environment.crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+  const origin='https://photoswiper-sync.sidlakkoju.workers.dev';
+  const privateRequest=(path,value,token)=>new Promise((resolve,reject)=>{gm.xmlHttpRequest({method:'POST',url:origin+path,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},data:JSON.stringify(value),timeout:10000,onload:response=>{try{resolve({status:response.status,value:JSON.parse(response.responseText)});}catch(error){reject(error);}},onerror:()=>reject(Error('Sign-in request failed')),ontimeout:()=>reject(Error('Sign-in request timed out'))});});
+  try{
+   await gm.setValue('photos-swipe-google-state',state);
+   const previous=await store.settings();
+   const session=await privateRequest('/auth/session',{state,name:window.navigator?.userAgent?.includes('iPhone')?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token);
+   if(session.status!==200)throw Error('Could not start Google sign-in');
+   gm.openInTab(session.value.url,{active:true,insert:true});
+   pairingNotice.textContent='Complete Google sign-in in the new tab, then paste its sign-in code here.';
+   const code=await new Promise(resolve=>{
+    const input=document.createElement('input'),submit=document.createElement('button');
+    input.placeholder='Sign-in code';input.setAttribute('aria-label','Sign-in code');submit.textContent='Finish sign-in';
+    pairingNotice.append(input,submit);submit.onclick=()=>{const value=input.value.trim();if(value){input.remove();submit.remove();resolve(value);}};
+   });
+   if(await gm.getValue('photos-swipe-google-state')!==state)throw Error('Sign-in cancelled');
+   const claim=await privateRequest('/auth/claim',{state,code},previous.token);
+   if(claim.status!==200)throw Error('Invalid or expired sign-in code. Try again.');
+   await store.saveSettings({url:origin,...claim.value,onboardingDismissed:true});
+   await gm.deleteValue('photos-swipe-google-state');
+   syncClient.configure({url:origin,...claim.value});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(claim.value);await synchronize();return;
+
+  }catch(error){pairingNotice.textContent=error.message;}finally{await gm.deleteValue('photos-swipe-google-state');googleSignIn.disabled=false;googleSettings.disabled=false;}
+ };
+ googleSignIn.onclick=signInGoogle;googleSettings.onclick=signInGoogle;
  const clearCredentials=async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,token:'',unpaired:true});$('sync-token').value='';syncEnabled=false;unpairedBanner.hidden=false;};
  const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,unpaired:clearCredentials,status:value=>{syncSummary=value;syncStatus.textContent=value;const failed=/saved locally; retry|unpaired/i.test(value);gear.classList.toggle('gear-error',failed);gear.setAttribute('aria-label',failed?'Settings \u00b7 sync error':'Settings');if(failed)message(value);pairedNotice.hidden=!value.includes('Device paired');}});
  async function showDevices(){
@@ -1425,7 +1475,7 @@ function mountPhotosSwipe(environment) {
   if(!await renewLease()||token!==leaseGeneration)return;
   if(recovering){if(busy||activeOperation||syncRunning||closingPromise||$('overlay').hidden)return;await open();return;}
   if(!busy&&!activeOperation&&!syncRunning){writes.flush();refill();}
-  if(++leaseTicks%15===0&&syncEnabled&&!busy&&!activeOperation&&!syncRunning&&!$('overlay').hidden)synchronize();
+  if(syncEnabled&&!busy&&!activeOperation&&!syncRunning&&!$('overlay').hidden)synchronize();
  }
  async function withAccountLease(task) {
   if(!await renewLease(true))throw leaseError||sessionChanged();
@@ -1725,7 +1775,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    $('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
-   if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
+   if(settings.email)showSyncAccount(settings);
    if(!await renewLease(true,claim))return;
    const sessionGeneration=leaseGeneration;
    if(!changed){
@@ -1809,7 +1859,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  $('zoom').oninput=()=>{swipeFeedback.reset();mediaElement.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'';const image=$('media').querySelector('img');if(image){$('card').classList.toggle('zoomed',Number($('zoom').value)>1);image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'';}};
  $('send').onclick=()=>{if(busy)return;const confirmedKeys=[...(state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey))];const count=confirmedKeys.length;if(!count){message('The removal queue is empty.');return;}if(!window.confirm(`Add ${count} candidates to a private review album? This does not delete media.`))return;run(async()=>{const keys=state.job?.mediaKeys||reviewQueue(state).map(item=>item.mediaKey);if(keys.length!==confirmedKeys.length||keys.some(key=>!confirmedKeys.includes(key)))throw Error('The queue changed in another tab. Review it and confirm again.');message('Updating and verifying the review album\u2026');await sendReviewAlbum({read:async()=>state,save,call,title:'Photos Swipe \u00b7 Review'});inspected=null;message('Every candidate was verified in the review album. Choose Trash in Settings to use this panel, or open the review album to move items manually in Google Photos.');});};
  trashOptIn.onchange=()=>render();
- moveTrash.onclick=()=>{if(busy||reviewPanel.hidden||!trashOptIn.checked)return;const candidates=reviewRows().filter(item=>item.decision==='remove'),keys=candidates.map(item=>item.mediaKey);if(!keys.length){message('No candidates to move to Trash.');return;}if(!window.confirm(`Move exactly ${keys.length} items to Google Photos Trash?\n\nItems stay in Google Photos Trash for 60 days.`))return;run(async()=>{if(state.job)throw Error('Finish the saved album operation before moving items to Trash.');const currentKeys=reviewRows().filter(item=>item.decision==='remove').map(item=>item.mediaKey);if(currentKeys.length!==keys.length||currentKeys.some(key=>!keys.includes(key)))throw Error('Candidates changed. Review the item list and confirm again.');if(state.items.some(item=>keys.includes(item.mediaKey)&&!item.dedupKey))throw Error('Missing Trash identifiers. Refresh latest before retrying.');for(let index=0;index<keys.length;index+=25){const batch=keys.slice(index,index+25);await call('moveToTrash',{dedupKeys:state.items.filter(item=>batch.includes(item.mediaKey)).map(item=>item.dedupKey),confirmed:true});await save(await reconcileReviewTrash(state,call));if(state.items.some(item=>batch.includes(item.mediaKey)&&item.state!=='in_trash'))throw Error('Trash move was not verified. Check deleted items before retrying.');}storageSession.reset(state.items.filter(item=>item.state==='in_trash'||keys.includes(item.mediaKey)));storageCapsule.reset();reviewItems=reviewItems.filter(item=>!keys.includes(item.mediaKey));previewKey=null;renderTrashReview();message(`Verified ${keys.length} items in Trash.`);});};
+ moveTrash.onclick=()=>{if(busy||reviewPanel.hidden||!trashOptIn.checked)return;const candidates=reviewRows().filter(item=>item.decision==='remove'),keys=candidates.map(item=>item.mediaKey);if(!keys.length){message('No candidates to move to Trash.');return;}if(!window.confirm(`Move exactly ${keys.length} items to Google Photos Trash?\n\nItems stay in Google Photos Trash for 60 days.`))return;run(async()=>{if(state.job)throw Error('Finish the saved album operation before moving items to Trash.');const currentKeys=reviewRows().filter(item=>item.decision==='remove').map(item=>item.mediaKey);if(currentKeys.length!==keys.length||currentKeys.some(key=>!keys.includes(key)))throw Error('Candidates changed. Review the item list and confirm again.');if(state.items.some(item=>keys.includes(item.mediaKey)&&!item.dedupKey))throw Error('Missing Trash identifiers. Refresh latest before retrying.');for(let index=0;index<keys.length;index+=25){const batch=keys.slice(index,index+25);if(syncEnabled){await synchronize();if(!(await syncClient.trashCheck(identity.account,batch)).safe)throw Error('Sync decisions changed. Review candidates before moving to Trash.');}await call('moveToTrash',{dedupKeys:state.items.filter(item=>batch.includes(item.mediaKey)).map(item=>item.dedupKey),confirmed:true});await save(await reconcileReviewTrash(state,call));if(state.items.some(item=>batch.includes(item.mediaKey)&&item.state!=='in_trash'))throw Error('Trash move was not verified. Check deleted items before retrying.');}storageSession.reset(state.items.filter(item=>item.state==='in_trash'||keys.includes(item.mediaKey)));storageCapsule.reset();reviewItems=reviewItems.filter(item=>!keys.includes(item.mediaKey));previewKey=null;renderTrashReview();message(`Verified ${keys.length} items in Trash.`);});};
  $('trash').onclick=()=>run(async()=>{message('Reading Google Photos Trash\u2026');await save(await reconcileReviewTrash(state,call));message('Trash check complete. Unknown results leave local state unchanged.');});
  for(const target of [launcherElement,overlayElement])for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','touchstart','touchmove','touchend','touchcancel','wheel','mousedown','mouseup'])target.addEventListener(type,event=>event.stopPropagation());
  for(const type of ['keydown','keyup','keypress'])overlayElement.addEventListener(type,event=>event.stopPropagation());
@@ -1878,7 +1928,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.52":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.53":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

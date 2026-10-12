@@ -935,7 +935,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
    const settings=root.getElementById('sync-settings');settings.open=true;
    const range=doc.createRange(),settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
    const buttons=Array.from(settings.querySelectorAll('button')).filter(button=>button.getClientRects().length);
-   const syncFields=['sync-url','sync-token'].map(id=>{
+   const syncFields=['sync-token'].map(id=>{
     const input=root.getElementById(id),field=input.parentElement;
     range.selectNodeContents(field.firstChild);const text=range.getBoundingClientRect(),box=bounds(input),fieldBox=bounds(field);
     return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
@@ -3118,6 +3118,7 @@ test('unpaired launcher shows the receiver with another Photos tab open',async()
  const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
  await second.nodes.get('launcher').onclick();
+ second.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
  const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
  assert.ok(receiver);assert.equal(receiver.hidden,false);assert.ok(second.nodes.get('pairing-short-code'));
  const code=second.nodes.get('pairing-short-code');assert.equal(second.root.activeElement,code);
@@ -3141,11 +3142,13 @@ test('unpaired script opens the receiver despite a paired script dismissing shar
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
  try{
   await second.nodes.get('launcher').onclick();
-  const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
+  second.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
+ const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
   assert.ok(receiver);assert.equal(receiver.hidden,false);
   assert.equal(second.root.activeElement,second.nodes.get('pairing-short-code'));
   await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
   await second.nodes.get('launcher').onclick();
+  second.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
   assert.equal(second.root.childNodes.findLast(node=>node.className==='pairing-receiver settings-sheet').hidden,false);
   assert.deepEqual(await db.settings(),{onboardingDismissed:true});
  }finally{await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();}
@@ -3202,6 +3205,7 @@ test('receiver claim during session opening activates the saved pairing after le
  const opening=mounted.nodes.get('launcher').onclick();let claiming;
  try{
   await waitForReview(()=>fault.leaseWrites>0);
+  mounted.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
   const receiver=mounted.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
   mounted.nodes.get('pairing-short-code').value='123456';
   claiming=receiver.childNodes.find(node=>node.className==='toolbar').childNodes[0].onclick();

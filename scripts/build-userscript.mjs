@@ -4,13 +4,16 @@ const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.52
+// @version 1.2.53
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
 // @grant GM.getValue
 // @grant GM.setValue
 // @grant GM.deleteValue
+// @grant GM.xmlHttpRequest
+// @grant GM.openInTab
+// @connect photoswiper-sync.sidlakkoju.workers.dev
 // @grant unsafeWindow
 // @inject-into content
 // @noframes
@@ -39,19 +42,24 @@ const loaderURL='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loa
 const loaderMetadata=`// ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.52
+// @version 1.2.53
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content
 // @run-at document-idle
 // @noframes
 // @grant GM.xmlHttpRequest
+// @grant GM.openInTab
 // @grant GM.getValue
 // @grant GM.setValue
 // @grant GM.deleteValue
+// @grant GM.xmlHttpRequest
+// @grant GM.openInTab
+// @connect photoswiper-sync.sidlakkoju.workers.dev
 // @grant unsafeWindow
 // @grant GM_deleteValue
 // @grant GM_xmlhttpRequest
+// @grant GM_openInTab
 // @grant GM_getValue
 // @grant GM_setValue
 // @connect photoswiper-sync.sidlakkoju.workers.dev
@@ -59,7 +67,7 @@ const loaderMetadata=`// ==UserScript==
 // @updateURL ${loaderURL}
 // ==/UserScript==
 `;
-const loaderOutput=loaderMetadata+'\n(async()=>{\n'+loaderSource.replace(/^export /gm,'')+'\nawait startLoader({document,window,location,crypto:window.crypto,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),fetch:fetch.bind(globalThis),unsafeWindow:typeof unsafeWindow===\'undefined\'?window:unsafeWindow,GM:typeof GM===\'undefined\'?undefined:GM,GM_getValue:typeof GM_getValue===\'undefined\'?undefined:GM_getValue,GM_setValue:typeof GM_setValue===\'undefined\'?undefined:GM_setValue,GM_deleteValue:typeof GM_deleteValue===\'undefined\'?undefined:GM_deleteValue,GM_xmlhttpRequest:typeof GM_xmlhttpRequest===\'undefined\'?undefined:GM_xmlhttpRequest});\n})();\n';
+const loaderOutput=loaderMetadata+'\n(async()=>{\n'+loaderSource.replace(/^export /gm,'')+'\nawait startLoader({document,window,location,crypto:window.crypto,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),fetch:fetch.bind(globalThis),unsafeWindow:typeof unsafeWindow===\'undefined\'?window:unsafeWindow,GM:typeof GM===\'undefined\'?undefined:GM,GM_getValue:typeof GM_getValue===\'undefined\'?undefined:GM_getValue,GM_setValue:typeof GM_setValue===\'undefined\'?undefined:GM_setValue,GM_deleteValue:typeof GM_deleteValue===\'undefined\'?undefined:GM_deleteValue,GM_xmlhttpRequest:typeof GM_xmlhttpRequest===\'undefined\'?undefined:GM_xmlhttpRequest,GM_openInTab:typeof GM_openInTab===\'undefined\'?undefined:GM_openInTab});\n})();\n';
 const loaderDestination=new URL('../userscript/photoswiper-loader.user.js',import.meta.url);
 if(process.argv.includes('--check')){if(await readFile(loaderDestination,'utf8')!==loaderOutput)throw Error('Loader is stale. Run node scripts/build-userscript.mjs.');}
 else await writeFile(loaderDestination,loaderOutput);

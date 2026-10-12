@@ -44,9 +44,10 @@ const recoveryGrowthBudgetBytes=4*1024;
 const leaseLifecycleGrowthBudgetBytes=2*1024;
 const pairingServerErrorGrowthBytes=256;
 const pairingLeaseFixGrowthBytes=2048;
-const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+leaseLifecycleGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
-function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
-test('pairing bundle stays within the 15 KB pairing, 4 KB recovery and 2 KB lease lifecycle growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url)));});
+const googleSyncGrowthBudgetBytes=6*1024;
+const pairingGrowthBudgetBytes=googleSyncGrowthBudgetBytes+15*1024+recoveryGrowthBudgetBytes+leaseLifecycleGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
+function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@require\b/);for(const match of source.toString().matchAll(/@connect\s+(\S+)/g))assert.equal(match[1],'photoswiper-sync.sidlakkoju.workers.dev');}
+test('pairing and Google sync bundle stays within its growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url)));});
 test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
  const boundary=Buffer.alloc(prePairingCurrentBytes+pairingGrowthBudgetBytes,32);
  assertPairingBundleBudget(boundary);
@@ -56,13 +57,13 @@ test('pairing budget rejects runtime dependencies even below the size limit',()=
  for(const directive of ['require','connect'])assert.throws(()=>assertPairingBundleBudget(Buffer.from(`// @${directive} https://synthetic.example/dependency.js`)),assert.AssertionError);
 });
 
-test('custom Worker hand-off and manual codes claim and save the issuing origin',async()=>{
+test('pairing ignores untrusted hand-off origins and hidden server edits',async()=>{
  for(const manual of [false,true]){
   const elements=dom(),calls=[];let saved;
   const panel=receivePairingLink({...elements,manual,url:'https://configured.example',location:{hash:manual?'':'#pswipe-pair=abcdefghijklmnopqrstuv&origin=https%3A%2F%2Fissuer.example',pathname:'/',search:''},window:{history:{replaceState(){}},navigator:{}},fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({token:'claimed-token'})};},saveSettings:async value=>saved=value,onPaired:async()=>{}});
   if(manual){pairingField(panel,'pairing-short-code').value='123 456';assert.equal(pairingField(panel,'pairing-server').value,'https://configured.example');pairingField(panel,'pairing-server').value='https://issuer.example/';}
   await pairingSubmit(panel).onclick();
-  assert.equal(calls[0].url,'https://issuer.example/api/pair/claim');assert.equal(saved.url,'https://issuer.example');assert.equal(saved.token,'claimed-token');assert.equal(JSON.parse(calls[0].options.body)[manual?'short':'code'],manual?'123456':'abcdefghijklmnopqrstuv');
+  assert.equal(calls[0].url,'https://configured.example/api/pair/claim');assert.equal(saved.url,'https://configured.example');assert.equal(saved.token,'claimed-token');assert.equal(JSON.parse(calls[0].options.body)[manual?'short':'code'],manual?'123456':'abcdefghijklmnopqrstuv');
  }
 });
 
@@ -125,18 +126,18 @@ test('hash changes in an already mounted Photos tab open consent for the latest 
  assert.equal(elements.parent.children.length,0);
  for(const code of ['abcdefghijklmnopqrstuv','zyxwvutsrqponmlkjihgfe']){
   location.hash='#pswipe-pair='+code+'&origin=https%3A%2F%2Fissuer.example';listeners.hashchange();assert.equal(location.hash,'');assert.equal(elements.parent.children.length,1);assert.equal(calls.length,code.startsWith('a')?0:1);
-  await pairingSubmit(elements.parent.children[0]).onclick();assert.equal(calls.at(-1).body.code,code);assert.equal(saved.url,'https://issuer.example');
+  await pairingSubmit(elements.parent.children[0]).onclick();assert.equal(calls.at(-1).body.code,code);assert.equal(saved.url,'https://photoswiper-sync.sidlakkoju.workers.dev');
  }
  location.hash='#unrelated';listeners.hashchange();assert.equal(elements.parent.children[0].hidden,true);
 });
 
-test('unpaired onboarding opens the existing receiver and Continue locally dismisses it',async()=>{
+test('unpaired onboarding offers Google, opens the backup receiver on demand and supports Continue locally',async()=>{
  const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom();
  let received=false;
  const context={document:elements.document,divElement4:{insertBefore(){}},cardElement:{},receivePairing:manual=>received=manual};
  vm.runInNewContext(ui.slice(ui.indexOf(" const onboarding=document.createElement"),ui.indexOf(" for(const [id,title,type]"))+ '\nglobalThis.card=onboarding;globalThis.local=syncLocal;',context);
  const card=context.card;
- assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
+ assert.equal(card.children[0].textContent,'Sync across devices');assert.match(card.children[1].textContent,/Google account/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
  const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession(claim=false)')),ui.indexOf('   if(!await renewLease(true,claim))return;',ui.indexOf(' async function openSession(claim=false)')));
  for(const [settings,receivingPanel] of [[{},undefined],[{}, {hidden:true}],[{onboardingDismissed:true},undefined],[{url:'https://worker.example',token:'synthetic-token'},undefined]]){
@@ -144,7 +145,7 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
   const nodes={},node=id=>nodes[id]||(nodes[id]={});
   const state={pageActive:true,document:{hidden:false},sessionGeneration:0,leaseGeneration:0,leaseRecoveryPending:true,receivingPanel,$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){automaticOpens++;},renewLease:async()=>true,message(){},idleMessage:()=>''};
   await vm.runInNewContext('(async()=>{'+opening+'})()',state);
-  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');assert.equal(automaticOpens,settings.token||settings.onboardingDismissed||receivingPanel?0:1);
+  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');assert.equal(automaticOpens,0);
  }
  let saved;
  const dismissal={closeSettings(){},$:()=>context.local,run:fn=>fn(),pairingPromise:Promise.resolve({settings:async()=>({}),saveSettings:async value=>saved=value}),settingsPanel:{},onboarding:card,message(){},idleMessage:()=>''};
@@ -299,4 +300,39 @@ for(const outcome of ['success','failure'])test(`Close waits for settings pairin
  }else{
   assert.equal(context.pairFeedback.textContent,'Offline');assert.deepEqual(syncTokens,['old-token']);
  }
+});
+
+test('Google sign-in waits for the browser code before privately claiming with the saved token',async()=>{
+ const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom(),requests=[],values=new Map();
+ let saved,opened;
+ const store={durable:true,settings:async()=>({token:'previous-token'}),saveSettings:async value=>saved=value};
+ const gm={setValue:async(key,value)=>values.set(key,value),getValue:async key=>values.get(key),deleteValue:async key=>values.delete(key),openInTab:url=>opened=url,xmlHttpRequest:options=>{requests.push(options);options.onload({status:200,responseText:JSON.stringify(options.url.endsWith('/session')?{url:'https://worker.example/auth/start'}:{token:'new-token',deviceId:'same-device'})});}};
+ const notice=elements.document.createElement('div'),button={},sheet=elements.document.createElement('section'),settingsPanel=elements.document.createElement('details'),gear=elements.document.createElement('button'),sheetClose=elements.document.createElement('button');
+ sheet.hidden=true;sheet.append(settingsPanel);settingsPanel.append(notice);
+ const context={sheet,settingsPanel,gear,sheetClose,environment:{GM:gm,crypto},pairingPromise:Promise.resolve(store),googleSignIn:button,googleSettings:{},window:{navigator:{}},document:elements.document,pairingNotice:notice,identity:{account:'scope'},btoa,Uint8Array,syncClient:{configure(){}},onboarding:{},syncLocal:{},showSyncAccount(){},synchronize:async()=>{}};
+ const start=ui.indexOf(' const signInGoogle=async()=>{'),end=ui.indexOf(' const clearCredentials=',start);
+ vm.runInNewContext(ui.slice(ui.indexOf(' const openSettings='),ui.indexOf('const closeSettings='))+ui.slice(start,end),context);
+ const pending=button.onclick();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(opened,'https://worker.example/auth/start');assert.equal(requests.length,1);
+ const input=notice.children[0],submit=notice.children[1];
+ assert.equal(sheet.hidden,false);assert.equal(settingsPanel.open,true);assert.equal(gear['aria-expanded'],'true');
+ assert.ok(descendants(sheet).includes(input));assert.ok(descendants(sheet).includes(submit));
+ assert.match(notice.textContent,/paste its sign-in code here/);
+ input.remove=()=>{};submit.remove=()=>{};input.value='browser-only-code';submit.onclick();
+ await pending;
+ assert.equal(requests.length,2);assert.equal(requests[1].headers.Authorization,'Bearer previous-token');
+ assert.equal(JSON.parse(requests[1].data).code,'browser-only-code');assert.equal(saved.token,'new-token');
+});
+
+for(const failure of ['capabilities','session'])test(`first-run Google sign-in shows ${failure} errors in Settings`,async()=>{
+ const elements=dom(),sheet=elements.document.createElement('section'),settingsPanel=elements.document.createElement('details'),notice=elements.document.createElement('p'),button={};
+ sheet.hidden=true;sheet.append(settingsPanel);settingsPanel.append(notice);
+ const gm={setValue:async()=>{},deleteValue:async()=>{},openInTab(){},xmlHttpRequest:options=>options.onload({status:500,responseText:'{}'})};
+ const context={sheet,settingsPanel,gear:elements.document.createElement('button'),sheetClose:elements.document.createElement('button'),environment:{GM:gm,crypto},pairingPromise:Promise.resolve({durable:failure!=='capabilities',settings:async()=>({})}),googleSignIn:button,googleSettings:{},window:{navigator:{}},document:elements.document,pairingNotice:notice,identity:{},btoa,Uint8Array};
+ const start=ui.indexOf(' const signInGoogle=async()=>{'),end=ui.indexOf(' const clearCredentials=',start);
+ vm.runInNewContext(ui.slice(ui.indexOf(' const openSettings='),ui.indexOf('const closeSettings='))+ui.slice(start,end),context);
+ await button.onclick();
+ assert.equal(sheet.hidden,false);assert.equal(settingsPanel.open,true);assert.ok(descendants(sheet).includes(notice));
+ assert.match(notice.textContent,failure==='capabilities'?/Google sync requires/:/Could not start Google sign-in/);
 });

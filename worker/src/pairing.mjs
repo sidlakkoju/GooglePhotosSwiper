@@ -61,7 +61,7 @@ export async function pairingRequest(request,env,device,readBody,respond) {
    db.prepare(`UPDATE pairing_codes SET used_at = ?, claimed_device = ? WHERE ${column} = ? AND used_at IS NULL AND expires_at > ? AND failed_attempts < 5 AND EXISTS (SELECT 1 FROM devices WHERE id = created_by_device AND revoked_at IS NULL)${isShort?' AND COALESCE((SELECT count FROM pair_attempts WHERE ip_hash = ? AND window_start = ?),0) < 100':''} RETURNING id`).bind(now,id,inputHash,now,...(isShort?[globalKey,window]:[])),
    db.prepare('INSERT INTO devices (id,name,platform,token_hash,created_at,last_seen_at) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE claimed_device = ?)').bind(id,value.name.trim(),value.platform.trim(),tokenHash,now,now,id)
   ]);
-  if(results[0].results.length)return respond({deviceId:id,token});
+  if(results[0].results.length){await db.prepare('INSERT INTO device_spaces (device_id,space) SELECT ?,s.space FROM device_spaces s JOIN pairing_codes p ON p.created_by_device = s.device_id WHERE p.claimed_device = ?').bind(id,id).run();return respond({deviceId:id,token});}
   if(isShort){
    const failures=await db.prepare('INSERT INTO pair_attempts (ip_hash,window_start,count) VALUES (?,?,1) ON CONFLICT(ip_hash,window_start) DO UPDATE SET count = count + 1 WHERE count < 100 RETURNING count').bind(globalKey,window).all();
    if(!failures.results.length)return limited();
@@ -97,11 +97,11 @@ export async function pairingRequest(request,env,device,readBody,respond) {
   return result?respond({claimed:!!result.claimed_device,name:result.name||null}):respond({error:'Not found'},404);
  }
  if(route==='/api/devices'&&method==='GET'){
-  const rows=await db.prepare('SELECT id,name,platform,created_at,last_seen_at,revoked_at,is_legacy FROM devices ORDER BY created_at DESC,id DESC').all();
+  const rows=await db.prepare("SELECT id,name,platform,created_at,last_seen_at,revoked_at,is_legacy FROM devices WHERE COALESCE((SELECT space FROM device_spaces WHERE device_id = devices.id),'legacy') = COALESCE((SELECT space FROM device_spaces WHERE device_id = ?),'legacy') ORDER BY created_at DESC,id DESC").bind(device.id).all();
   return respond({devices:rows.results,deviceId:device.id,suggestRevokeLegacy:rows.results.some(row=>!row.is_legacy&&!row.revoked_at)&&rows.results.some(row=>row.is_legacy&&!row.revoked_at)});
  }
  if(route==='/api/devices/revoke-others'&&method==='POST'){
-  await db.prepare('UPDATE devices SET revoked_at = ? WHERE id != ? AND revoked_at IS NULL').bind(now,device.id).run();
+  await db.prepare("UPDATE devices SET revoked_at = ? WHERE id != ? AND revoked_at IS NULL AND COALESCE((SELECT space FROM device_spaces WHERE device_id = devices.id),'legacy') = COALESCE((SELECT space FROM device_spaces WHERE device_id = ?),'legacy')").bind(now,device.id,device.id).run();
   return respond({ok:true});
  }
  const match=route.match(/^\/api\/devices\/([^/]+)$/);
@@ -111,8 +111,8 @@ export async function pairingRequest(request,env,device,readBody,respond) {
   if(method==='PATCH'){
    const value=await readBody(request);
    if(Object.keys(value).length!==1||!label(value.name))throw Error('Invalid device name');
-   result=await db.prepare('UPDATE devices SET name = ? WHERE id = ? RETURNING id').bind(value.name.trim(),id).first();
-  }else result=await db.prepare('UPDATE devices SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ? RETURNING id').bind(now,id).first();
+   result=await db.prepare("UPDATE devices SET name = ? WHERE id = ? AND COALESCE((SELECT space FROM device_spaces WHERE device_id = devices.id),'legacy') = COALESCE((SELECT space FROM device_spaces WHERE device_id = ?),'legacy') RETURNING id").bind(value.name.trim(),id,device.id).first();
+  }else result=await db.prepare("UPDATE devices SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ? AND COALESCE((SELECT space FROM device_spaces WHERE device_id = devices.id),'legacy') = COALESCE((SELECT space FROM device_spaces WHERE device_id = ?),'legacy') RETURNING id").bind(now,id,device.id).first();
   return result?respond({ok:true}):respond({error:'Not found'},404);
  }
  return null;
