@@ -310,9 +310,9 @@ async function openReviewDatabase(indexedDB) {
    return {...state,revision:state.revision+1};
   }),
   readLease:account=>transaction('leases',account),
-  lease:(account,owner,release=false,takeover=true)=>transaction('leases',account,current=>{
+  lease:(account,owner,release=false,takeover=true,claim=false)=>transaction('leases',account,current=>{
    if(release&&current?.owner!==owner)return current;
-   if(!release&&current?.owner!==owner&&current?.expires>Date.now()){
+   if(!release&&!claim&&current?.owner!==owner&&current?.expires>Date.now()){
     if(!takeover)return current;
     throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
    }
@@ -1203,12 +1203,12 @@ function mountPhotosSwipe(environment) {
  let pageActive=true,suspendingPromise=null,resumeOpening=false;
  let sessionClosing=false;
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false;
- const useHere=document.createElement('button');useHere.setAttribute('id','use-here');useHere.textContent='Use here';useHere.hidden=true;$('status').append(useHere);useHere.onclick=()=>open();
+ const useHere=document.createElement('button');useHere.setAttribute('id','use-here');useHere.textContent='Use here';useHere.hidden=true;$('status').append(useHere);useHere.onclick=()=>open(true);
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
  let writes=createWrites(),persistedItems=null;
  const synchronize=(pull=true)=>{
-  if(!identity||!syncEnabled||otherTab||leaseError||writeConflict||!lockedAccount)return Promise.resolve();
+  if(!identity||!syncEnabled||otherTab||leaseError||writeConflict||leaseRecoveryPending||!lockedAccount)return Promise.resolve();
   if(syncRunning)return syncRunning.then(()=>synchronize(pull));
   const account=identity.account,token=leaseGeneration;let version;
   syncRunning=(async()=>{
@@ -1217,6 +1217,7 @@ function mountPhotosSwipe(environment) {
    if(token!==leaseGeneration||otherTab||leaseError||writeConflict||lockedAccount!==account||identity?.account!==account)return;
    version=state;
    const next=await syncClient.sync(account,version,async value=>value,{pull,rebuild:next=>rebuildSyncedReview(next,call)});
+   if(token!==leaseGeneration||leaseRecoveryPending)return;
    await refreshLease();
    if(token===leaseGeneration&&!otherTab&&!leaseError&&identity?.account===account&&next!==version){
     state={...mergeSyncResult(state,version,next),revision:writeRevision};
@@ -1282,14 +1283,14 @@ function mountPhotosSwipe(environment) {
   if(!sheet.hidden)closeSettings();reviewPanel.hidden=true;previewKey=null;resumeReviewPlayback=false;renderTrashReview();$('close').focus();
   leaseGeneration++;cancelLibraryFill();window.clearTimeout(syncTimer);syncTimer=null;libraryFailure=null;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();
  }
- async function renewLease(takeover=false){
+ async function renewLease(takeover=false,claim=false){
   const token=leaseGeneration,account=identity?.account;
   if(!account||otherTab||!pageActive||document.hidden)return false;
   try{
    await assertAccount();
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
    acquiringAccount=account;
-   let lease=await db.lease(account,owner,false,takeover||!!leaseError||activeOperation||writes.pending||state.items!==persistedItems);
+   let lease=await db.lease(account,owner,false,takeover||!!leaseError||activeOperation||writes.pending||state.items!==persistedItems,claim);
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
    if(lease.owner!==owner&&(activeOperation||writes.pending||state.items!==persistedItems))lease=await db.lease(account,owner,false,true);
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
@@ -1591,7 +1592,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   let timer;
   try{await Promise.race([animation.finished,new Promise(resolve=>{timer=window.setTimeout(()=>{animation.finish();resolve();},350);})]);}catch{}finally{window.clearTimeout(timer);}
  }
- async function openSession() {
+ async function openSession(claim=false) {
   const requestedGeneration=leaseGeneration;
   if(closingPromise){await closingPromise;if(requestedGeneration!==leaseGeneration)return;}
   await suspendingPromise;
@@ -1615,7 +1616,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
    if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
-   if(!await renewLease(true))return;
+   if(!await renewLease(true,claim))return;
    const sessionGeneration=leaseGeneration;
    if(!changed){
     await writes.flush();
@@ -1632,9 +1633,9 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
   }finally{busy=false;render();controls();}
  }
- function open(){
+ function open(claim=false){
   if(openingPromise)return openingPromise;
-  openingPromise=openSession().then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageActive&&!document.hidden&&!$('overlay').hidden&&!closingPromise)open();}});
+  openingPromise=openSession(claim).then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageActive&&!document.hidden&&!$('overlay').hidden&&!closingPromise)open();}});
   return openingPromise;
  }
  async function closeSession(){
@@ -1692,7 +1693,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;(receivingPanel.querySelector('#pairing-short-code')||receivingPanel.querySelector('input')).focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:async()=>{await openingPromise;await open();},onClose:suppressViewerShortcuts,manual,url:$('sync-url').value.trim()||undefined});};
  const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=onboardPair.onclick;receivePairing(false);
  window.addEventListener('hashchange',()=>receivePairing(false));
- $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
+ $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;buffer.clear();render();};
  $('zoom').oninput=()=>{swipeFeedback.reset();mediaElement.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'';const image=$('media').querySelector('img');if(image){$('card').classList.toggle('zoomed',Number($('zoom').value)>1);image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'';}};
@@ -1715,7 +1716,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   return suspendingPromise;
  }
  async function resumeLease(){
-  await suspendingPromise;await activeOperation;
+  await suspendingPromise;await activeOperation;await syncRunning;
   if(!leaseRecoveryPending)await refreshLease();
   await libraryLoading;
   if(!pageActive||document.hidden||!identity||$('overlay').hidden||closingPromise)return;

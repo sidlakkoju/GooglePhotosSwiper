@@ -1558,7 +1558,7 @@ test('a clean tab pauses for another owner and Use here reloads saved decisions'
   first.nodes.get('keep').onclick();assert.match(first.nodes.get('caption').textContent,/^a ·/);
   first.environment.window.dispatchEvent(new Event('focus'));await new Promise(resolve=>setTimeout(resolve,10));
   assert.equal((await db.readLease(account)).owner,lease.owner);assert.deepEqual(await db.read(account),saved);
-  await db.lease(account,lease.owner,true);
+  assert.ok(lease.expires>Date.now());
   await first.nodes.get('use-here').onclick();
   assert.equal(first.nodes.get('use-here').hidden,true);assert.equal(first.nodes.get('keep').disabled,false);
   assert.match(first.nodes.get('caption').textContent,changed?/^b ·/:/^a ·/);
@@ -3484,4 +3484,34 @@ for(const resumeTiming of ['after request','during request'])test(`automatic lib
  await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
  assert.equal(libraryCalls,2);
  await mounted.nodes.get('close').onclick();
+});
+
+for(const foreignOwner of [false,true])test(`resume during an in-flight sync reloads progress with foreign owner ${foreignOwner}`,async()=>{
+ let hold=false;
+ const started=Promise.withResolvers(),finished=Promise.withResolvers();
+ const mounted=await mountedReview([item('a'),item('b'),item('c')],{fetch:async()=>{
+  if(hold){started.resolve();await finished.promise;}
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+ }});
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ await mounted.click('sync-save');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ hold=true;
+ const syncing=mounted.environment.window.listeners.focus();await started.promise;
+ try{
+  mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();await settlePreviews();
+  await db.lease(account,'other-tab');
+  const saved=await db.read(account);
+  await db.save(account,{...saved,items:saved.items.map(row=>row.mediaKey==='a'?{...row,decision:'keep'}:row)});
+  if(!foreignOwner)await db.lease(account,'other-tab',true);
+  mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();
+  await settlePreviews();hold=false;finished.resolve();await syncing;
+  if(foreignOwner){await waitForReview(()=>mounted.nodes.get('status').textContent==='Open in another tab');await mounted.nodes.get('use-here').onclick();}
+  await waitForReview(()=>/^b ·/.test(mounted.nodes.get('caption').textContent));
+  await mounted.click('keep');
+  await waitForReview(async()=> (await db.read(account)).items.find(row=>row.mediaKey==='b').decision==='keep');
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/conflict|Unsaved/);
+ }finally{hold=false;finished.resolve();await syncing;await mounted.nodes.get('close').onclick();}
 });

@@ -119,7 +119,7 @@ test('hash changes in an already mounted Photos tab open consent for the latest 
  const elements=dom(),listeners={},calls=[],location={hash:'',pathname:'/',search:''};let saved;
  elements.document.createElement=((create)=>tag=>{const node=create(tag);node.remove=()=>{elements.parent.children=elements.parent.children.filter(child=>child!==node);};return node;})(elements.document.createElement);
  const context={suppressViewerShortcuts(){},receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div'),onboardPair:{onclick(){}}};
- vm.runInNewContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(" $('launcher').onclick=open;")),context);
+ vm.runInNewContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(" $('launcher').onclick=()=>open();")),context);
  assert.equal(elements.parent.children.length,0);
  for(const code of ['abcdefghijklmnopqrstuv','zyxwvutsrqponmlkjihgfe']){
   location.hash='#pswipe-pair='+code+'&origin=https%3A%2F%2Fissuer.example';listeners.hashchange();assert.equal(location.hash,'');assert.equal(elements.parent.children.length,1);assert.equal(calls.length,code.startsWith('a')?0:1);
@@ -136,7 +136,7 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  const card=context.card;
  assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
- const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('   if(!await renewLease(true))return;',ui.indexOf(' async function openSession()')));
+ const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession(claim=false)')),ui.indexOf('   if(!await renewLease(true,claim))return;',ui.indexOf(' async function openSession(claim=false)')));
  for(const [settings,receivingPanel] of [[{},undefined],[{}, {hidden:true}],[{onboardingDismissed:true},undefined],[{url:'https://worker.example',token:'synthetic-token'},undefined]]){
   let automaticOpens=0;
   const nodes={},node=id=>nodes[id]||(nodes[id]={});
