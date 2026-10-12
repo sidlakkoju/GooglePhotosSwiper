@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.36
+// @version 1.2.37
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -260,7 +260,7 @@ async function reconcileReviewTrash(state,call) {
  const newlyTrashed=items.filter(item=>item.state==='in_trash'&&state.items.find(previous=>previous.mediaKey===item.mediaKey)?.state!=='in_trash');
  return {...state,items,lifetimeFreed:(state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes)+reviewStorage(newlyTrashed).bytes};
 }
-async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},target=50,maxPages=12}) {
+async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},target=50,maxPages=Infinity}) {
  let state=await read();
  const before=new Set(reviewDeck(state).map(item=>item.mediaKey)),seen=new Set(state.cursor?[state.cursor]:[]);
  let scanned=0,added=0,warning='',limited=false;
@@ -269,7 +269,7 @@ async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},tar
   progress(scanned);
   const cursor=refresh?null:state.cursor,page=await call('library',{cursor});
   if(!refresh&&page.nextPageId&&seen.has(page.nextPageId))throw Error('Google repeated a library page. Reload before retrying.');
-  state=await save(mergeReviewPage(state,page,cursor,refresh));scanned+=page.items.length;warning=page.metadataWarning||warning;added=reviewDeck(state).filter(item=>!before.has(item.mediaKey)).length;
+  state=await save(mergeReviewPage(await read(),page,cursor,refresh),page,cursor,refresh);scanned+=page.items.length;warning=page.metadataWarning||warning;added=reviewDeck(state).filter(item=>!before.has(item.mediaKey)).length;
   if(refresh||state.exhausted||added>=target)break;
   seen.add(state.cursor);limited=count===maxPages-1;
  }
@@ -1246,7 +1246,7 @@ function mountPhotosSwipe(environment) {
   activeOperation=(async()=>{
    try {
     db=await database();
-    await syncRunning;
+    await libraryLoading;await syncRunning;
     await assertAccount();
     await withAccountLease(task);
    }catch(error){message(error.message);}finally{
@@ -1314,6 +1314,11 @@ function mountPhotosSwipe(environment) {
   if(videoRPC)return videoRPC.then(()=>videoURL(item),()=>videoURL(item));
   videoRPC=call('video',{mediaKey:item.mediaKey}).then(result=>{const url=mediaURL(result.url,true);if(identity?.account===account){videoURLs.set(item.mediaKey,{url,fetchedAt:Date.now()});if(videoURLs.size>32)videoURLs.delete(videoURLs.keys().next().value);}return url;}).finally(()=>{videoRPC=null;});
   return videoRPC;
+ }
+ let libraryLoading=null,libraryFailure=null;
+ function fillLibrary(){
+  if(libraryLoading||libraryFailure||closingPromise||busy||leaseError||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
+  libraryLoading=load().catch(error=>{libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{libraryLoading=null;render();});
  }
  function refill(){
   if(idlePending||!window.Image||$('overlay').hidden)return;
@@ -1412,7 +1417,7 @@ function mountPhotosSwipe(environment) {
  }
  function renderCard(){
   const item=current();
-  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:'No unreviewed items in this batch.';
+  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:(reviewDeck(state).length?'No items match this filter.':state.exhausted?"You\u2019ve reviewed everything":libraryFailure?'Library loading failed. Retry Load more.':'Loading more items\u2026');
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
  }
  function renderStats(){
@@ -1466,7 +1471,7 @@ function mountPhotosSwipe(environment) {
   if(next&&underCard.querySelector('img')?.dataset?.key!==next.mediaKey){try{const preview=document.createElement('img');preview.dataset.key=next.mediaKey;preview.alt='';preview.draggable=false;preview.src=mediaURL(next.thumbUrl,false,previewSize());underCard.replaceChildren(preview);}catch{underCard.replaceChildren();}}
   if(!next)underCard.replaceChildren();underCard.hidden=!next;
   preloadReview(item);
-  renderStats();renderLists();refill();
+  renderStats();renderLists();refill();fillLibrary();
   if(identity&&!$('overlay').hidden)persistResume();
  }
  let cardAnimation=null;
@@ -1521,7 +1526,7 @@ function mountPhotosSwipe(environment) {
  }
  async function closeSession(){
   captureVideo();persistResume();if(!sheet.hidden)suppressViewerShortcuts();sheet.hidden=true;
-  preloader.clear();finishCardAnimation();clearCardAnimation();await openingPromise;await activeOperation;await writes.flush();
+  preloader.clear();finishCardAnimation();clearCardAnimation();await openingPromise;await activeOperation;await libraryLoading;await writes.flush();
   leaseGeneration++;clearInterval(leaseTimer);leaseTimer=null;
   $('overlay').hidden=true;$('launcher').hidden=false;$('launcher').focus();
   stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
@@ -1553,8 +1558,10 @@ function mountPhotosSwipe(environment) {
  async function undo(){if(busy||!identity||leaseError||$('overlay').hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;const restored=next.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
  async function load(refresh=false) {
   buffer.clear();previousKey=null;
-  const result=await loadReviewPages({read:async()=>state,save,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
-  message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.limited?' \u00b7 Scan limit reached; Load more continues from here':''}${result.warning?'. '+result.warning:''}`);
+  libraryFailure=null;
+  const savePage=async(next,page,cursor,refresh)=>{await syncRunning;await assertSaveAccount();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
+  const result=await loadReviewPages({read:async()=>state,save:savePage,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
 
  mediaElement.addEventListener('wheel',event=>{if(!$('card').classList.contains('expanded'))return;event.preventDefault();$('zoom').value=String(Math.max(1,Math.min(3,Number($('zoom').value)+(event.deltaY<0?.25:-.25))));$('zoom').oninput();},{passive:false});
@@ -1627,7 +1634,7 @@ function mountPhotosSwipe(environment) {
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.36":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.37":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
