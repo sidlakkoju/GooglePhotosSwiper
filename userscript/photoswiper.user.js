@@ -1287,7 +1287,7 @@ function mountPhotosSwipe(environment) {
    await assertAccount();
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
    acquiringAccount=account;
-   const lease=await db.lease(account,owner,false,takeover||!!leaseError||activeOperation||libraryLoading||writes.pending||state.items!==persistedItems);
+   const lease=await db.lease(account,owner,false,takeover||!!leaseError||activeOperation||writes.pending||state.items!==persistedItems);
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
    if(lease.owner!==owner){pauseForOtherTab();return false;}
    lockedAccount=account;leaseError=null;startRenewal();return true;
@@ -1708,7 +1708,9 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   return suspendingPromise;
  }
  async function resumeLease(){
-  await suspendingPromise;await activeOperation;await libraryLoading;
+  await suspendingPromise;await activeOperation;
+  if(!leaseRecoveryPending)await refreshLease();
+  await libraryLoading;
   if(!pageActive||document.hidden||!identity||$('overlay').hidden||closingPromise)return;
   startRenewal();await refreshLease();refreshStalePreviews();
  }

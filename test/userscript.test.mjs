@@ -1334,6 +1334,44 @@ test('fresh foreign leases block library RPCs and recover automatically after ex
   await mounted.click('keep');assert.equal((await mounted.read()).items[0].decision,'keep');
  }finally{Date.now=actualNow;await mounted.nodes.get('close').onclick();}
 });
+test('automatic library fill yields to a foreign lease during focus, visibility and timer renewal',async()=>{
+ for(const trigger of ['focus','visibility','timer']){
+  const timers=new Map();let timerId=0,finish,started;
+  const pending=new Promise(resolve=>{started=resolve;});
+  const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+   if(entry[0]==='lcxiM'){
+    started();await new Promise(resolve=>{finish=resolve;});
+    return {ok:true,text:async()=>envelope(entry[0],[[['new',['https://lh3.googleusercontent.com/new',800,600],1720000000000,'stable-new']],null])};
+   }
+   return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  }},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await mounted.nodes.get('close').onclick();
+  await db.save(account,{...await db.read(account),started:true,exhausted:false,cursor:'next'});
+  await mounted.nodes.get('launcher').onclick();await pending;
+  try{
+   await db.lease(account,(await db.readLease(account)).owner,true);
+   await db.lease(account,'other-tab');
+   await db.save(account,{...await db.read(account),cursor:'other-tab'});
+   const saved=await db.read(account),lease=await db.readLease(account);
+   if(trigger==='focus')await mounted.environment.window.listeners.focus();
+   else if(trigger==='visibility')mounted.environment.document.listeners.visibilitychange();
+   else{
+    const tick=[...timers.values()][0];assert.ok(tick);tick();
+   }
+   await waitForReview(()=>mounted.nodes.get('status').textContent==='Open in another tab');
+   assert.deepEqual(await db.readLease(account),lease);
+   finish();await mounted.settle();
+   assert.deepEqual(await db.read(account),saved);
+   assert.deepEqual(await db.readLease(account),lease);
+   assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+   assert.equal(mounted.nodes.get('use-here').hidden,false);
+   assert.equal(mounted.nodes.get('keep').disabled,true);
+  }finally{finish();await mounted.nodes.get('close').onclick();}
+ }
+});
 test('lease timer reclaims expired ownership and preserves in-flight Trash, album and library results',async()=>{
  for(const operation of ['move-trash','send','load']){
   const timers=new Map();let timerId=0,finish,started,added=false;
@@ -1416,6 +1454,7 @@ test('stale tabs do not publish decisions or undo history on the hidden sync tim
   assert.equal(typeof scheduledSync,'function');
   const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
   const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await db.lease(account,(await db.readLease(account)).owner,true);
   await db.lease(account,'other-tab');
   const current=await db.read(account);
   await db.save(account,{...current,items:current.items.map(row=>({...row,decision:'remove',revision:row.revision+1})),history:[{key:'a',decision:'remove',revision:2}]});
@@ -1424,10 +1463,14 @@ test('stale tabs do not publish decisions or undo history on the hidden sync tim
    mounted.environment.document.hidden=true;
    mounted.environment.document.listeners.visibilitychange();
    scheduledSync();
-   await waitForReview(()=>mounted.nodes.get('status').textContent==='Open in another tab');
+   await mounted.settle();
+   assert.equal(requests.length,before);
+   assert.deepEqual(await db.read(account),saved);
+   assert.deepEqual(await db.readLease(account),lease);
+   await mounted.nodes.get('close').onclick();
   }else await mounted.nodes.get('close').onclick();
   assert.equal(requests.length,before);
-  assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+  if(trigger==='close')assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
   assert.deepEqual(await db.read(account),saved);
   assert.deepEqual(await db.readLease(account),lease);
   await mounted.nodes.get('close').onclick();
