@@ -211,6 +211,21 @@ test('rebuilt panel version follows a metadata version bump',async()=>{
   const mounted=bundleEnvironment();
   vm.runInNewContext(source,mounted.environment);
   assert.equal(mounted.nodes.get('running-version').textContent,'v'+metadataVersion);
+  mounted.nodes.get('settings').onclick();
+  const sheet=mounted.nodes.get('settings-sheet'),footer=mounted.nodes.get('settings-version');
+  assert.equal(sheet.hidden,false);
+  assert.equal(footer.hidden,false);
+  assert.equal(sheet.childNodes.at(-1),footer);
+  assert.equal(footer.textContent,'Photos Swipe v'+metadataVersion);
+  assert.equal(footer.class,'version-label');
+  const headingIn=node=>node.tagName==='H1'?node:node.childNodes?.map(headingIn).find(Boolean);
+  const title=headingIn(mounted.nodes.get('overlay'));
+  assert.equal(title.tagName,'H1');
+  assert.notEqual(title['aria-hidden'],'true');
+  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('\n');
+  assert.match(styles,/\.version-label\{font:var\(--ps-t-caption\);color:var\(--ps-label2\)\}/);
+  assert.match(styles,/\.content h1\{flex-basis:100%;order:-1;font:var\(--ps-t-title\)\}/);
+  assert.match(styles,/@media\(max-width:599px\)\{[^@]*\.content h1\{position:absolute;width:1px;height:1px;overflow:hidden\}/);
  }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
@@ -2307,6 +2322,7 @@ test('loader panel displays the selected signed release version instead of the b
   assert.equal(await verifyRelease(release,webcrypto,key),true);
   assert.equal(injectRelease({...mounted.environment,GM},release),true);
   assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
+  assert.equal(mounted.nodes.get('settings-version').textContent,'Photos Swipe v'+version);
  }
 });
 
