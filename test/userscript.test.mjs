@@ -1,11 +1,11 @@
-import {injectRelease} from '../lib/userscript-loader.mjs';
+import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,access,mkdtemp,writeFile,rm,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {webcrypto} from 'node:crypto';
+import {webcrypto,generateKeyPairSync,sign} from 'node:crypto';
 import vm from 'node:vm';
 import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
 import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
@@ -1807,7 +1807,11 @@ test('loader panel displays the selected signed release version instead of the b
  for(const version of ['1.2.99','1.2.8']){
   const mounted=bundleEnvironment();
   const GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
-  assert.equal(injectRelease({...mounted.environment,GM},{version,code}),true);
+  const pair=generateKeyPairSync('ed25519'),release={version,code};
+  release.signature=sign(null,Buffer.from(releaseMessage(release)),pair.privateKey).toString('base64');
+  const key=Buffer.from(pair.publicKey.export({format:'jwk'}).x,'base64url').toString('base64');
+  assert.equal(await verifyRelease(release,webcrypto,key),true);
+  assert.equal(injectRelease({...mounted.environment,GM},release),true);
   assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
  }
 });
