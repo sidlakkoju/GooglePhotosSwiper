@@ -70,6 +70,12 @@ export async function syncRequest(request,env={}) {
     const statements=(value.items||[]).map(item=>db.prepare("INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data WHERE COALESCE(json_extract(excluded.data, '$.revision'), 0) > COALESCE(json_extract(review_items.data, '$.revision'), 0)").bind(scope,item.mediaKey,JSON.stringify(item)));
     for(let index=0;index<statements.length;index+=100)await db.batch(statements.slice(index,index+100));
     await db.prepare('UPDATE review_state SET progress = json_patch(progress, ?) WHERE scope = ?').bind(incoming,scope).run();
+    const items=[];
+    for(let index=0;index<(value.items||[]).length;index+=100){
+     const rows=await db.batch(value.items.slice(index,index+100).map(item=>db.prepare('SELECT data FROM review_items WHERE scope = ? AND id = ?').bind(scope,item.mediaKey)));
+     for(const row of rows)items.push(JSON.parse(row.results[0].data));
+    }
+    result={ok:true,items};
    }else if(method==='PUT'){
     if(!historyValid(value.history)||Object.keys(value).length!==1)throw Error('Invalid undo history');
     await db.prepare('UPDATE review_state SET history = ? WHERE scope = ?').bind(JSON.stringify(value.history),scope).run();

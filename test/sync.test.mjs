@@ -533,3 +533,44 @@ test('item storage migration preserves legacy checkpoints and keeps metadata-onl
  const state=await client.sync('default',{started:true,items:[{mediaKey:'synthetic-loaded',state:'active'}],history:[],syncDecisions:{}},async value=>value);
  assert.equal(state.items.find(item=>item.mediaKey===entry.key).revision,3);assert.equal(canUndoReview(state,entry),false);
  });
+
+test('equal revision sync adopts the server trash row before review and checkpointing',async()=>{
+ const e=env(),trash={mediaKey:'synthetic-tie',state:'in_trash',revision:4,spaceTaken:120};
+ await call(e,'progress','PUT',{started:true,reviewed:0,items:[trash],lifetimeFreed:120});
+ const rejected=await (await call(e,'progress','PUT',{started:true,reviewed:0,items:[{...trash,state:'active',queueSent:false}],lifetimeFreed:120})).json();
+ assert.deepEqual(rejected.items,[trash]);
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const local={started:true,history:[],items:[{...trash,state:'active',decision:null,queueSent:false,name:'Synthetic photo'}],syncDecisions:{},syncDirty:true};
+ const synced=await client.sync('default',local,async value=>value);
+ assert.equal(synced.items[0].state,'in_trash');
+ assert.equal(synced.items[0].name,'Synthetic photo');
+ assert.equal(Object.hasOwn(synced.items[0],'queueSent'),false);
+ assert.deepEqual(synced.syncCheckpoint.items,[trash]);
+ assert.throws(()=>decideReview(synced,trash.mediaKey,'keep',null,4));
+ await client.sync('default',synced,async value=>value);
+ const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
+ assert.equal(restored.items[0].state,'in_trash');
+});
+
+test('progress PUT reconciles a server tie introduced after the client pull',async()=>{
+ const e=env(),trash={mediaKey:'synthetic-race',state:'in_trash',revision:4,queueSent:true};
+ let raced=false;
+ const client=createSyncClient({fetch:async(url,options)=>{
+  if(options.method==='PUT'&&new URL(url).pathname==='/api/progress'&&!raced){
+   raced=true;
+   await call(e,'progress','PUT',{started:true,reviewed:0,items:[trash],lifetimeFreed:0});
+  }
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const local={started:true,history:[],items:[{mediaKey:trash.mediaKey,state:'active',revision:4,decision:null}],syncDecisions:{},syncDirty:true};
+ const synced=await client.sync('default',local,async value=>value);
+ assert.equal(raced,true);
+ assert.equal(synced.items[0].state,'in_trash');
+ assert.deepEqual(synced.syncCheckpoint.items,[trash]);
+ assert.deepEqual(synced.syncCheckpoint,(await (await call(e,'progress')).json()));
+ assert.throws(()=>decideReview(synced,trash.mediaKey,'keep',null,4));
+ const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
+ assert.equal(restored.items[0].state,'in_trash');
+});

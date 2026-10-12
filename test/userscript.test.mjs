@@ -804,7 +804,7 @@ test('first-use sync setup is above the card and local dismissal survives reopen
 
 test('sync setup actions preserve the saved album retry status and job',async()=>{
  for(const action of ['sync-local','sync-save']){
-  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})});
+  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch:async(url,options)=>({ok:true,json:async()=>options?.method==='PUT'?{items:JSON.parse(options.body).items||[]}:{decisions:[],history:[],progress:{}}})});
   const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
   const db=await openReviewDatabase(mounted.environment.window.indexedDB);
   const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
@@ -832,10 +832,10 @@ test('main and visible sync status report successful sync, failures and disablin
  const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
  reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  let fail=false,requests=0;
- reopened.environment.window.fetch=async url=>{
+ reopened.environment.window.fetch=async(url,options)=>{
   assert.equal(new URL(url).origin,'https://sync.example');requests++;
   if(fail)throw Error('Synthetic offline');
-  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+  return {ok:true,json:async()=>options?.method==='PUT'?{items:JSON.parse(options.body).items||[]}:{decisions:[],history:[],progress:{}}};
  };
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(reopened.environment.window.indexedDB);

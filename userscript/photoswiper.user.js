@@ -310,6 +310,10 @@ async function openReviewDatabase(indexedDB) {
  };
 }
 
+const fields=['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent'];
+function mergeProgressItem(item,checkpoint) {
+ return {...Object.fromEntries(Object.entries(item).filter(([field])=>!fields.includes(field))),...checkpoint};
+}
 function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
  let settings={},blocked=false;
  const configure=value=>{settings=value||{};blocked=false;status(settings.url&&settings.token?'Sync ready':'Sync off \u00b7 saved locally');};
@@ -340,7 +344,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    const checkpointRevisions=new Map([...checkpointItems].map(([key,item])=>[key,item.revision||0]));
    const mergedItems=state.items.map(item=>{
     const checkpoint=checkpointItems.get(item.mediaKey);checkpointItems.delete(item.mediaKey);
-    return checkpoint&&(checkpoint.revision||0)>(item.revision||0)?{...item,...checkpoint}:item;
+    return checkpoint&&(checkpoint.revision||0)>=(item.revision||0)?mergeProgressItem(item,checkpoint):item;
    });
    for(const item of checkpointItems.values())mergedItems.push({...item,name:item.mediaKey,type:item.type||'photo',needsPreview:true});
    const items=mergedItems.map(item=>{
@@ -355,12 +359,22 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
     next={...next,started:!!remote.progress.started,items:restored.map(item=>({...item,name:item.mediaKey,type:item.type||'photo',decision:decisions[item.mediaKey]??null,needsPreview:true})),lifetimeFreed:remote.progress.lifetimeFreed||0};
     try{next=await rebuild(next);}catch(error){status(`${error.message} \u00b7 checkpoint recovered; retry loading the library`);}
    }
-   const progress=reviewSyncProgress(next,decisions);
+   let progress=reviewSyncProgress(next,decisions);
    const progressDirty=dirty||JSON.stringify(progress)!==JSON.stringify(state.syncCheckpoint)&&state.items.length>0;
    let writeError=null;
    try{
     if(dirty)await request(scope,'api/undo','PUT',{history});
-    if(progressDirty)for(const batch of progressBatches(progress))await request(scope,'api/progress','PUT',batch);
+    if(progressDirty){
+     const accepted=new Map();
+     for(const batch of progressBatches(progress)){
+      const result=await request(scope,'api/progress','PUT',batch);
+      const items=result.items||(await request(scope,'api/state')).progress.items;
+      if(!Array.isArray(items)||batch.items.some(item=>!items.some(row=>row.mediaKey===item.mediaKey)))throw Error('Unconfirmed sync');
+      for(const item of items)accepted.set(item.mediaKey,item);
+     }
+     next={...next,items:next.items.map(item=>accepted.has(item.mediaKey)?mergeProgressItem(item,accepted.get(item.mediaKey)):item)};
+     progress.items=reviewSyncProgress(next,decisions).items;
+    }
    }catch(error){writeError=error;}
    next=await save({...next,syncPending:{},syncDirty:writeError?!!dirty:false,syncProgress:remote.progress,syncCheckpoint:writeError?state.syncCheckpoint:progress});
    if(writeError){if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
@@ -406,7 +420,6 @@ function progressBatches(progress) {
  return batches;
 }
 function reviewSyncProgress(state,decisions=state.syncDecisions||{}) {
- const fields=['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent'];
  return {started:!!state.started,reviewed:Object.keys(decisions).length,items:state.items.map(item=>Object.fromEntries(fields.filter(field=>item[field]!==undefined).map(field=>[field,item[field]]))),lifetimeFreed:state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes};
 }
 async function rebuildSyncedReview(state,call) {
