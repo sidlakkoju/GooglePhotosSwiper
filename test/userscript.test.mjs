@@ -333,6 +333,17 @@ test('fake IndexedDB persists account-isolated progress and rejects stale revisi
  await first.lease('account-a','owner-a');await assert.rejects(reopened.lease('account-a','owner-b'),/busy/);
  await reopened.lease('account-b','owner-b');await first.lease('account-a','owner-a',true);await reopened.lease('account-a','owner-b');
 });
+test('conditional lease renewal preserves live foreign owners and acquires expired leases',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(fakeIndexedDB());
+ const foreign=await db.lease('account','other-tab');
+ assert.deepEqual(await db.lease('account','background-tab',false,false),foreign);
+ assert.deepEqual(await db.readLease('account'),foreign);
+ const renewed=await db.lease('account','other-tab',false,false);
+ assert.equal(renewed.owner,'other-tab');assert.ok(renewed.expires>Date.now());
+ await db.lease('account','other-tab',true);
+ const acquired=await db.lease('account','background-tab',false,false);
+ assert.equal(acquired.owner,'background-tab');assert.ok(acquired.expires>Date.now());
+});
 test('item revisions prevent stale undo after another tab changes or sends the same decision',()=>{
  let state={...emptyReview(),items:[item('a')]};
  state=decideReview(state,'a','remove',null,0);state=decideReview(state,'a','keep','remove',1);state=decideReview(state,'a','remove','keep',2);
@@ -1398,7 +1409,7 @@ test('a paused tab rejects swipes without hiding the current card',async()=>{
  await mounted.nodes.get('close').onclick();
 });
 
-test('pausing invalidates a renewal waiting for its account check',async()=>{
+test('a hidden tab cannot renew over an owner acquired during its account check',async()=>{
  let finish,started,delay=false;
  const checking=new Promise(resolve=>{started=resolve;});
  const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
@@ -1410,12 +1421,18 @@ test('pausing invalidates a renewal waiting for its account check',async()=>{
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  delay=true;mounted.environment.document.listeners.visibilitychange();await checking;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
  await db.lease(account,(await db.readLease(account)).owner,true);
  await db.lease(account,'other-tab');
- mounted.environment.document.listeners.visibilitychange();await mounted.settle();
+ await db.save(account,{...await db.read(account),cursor:'other-tab'});
+ const saved=await db.read(account);
  finish();await mounted.settle();
  assert.equal((await db.readLease(account)).owner,'other-tab');
+ assert.deepEqual(await db.read(account),saved);
+ mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await mounted.settle();await mounted.environment.window.listeners.focus();
  assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+ assert.deepEqual(await db.read(account),saved);
+ assert.equal((await db.readLease(account)).owner,'other-tab');
  mounted.nodes.get('keep').onclick();assert.equal((await mounted.read()).items[0].decision,null);
  await mounted.nodes.get('close').onclick();
 });

@@ -136,7 +136,7 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  const card=context.card;
  assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
- const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('   if(!await renewLease())return;',ui.indexOf(' async function openSession()')));
+ const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('   if(!await renewLease(true))return;',ui.indexOf(' async function openSession()')));
  for(const [settings,receivingPanel] of [[{},undefined],[{}, {hidden:true}],[{onboardingDismissed:true},undefined],[{url:'https://worker.example',token:'synthetic-token'},undefined]]){
   let automaticOpens=0;
   const nodes={},node=id=>nodes[id]||(nodes[id]={});

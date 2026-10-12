@@ -310,9 +310,12 @@ async function openReviewDatabase(indexedDB) {
    return {...state,revision:state.revision+1};
   }),
   readLease:account=>transaction('leases',account),
-  lease:(account,owner,release=false)=>transaction('leases',account,current=>{
+  lease:(account,owner,release=false,takeover=true)=>transaction('leases',account,current=>{
    if(release&&current?.owner!==owner)return current;
-   if(current?.owner!==owner&&current?.expires>Date.now())throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+   if(!release&&current?.owner!==owner&&current?.expires>Date.now()){
+    if(!takeover)return current;
+    throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+   }
    return {owner,expires:release?0:Date.now()+LEASE_EXPIRY_MS};
   })
  };
@@ -1271,15 +1274,19 @@ function mountPhotosSwipe(environment) {
   leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
   leaseTimer?.unref?.();
  }
- async function renewLease(){
+ function pauseForOtherTab(){
+  leaseGeneration++;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();
+ }
+ async function renewLease(takeover=false){
   const token=leaseGeneration,account=identity?.account;
   if(!account||otherTab||!pageActive||document.hidden)return false;
   try{
    await assertAccount();
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
    acquiringAccount=account;
-   await db.lease(account,owner);
+   const lease=await db.lease(account,owner,false,takeover||!!leaseError||writes.pending||state.items!==persistedItems);
    if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
+   if(lease.owner!==owner){pauseForOtherTab();return false;}
    lockedAccount=account;leaseError=null;startRenewal();return true;
   }catch(error){
    if(token===leaseGeneration){lockedAccount=null;leaseError=error;message(error.message);startRenewal();}
@@ -1296,7 +1303,7 @@ function mountPhotosSwipe(environment) {
   try{lease=await db.readLease(account);}catch(error){if(token===leaseGeneration){leaseError=error;message(error.message);}return;}
   if(token!==leaseGeneration||account!==identity?.account)return;
   if(!leaseError&&!writes.pending&&state.items===persistedItems&&lease?.owner!==owner&&lease?.expires>Date.now()){
-   leaseGeneration++;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();return;
+   pauseForOtherTab();return;
   }
   if(otherTab)return;
   if(recovering)leaseRecoveryPending=true;
@@ -1310,7 +1317,7 @@ function mountPhotosSwipe(environment) {
   return renewLease();
  }
  async function withAccountLease(task) {
-  if(!await renewLease())throw leaseError||Error('Session changed. Close and reopen Photos Swipe.');
+  if(!await renewLease(true))throw leaseError||Error('Session changed. Close and reopen Photos Swipe.');
   await writes.flush();if(writes.pending)throw Error('Save pending local changes before this operation.');
   await task();scheduleSync();
  }
@@ -1603,7 +1610,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
    if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
-   if(!await renewLease())return;
+   if(!await renewLease(true))return;
    const sessionGeneration=leaseGeneration;
    if(!changed){
     await writes.flush();
