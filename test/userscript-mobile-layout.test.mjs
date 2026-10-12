@@ -20,7 +20,32 @@ test('userscript status keeps a bounded layout slot even when empty',()=>{
 test('settings Done uses a capsule while main header icons stay circular',()=>{
  assert.match(source,/\.content > header button\{position:relative;width:36px;height:36px;min-height:36px;padding:8px;border-radius:50%;flex:none\}/);
  assert.doesNotMatch(source,/\.content header button\{[^}]*width:36px/);
- assert.match(source,/\.content \.settings-header button\{width:auto;min-width:44px;height:36px;min-height:36px;padding:0 14px;border-radius:18px\}/);
+ assert.match(source,/\.content \.settings-header button\{position:relative;width:auto;min-width:44px;height:36px;min-height:36px;padding:0 14px;border-radius:18px\}/);
+});
+
+test('generated settings Done hit area is at least 44 by 44 without expanding main header icons',async()=>{
+ const bundle=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
+ const declarations=selector=>Object.fromEntries(bundle.match(new RegExp(selector+'\\{([^}]+)\\}'))[1].split(';').map(declaration=>declaration.split(':')));
+ const pill=declarations('\\.content \\.settings-header button');
+ const hitArea=declarations('\\.content \\.settings-header button::before');
+ const icons=declarations('\\.content > header button');
+ assert.equal(pill.position,'relative');
+ assert.equal(pill.height,'36px');
+ assert.equal(pill['min-height'],'36px');
+ assert.equal(pill.padding,'0 14px');
+ assert.equal(pill['border-radius'],'18px');
+ assert.equal(hitArea.content,'""');
+ assert.equal(hitArea.position,'absolute');
+ assert.equal(hitArea.background,'transparent');
+ const expansion=-2*parseFloat(hitArea.inset);
+ assert.ok(parseFloat(pill.height)+expansion>=44);
+ assert.ok(parseFloat(pill['min-width'])+expansion>=44);
+ assert.equal(icons.width,'36px');
+ assert.equal(icons.height,'36px');
+ assert.equal(icons['min-height'],'36px');
+ assert.equal(icons.padding,'8px');
+ assert.equal(icons['border-radius'],'50%');
+ assert.doesNotMatch(bundle,/\.content > header button::before/);
 });
 
 test('iPhone capsule stays centered without clipping and status updates do not add window scrolling',{skip:!chrome||probe.status!==0},async()=>{
@@ -122,11 +147,15 @@ test('settings header keeps Done visible and clickable while the sheet scrolls',
    const doneStyle=getComputedStyle(sheetClose);
    const label=document.createRange();label.selectNodeContents(sheetClose);
    const textBounds=label.getBoundingClientRect(),doneBounds=rect(sheetClose);
-   const capsule=doneBounds.width>36&&doneBounds.height===36&&doneStyle.minWidth==='44px'&&doneStyle.borderRadius==='18px'&&doneStyle.paddingLeft==='14px'&&doneStyle.paddingRight==='14px'&&textBounds.left>=doneBounds.left+14&&textBounds.right<=doneBounds.right-14&&sheetClose.scrollWidth<=sheetClose.clientWidth;
+   const capsule=doneBounds.width>36&&doneBounds.height===36&&doneStyle.minWidth==='44px'&&doneStyle.borderRadius==='18px'&&doneStyle.paddingLeft==='14px'&&doneStyle.paddingRight==='14px'&&textBounds.left>=doneBounds.left+14&&textBounds.right<=doneBounds.right-14;
    const circularIcons=[gear,closeElement].every(button=>rect(button).width===36&&rect(button).height===36&&getComputedStyle(button).borderRadius==='50%');
    const initialTop=rect(sheetClose).top;
    const initialContentTop=rect(settingsPanel).top;
-   const results={capsule,circularIcons,headerContainsDone:sheetClose.parentElement===sheetHeader,headerContainsTitle:sheetTitle.parentElement===sheetHeader,sticky:getComputedStyle(sheetHeader).position==='sticky',snapshots:[]};
+   const hitStyle=getComputedStyle(sheetClose,'::before');
+   const hitHeight=doneBounds.height-parseFloat(hitStyle.top)-parseFloat(hitStyle.bottom);
+   const hitWidth=doneBounds.width-parseFloat(hitStyle.left)-parseFloat(hitStyle.right);
+   const expandedTargetClickable=[doneBounds.top-3,doneBounds.bottom+3].every(y=>root.elementFromPoint(doneBounds.left+doneBounds.width/2,y)===sheetClose);
+   const results={capsule,circularIcons,hitAreaLargeEnough:hitHeight>=44&&hitWidth>=44,expandedTargetClickable,headerContainsDone:sheetClose.parentElement===sheetHeader,headerContainsTitle:sheetTitle.parentElement===sheetHeader,sticky:getComputedStyle(sheetHeader).position==='sticky',snapshots:[]};
    for(const fraction of [0.5,1]){
     sheet.scrollTop=(sheet.scrollHeight-sheet.clientHeight)*fraction;
     const button=rect(sheetClose),header=rect(sheetHeader),bounds=rect(sheet);
