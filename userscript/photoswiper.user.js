@@ -1455,13 +1455,17 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   $('album').hidden=!state.albumKey;if(state.albumKey)$('album').href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/album/${encodeURIComponent(state.albumKey)}`;
  }
  function reviewRows(){const items=new Map(state.items.map(item=>[item.mediaKey,item]));return reviewItems.filter(saved=>items.has(saved.mediaKey)).map(saved=>({...saved,...items.get(saved.mediaKey)})).filter(item=>item.state!=='in_trash'&&!item.needsPreview);}
+ function decideWithHistory(current,item,decision){
+  const next=decideReview(current,item.mediaKey,decision,item.decision,item.revision||0);
+  return {...next,history:[...(current.history||[]),{key:item.mediaKey,previous:item.decision,decision,revision:(item.revision||0)+1}]};
+ }
  function selectTrashItem(key,selected){
   if(busy||!identity||leaseError)return;
   const item=state.items.find(item=>item.mediaKey===key);if(!item||item.state==='in_trash')return;
   const decision=selected?'remove':'keep';if(item.decision===decision)return;
-  try{apply(decideReview(state,key,decision,item.decision,item.revision||0));}catch(error){message(error.message);}
+  try{apply(decideWithHistory(state,item,decision));}catch(error){message(error.message);}
  }
- selectAll.onclick=()=>{if(busy||!identity||leaseError)return;try{let next=state;for(const item of reviewRows())if(item.decision!=='remove')next=decideReview(next,item.mediaKey,'remove',item.decision,item.revision||0);apply(next);}catch(error){message(error.message);}};
+ selectAll.onclick=()=>{if(busy||!identity||leaseError)return;try{let next=state;for(const item of reviewRows())if(item.decision!=='remove')next=decideWithHistory(next,item,'remove');apply(next);}catch(error){message(error.message);}};
  function renderTrashReview(){
   if(reviewPanel.hidden){if(resumeReviewPlayback&&!overlayElement.hidden){mediaElement.querySelector('video')?.play().catch(()=>{});resumeReviewPlayback=false;}previewGeneration++;if(previewVideo){previewVideo.pause();previewVideo.removeAttribute('src');previewVideo.load();previewVideo=null;}reviewSignature='';return;}
   const rows=reviewRows(),selected=rows.filter(item=>item.decision==='remove');
@@ -1592,7 +1596,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   swipeFeedback.dismiss(decision);window.performance?.mark('swipe');swipeAt=window.performance?.now()??null;const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);inspected=null;focused=null;previousKey=item.mediaKey;apply({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]},item.mediaKey);message([decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`,readyMessage()].filter(Boolean).join(' '));
   }catch(error){message(error.message);}
  }
- async function undo(){if(busy||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===last.revision-1)previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;const restored=next.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
+ async function undo(){if(busy||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);if(previous&&previous.revision===(last.originalRevision??last.revision)-1){previous.originalRevision??=previous.revision;previous.revision=next.items.find(item=>item.mediaKey===last.key).revision;}const restored=next.items.find(item=>item.mediaKey===last.key);inspected=restored.decision==='remove'?last.key:null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
  async function load(refresh=false) {
   buffer.clear();previousKey=null;
   libraryFailure=null;

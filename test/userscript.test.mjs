@@ -456,12 +456,13 @@ test('preview repeated Trash preserves legacy marking on the next open',async()=
  mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('review');
  assert.equal(mounted.nodes.get('trash-review-grid').childNodes[0].childNodes.at(-1).textContent,'Previously marked');
 });
-test('review Keep invalidates stale swipe Undo and retains the faded tile',async()=>{
+test('review Keep records Undo and retains the faded tile',async()=>{
  const mounted=await mountedReview([item('a')]);await mounted.click('remove');await mounted.click('review');
  const grid=mounted.nodes.get('trash-review-grid');grid.childNodes[0].childNodes[1].onclick();await mounted.settle();
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal(grid.childNodes.length,1);assert.equal(grid.childNodes[0].class,'trash-tile kept');
- assert.equal(mounted.nodes.get('undo').disabled,true);assert.equal(mounted.nodes.get('move-trash').disabled,true);
- mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,'keep');
+ assert.equal(mounted.nodes.get('undo').disabled,false);assert.equal(mounted.nodes.get('move-trash').disabled,true);
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,'remove');
+ await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,null);
 });
 test('Undo after a synced Keep keeps its confirmation through the next sync',async()=>{
  let scheduledSync,syncGate;
@@ -2620,4 +2621,32 @@ test('review preview Done and Escape return to grid before closing review',async
  const mounted=await mountedReview([item('a',{decision:'remove'}),item('b')]);await mounted.click('review');const grid=mounted.nodes.get('trash-review-grid');grid.childNodes[0].childNodes[0].onclick();
  assert.equal(mounted.nodes.get('trash-preview').childNodes[0].childNodes[1].textContent,'1 of 1');mounted.nodes.get('trash-preview').childNodes[0].childNodes[2].onclick();assert.equal(mounted.nodes.get('review-panel').querySelector('.trash-preview'),null);
  grid.childNodes[0].childNodes[0].onclick();const escape=()=>mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});escape();assert.equal(mounted.nodes.get('review-panel').hidden,false);assert.equal(mounted.nodes.get('review-panel').querySelector('.trash-preview'),null);escape();assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(mounted.nodes.get('overlay').hidden,false);
+});
+
+for(const action of ['untick','selectAll','previewKeep','previewTrash'])test(`trash review ${action} undoes the latest change before earlier swipes`,async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ await mounted.click('keep');await mounted.click('remove');await mounted.click('review');
+ const grid=mounted.nodes.get('trash-review-grid');
+ if(action==='untick')grid.childNodes[0].childNodes[1].onclick();
+ else if(action==='selectAll'){
+  grid.childNodes[0].childNodes[1].onclick();
+  mounted.nodes.get('review-panel').childNodes[0].childNodes[1].onclick();
+ }else{
+  grid.childNodes[0].childNodes[0].onclick();
+  mounted.nodes.get('trash-preview').childNodes.at(-1).childNodes[0].onclick();
+  if(action==='previewTrash')mounted.nodes.get('trash-preview').childNodes.at(-1).childNodes[1].onclick();
+ }
+ await mounted.settle();
+ const changed=await mounted.read();
+ assert.equal(changed.history.length,action==='selectAll'||action==='previewTrash'?4:3);
+ assert.equal(changed.history.at(-1).key,'b');
+ assert.equal(canUndoReview(changed,changed.history.at(-1)),true);
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();
+ const expected=action==='selectAll'||action==='previewTrash'?['keep','remove',null]:['remove',null];
+ for(const decision of expected){
+  await mounted.click('undo');const state=await mounted.read();
+  assert.equal(state.items.find(row=>row.mediaKey==='b').decision,decision);
+  assert.equal(state.items.find(row=>row.mediaKey==='a').decision,'keep');
+ }
+ await mounted.click('undo');assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='a').decision,null);
 });
