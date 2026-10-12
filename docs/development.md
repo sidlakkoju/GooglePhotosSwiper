@@ -39,3 +39,9 @@ Check compact/fullscreen playback, Space immediately after scrubbing, looping, s
 Before trying that branch with real local state, stop the running app/extension, make a private `.data` backup and use a separate checkout/database for experiments. Only one server can own port 3000. Never attach a second branch's app process to the active personal database concurrently. Synthetic media is the default for write/export experiments; personal Google media deletion requires separate explicit authorization.
 
 Keep private runtime files out of commits. Git changes do not back up SQLite, browser caches, pairing credentials or media recovery files. Preserve third-party attribution when editing the Photos API adapter.
+
+## Swipe motion and Safari performance
+
+Use the isolated UI fixture above with synthetic media. On an iPhone, enable Reduce Motion in Accessibility → Motion and confirm that swipes keep both cards stationary, decisions fade for approximately 150ms, and the next card does not wait for the fade. Repeat with Reduce Motion disabled, including slow drags, rapid pointer movement, cancelled drags, and releases in both directions.
+
+For the performance acceptance check, connect the iPhone to a Mac and inspect the fixture page with Safari Web Inspector. Record a Timelines session after previews have loaded, covering repeated drags and fly-offs. Inspect rendering frames for a sustained 60fps (approximately 16.7ms per frame), long frames, and layout work during drag. Record the device, iOS/Safari version and trace results with the review. Automated tests verify batching, cached geometry and animation properties; they do not establish the physical-device frame rate. This device check remains pending until a timeline is recorded.

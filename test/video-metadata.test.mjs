@@ -43,9 +43,9 @@ test('synthetic video cards show filename, date and size and reset for photos',(
 test('video metadata has a visible footer outside the player and its native controls',()=>{
  const rule=selector=>css.slice(css.indexOf(selector+'{')+selector.length+1).split('}')[0];
  assert.match(rule('.photo-card[data-media-type=video]'),/display:flex;flex-direction:column/);
- assert.match(rule('.photo-card[data-media-type=video] #media'),/position:relative;flex:1;min-height:0/);
- assert.match(rule('.photo-card[data-media-type=video] #media'),/overflow:hidden;isolation:isolate/);
- assert.match(rule('.photo-card[data-media-type=video] #media video'),/position:absolute;inset:0;display:block/);
+ assert.match(rule('.photo-card[data-media-type=video] :is(#media,.swipe-media)'),/position:relative;flex:1;min-height:0/);
+ assert.match(rule('.photo-card[data-media-type=video] :is(#media,.swipe-media)'),/overflow:hidden;isolation:isolate/);
+ assert.match(rule('.photo-card[data-media-type=video] :is(#media,.swipe-media) video'),/position:absolute;inset:0;display:block/);
  assert.match(rule('.photo-card[data-media-type=video] .photo-meta'),/position:relative;flex:none/);
  assert.doesNotMatch(css,/\.photo-card:has\(video\) \.photo-meta\{display:none\}/);
 });

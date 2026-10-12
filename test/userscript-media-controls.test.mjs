@@ -56,5 +56,5 @@ test('display and zoom reset leave touch actions to expanded CSS, while zoom abo
  assert.ok(source.includes('.card.expanded .media{touch-action:pan-x pan-y pinch-zoom'));
  f.context.toggleEnlarge();assert.equal(f.classes.has('expanded'),false);
  assert.equal(f.mediaElement.style.touchAction,'');
- assert.ok(source.includes('.media{touch-action:pan-y;'));
+ assert.ok(source.includes('.media{touch-action:none;'));
 });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.22
+// @version 1.2.25
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content
@@ -22,6 +22,8 @@
 // ==/UserScript==
 
 (async()=>{
+const verifiedReleases=new WeakMap();
+const loaderPolicies=new WeakMap();
 const pinnedReleaseKey='wPP8HXN0V1jAGqFb+M5kQycKc9/sUrOm6YTKPJM+SLw=';
 const releaseMessage=release=>'photoswiper-release-v1\n'+release.version+'\n'+release.code;
 function compareVersions(left,right){
@@ -52,7 +54,10 @@ async function verifyRelease(release,crypto,key=pinnedReleaseKey){
   compareVersions(release.version,release.version);
   const decode=value=>Uint8Array.from(atob(value),character=>character.charCodeAt(0));
   const publicKey=await crypto.subtle.importKey('raw',decode(key),{name:'Ed25519'},false,['verify']);
-  return await crypto.subtle.verify('Ed25519',publicKey,decode(release.signature),new TextEncoder().encode(releaseMessage(release)));
+  const message=releaseMessage(release),signature=release.signature;
+  const verified=await crypto.subtle.verify('Ed25519',publicKey,decode(signature),new TextEncoder().encode(message));
+  if(verified)verifiedReleases.set(release,{message,signature});
+  return verified;
  }catch{return false;}
 }
 function fetchRelease(environment,request){
@@ -69,9 +74,24 @@ function fetchRelease(environment,request){
 function injectRelease(environment,release){
  const document=environment.document,root=document.documentElement;
  if(root.dataset.psLoaded||root.dataset.psLoaderInjected)return false;
+ const verified=verifiedReleases.get(release);
+ if(!verified||verified.message!==releaseMessage(release)||verified.signature!==release.signature)return false;
  const gm=environment.GM||{getValue:environment.GM_getValue,setValue:environment.GM_setValue,deleteValue:environment.GM_deleteValue};
  if(!['getValue','setValue','deleteValue'].every(name=>typeof gm[name]==='function'))return false;
- const execute=new Function('GM','unsafeWindow','window','document','location','fetch','photosSwipeReleaseVersion',release.code);
+ let execute;
+ try{
+  let source='(function(GM,unsafeWindow,window,document,location,fetch,photosSwipeReleaseVersion){'+release.code+'\n})';
+  const trustedTypes=environment.trustedTypes||environment.window.trustedTypes;
+  if(trustedTypes){
+   let policy=loaderPolicies.get(trustedTypes);
+   if(!policy){
+    policy=trustedTypes.createPolicy('photoswiper-loader-'+environment.crypto.randomUUID(),{createScript:input=>input});
+    loaderPolicies.set(trustedTypes,policy);
+   }
+   source=policy.createScript(source);
+  }
+  execute=(0,environment.eval||eval)(source);
+ }catch{delete root.dataset.psLoaderInjected;return false;}
  root.dataset.psLoaderInjected='1';
  try{execute(gm,environment.unsafeWindow||environment.window,environment.window,document,environment.location,environment.fetch,release.version);}catch(error){delete root.dataset.psLoaderInjected;throw error;}
  return true;
@@ -89,6 +109,7 @@ async function startLoader(environment,key=pinnedReleaseKey){
  let selected=validCache?cached:null;
  if(await verifyRelease(latest,environment.crypto,key)&&(!validCache||compareVersions(latest.version,cached.version)>=0)){
   selected={version:latest.version,code:latest.code,signature:latest.signature};
+  verifiedReleases.set(selected,verifiedReleases.get(latest));
   try{await set('photoswiper-signed-release',selected);}catch{}
  }
  if(!selected)return false;

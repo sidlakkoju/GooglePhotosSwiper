@@ -1,11 +1,11 @@
-import {injectRelease} from '../lib/userscript-loader.mjs';
+import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,access,mkdtemp,writeFile,rm,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {webcrypto} from 'node:crypto';
+import {webcrypto,generateKeyPairSync,sign} from 'node:crypto';
 import vm from 'node:vm';
 import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
 import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
@@ -292,7 +292,7 @@ function bundleEnvironment(fault={}) {
  const result={nodes,hosts,root};
  const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
  const events=new EventTarget();
- const window={dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;events.addEventListener(name,handler);}};window.top=window;
+ const window={requestAnimationFrame:callback=>{callback();return null;},cancelAnimationFrame(){},dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;events.addEventListener(name,handler);}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,AbortController,AbortSignal,setInterval,clearInterval};
  return result;
 }
@@ -695,8 +695,8 @@ test('overlay isolates pointer touch wheel and all key events while preserving n
  }
  const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
  const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
- assert.match(source,/\.card\{touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
- assert.match(source,/\.media\{touch-action:pan-y;[^}]*overflow:auto/);
+ assert.match(source,/\.card\{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media\{touch-action:none;[^}]*overflow:auto/);
  assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
  assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
@@ -2112,7 +2112,11 @@ test('loader panel displays the selected signed release version instead of the b
  for(const version of ['1.2.99','1.2.8']){
   const mounted=bundleEnvironment();
   const GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
-  assert.equal(injectRelease({...mounted.environment,GM},{version,code}),true);
+  const pair=generateKeyPairSync('ed25519'),release={version,code};
+  release.signature=sign(null,Buffer.from(releaseMessage(release)),pair.privateKey).toString('base64');
+  const key=Buffer.from(pair.publicKey.export({format:'jwk'}).x,'base64url').toString('base64');
+  assert.equal(await verifyRelease(release,webcrypto,key),true);
+  assert.equal(injectRelease({...mounted.environment,GM},release),true);
   assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
  }
 });
