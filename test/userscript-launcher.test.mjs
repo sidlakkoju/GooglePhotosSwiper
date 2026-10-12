@@ -16,7 +16,8 @@ test('first launcher click and tap after reload opens without reaching the under
    await page.evaluate(()=>{
     window.WIZ_global_data={SNlM0e:'synthetic-token',oPEP7c:'synthetic@example.test'};
     window.pageInputs=[];
-    for(const type of ['pointerdown','pointerup','touchstart','touchend','click'])document.addEventListener(type,event=>window.pageInputs.push(event.type));
+    for(const type of ['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','click'])document.addEventListener(type,event=>window.pageInputs.push(event.type));
+    document.addEventListener('mousedown',()=>document.addEventListener('click',event=>event.stopImmediatePropagation(),{capture:true,once:true}));
    });
    await page.addScriptTag({content:source});
    const launcher=page.locator('#launcher'),overlay=page.locator('#overlay');
