@@ -18,6 +18,10 @@ if [[ "$3 $4" == "d1 list" ]]; then
  printf '%s\\n' '[{"name":"photoswiper-sync","uuid":"test-database"}]'
 fi
 if [[ "$3 $4" == "secret list" ]]; then
+ if [[ "\${TEST_SECRET_LIST_FAIL:-}" == 1 ]]; then
+  printf '%s\\n' 'Worker not found, run wrangler deploy' >&2
+  exit 1
+ fi
  printf '%s\\n' "\${TEST_SECRETS:-[]}"
 fi
 if [[ "$3 $4" == "secret put" ]]; then
@@ -45,6 +49,15 @@ fi
     if(supplied)assert.ok(commands.indexOf(`secret put ${name}`)<commands.indexOf('secret list --config'));
    }
   }
+  writeFileSync(log,'');
+  const missingWorker=spawnSync('bash',[join(root,'scripts/deploy-worker.sh')],{env:{...base,SYNC_TOKEN:'',PAIRING_IP_KEY:'',TEST_SECRET_LIST_FAIL:'1'},encoding:'utf8'});
+  assert.equal(missingWorker.status,1);
+  assert.match(missingWorker.stderr,/Worker not found/);
+  assert.match(missingWorker.stderr,/Deployment blocked:.*PAIRING_IP_KEY.*docs\/sync\.md/);
+  const missingWorkerCommands=readFileSync(log,'utf8');
+  assert.match(missingWorkerCommands,/secret list --config/);
+  assert.equal(missingWorkerCommands.includes('deploy --config'),false);
+  assert.equal(missingWorkerCommands.includes('secret put'),false);
   writeFileSync(log,'');
   const failed=spawnSync('bash',[join(root,'scripts/deploy-worker.sh')],{env:{...base,TEST_SIGN_FAIL:'1'},encoding:'utf8'});
   assert.notEqual(failed.status,0);
