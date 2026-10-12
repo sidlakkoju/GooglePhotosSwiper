@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.43
+// @version 1.2.44
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -404,8 +404,11 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
  return {configure,sync,devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST'),async pair(url,code,name,platform){
-  const response=await fetch(new URL('api/pair/claim',url).href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({short:code,name,platform}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
-  if(!response.ok)throw Error(`Pairing HTTP ${response.status}`);
+  let worker;try{worker=new URL(url);}catch{throw Error('Enter a valid HTTPS Worker origin.');}
+  if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');
+  if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');
+  const response=await fetch(new URL('/api/pair/claim',worker.origin).href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({short:code,name,platform}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
+  if(!response.ok)throw Error(response.status>=500?'Pairing is unavailable on the sync server (server misconfigured)':'Code expired or unavailable. Ask the paired device for a new code.');
   return response.json();
  }};
 }
@@ -488,6 +491,7 @@ function decisionBatches(pending) {
 async function createPairingStore({GM,database,crypto}) {
  const durable=!!GM&&['getValue','setValue','deleteValue'].every(name=>typeof GM[name]==='function');
  const key='photos-swipe-pairing';
+ const dismissalKey='photos-swipe-onboarding-dismissed';
  const complete=value=>typeof value?.url==='string'&&!!value.url&&typeof value?.token==='string'&&!!value.token;
  const select=value=>Object.fromEntries(['url','token','deviceId','deviceName'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
  async function settings() {
@@ -500,13 +504,15 @@ async function createPairingStore({GM,database,crypto}) {
    await GM.setValue(key,value);
   }
   if(complete(value)&&(legacy.token||legacy.url||legacy.deviceId||legacy.deviceName)){await db.deleteSettings();if(legacy.onboardingDismissed)await db.saveSettings({onboardingDismissed:true});}
-  return {...(!complete(value)?select({...legacy,token:undefined}):{}),...select(value),onboardingDismissed:legacy.onboardingDismissed,unpaired:legacy.unpaired};
+  return {...(!complete(value)?select({...legacy,token:undefined}):{}),...select(value),onboardingDismissed:await GM.getValue(dismissalKey),unpaired:legacy.unpaired};
  }
  async function saveSettings(value) {
   const db=await database();
   if(!durable)return db.saveSettings(value);
   if(value.url&&value.token)await GM.setValue(key,{...select(value),deviceId:value.deviceId||crypto.randomUUID()});
   else await GM.deleteValue(key);
+  if(value.onboardingDismissed)await GM.setValue(dismissalKey,true);
+  else await GM.deleteValue(dismissalKey);
   await db.saveSettings({...(!(value.url&&value.token)?select({...value,token:undefined}):{}),...(value.onboardingDismissed?{onboardingDismissed:true}:{}),...(value.unpaired?{unpaired:true}:{})});
  }
  return {durable,settings,saveSettings};
@@ -711,7 +717,7 @@ function renderPairingQR(document,value) {
 
 const pairingServerError='Pairing is unavailable on the sync server (server misconfigured)';
 function createPairingModal({document,parent,fetch,settings,setTimeout,clearTimeout,now=Date.now,onClose=()=>{},renderQR=renderPairingQR}) {
- const modal=document.createElement('section');modal.hidden=true;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','Pair another device');modal.style.cssText='position:fixed;inset:0;overflow:auto;background:#f4f7f1;padding:24px;z-index:1;pointer-events:auto';
+ const modal=document.createElement('section');modal.hidden=true;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','Pair another device');modal.className='pairing-issuer settings-sheet';modal.style.cssText='z-index:9;pointer-events:auto';
  const status=document.createElement('p'),qr=document.createElement('div'),short=document.createElement('p'),countdown=document.createElement('p'),cancel=document.createElement('button'),renew=document.createElement('button'),devices=document.createElement('button');
  status.setAttribute('role','status');cancel.textContent='Cancel';renew.textContent='New code';devices.textContent='View devices';modal.append(status,qr,short,countdown,cancel,renew,devices);parent.append(modal);
  let generation=0,current=null,timer=null,credentials=null,nextPollAt=0,polling=false,pendingStatus=null;
@@ -774,7 +780,7 @@ function receivePairingLink({document,parent,location,window,fetch,saveSettings,
   const advanced=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Advanced';advanced.open=false;advanced.append(summary);origin.type='url';origin.value=url;field(origin,'pairing-server','Sync server',advanced);panel.append(advanced);
  }
  const actions=document.createElement('div');actions.className='toolbar';button.textContent='Pair this device';cancel.textContent='Cancel';actions.append(button,cancel);status.setAttribute('role','status');panel.append(actions,status);
- cancel.onclick=()=>{panel.hidden=true;onClose();};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);name.focus();
+ cancel.onclick=()=>{panel.hidden=true;onClose();};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);(manual?shortCode:name).focus();
  button.onclick=async()=>{button.disabled=true;try{const worker=new URL(match?.[2]?decodeURIComponent(match[2]):manual?origin.value:url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error(response.status>=500?pairingServerError:'Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;onClose();await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
  return panel;
 }
@@ -1079,7 +1085,7 @@ function mountPhotosSwipe(environment) {
  const pairAnother=document.createElement('button');pairAnother.textContent='Pair a device';pairAnother.setAttribute('id','pair-another');settingsPanel.append(pairAnother);
  let viewerShortcutsBlockedUntil=0;
  const suppressViewerShortcuts=()=>{viewerShortcutsBlockedUntil=Date.now()+500;};
- const pairingModal=createPairingModal({document,parent:root,fetch:environment.syncFetch||environment.fetch,settings:async()=>(await pairingPromise).settings(),onClose:suppressViewerShortcuts,setTimeout:environment.setTimeout,clearTimeout:environment.clearTimeout});pairAnother.onclick=pairingModal.open;
+ const pairingModal=createPairingModal({document,parent:divElement4,fetch:environment.syncFetch||environment.fetch,settings:async()=>(await pairingPromise).settings(),onClose:suppressViewerShortcuts,setTimeout:environment.setTimeout,clearTimeout:environment.clearTimeout});pairAnother.onclick=pairingModal.open;
  const syncStatus=document.createElement('p');syncStatus.setAttribute('id','sync-status');syncStatus.setAttribute('role','status');divElement4.insertBefore(settingsPanel,cardElement);divElement4.insertBefore(syncStatus,cardElement);
  const unpairedBanner=document.createElement('div');unpairedBanner.setAttribute('id','unpaired-banner');unpairedBanner.setAttribute('role','alert');unpairedBanner.hidden=true;
  const unpairedText=document.createElement('span');unpairedText.textContent='This device was unpaired.';
@@ -1087,7 +1093,7 @@ function mountPhotosSwipe(environment) {
  const dismissUnpaired=document.createElement('button');dismissUnpaired.setAttribute('id','dismiss-unpaired');dismissUnpaired.textContent='Dismiss';unpairedBanner.append(unpairedText,pairAgain,dismissUnpaired);divElement4.insertBefore(unpairedBanner,cardElement);
  const pairingPanel=document.createElement('details');pairingPanel.setAttribute('id','enter-pairing-code');const pairingTitle=document.createElement('summary');pairingTitle.textContent='Enter pairing code';pairingPanel.append(pairingTitle);
  for(const [id,title] of [['pair-code','Pairing code'],['pair-name','Device name']]){const label=document.createElement('label'),input=document.createElement('input');input.setAttribute('id',id);label.textContent=title;label.append(input);pairingPanel.append(label);}
- const pairSubmit=document.createElement('button');pairSubmit.setAttribute('id','pair-submit');pairSubmit.textContent='Pair and sync';pairingPanel.append(pairSubmit);settingsPanel.append(pairingPanel);
+ const pairSubmit=document.createElement('button');pairSubmit.setAttribute('id','pair-submit');pairSubmit.textContent='Pair and sync';pairingPanel.append(pairSubmit);const pairFeedback=document.createElement('p');pairFeedback.setAttribute('role','status');pairingPanel.append(pairFeedback);settingsPanel.append(pairingPanel);
  const devicesPanel=document.createElement('details');devicesPanel.setAttribute('id','paired-devices');const devicesTitle=document.createElement('summary');devicesTitle.textContent='Paired devices';
  const devicesList=document.createElement('div');devicesList.setAttribute('id','devices-list');const refreshDevices=document.createElement('button');refreshDevices.setAttribute('id','refresh-devices');refreshDevices.textContent='Refresh devices';
  const revokeOthers=document.createElement('button');revokeOthers.setAttribute('id','revoke-other-devices');revokeOthers.textContent='Revoke all other devices';devicesPanel.append(devicesTitle,refreshDevices,devicesList,revokeOthers);settingsPanel.append(devicesPanel);
@@ -1116,7 +1122,7 @@ function mountPhotosSwipe(environment) {
  const reviewPanel=document.createElement('section');reviewPanel.setAttribute('class','review-panel');reviewPanel.setAttribute('id','review-panel');reviewPanel.hidden=true;reviewPanel.append(queue_detailsElement,trashCandidates,divElement36);divElement4.append(reviewPanel);queue_detailsElement.open=true;trashLabel.hidden=true;trashOptIn.checked=true;pElement40.textContent='Review marked items before moving them to Google Photos Trash.';
  const openSettings=()=>{sheet.hidden=false;settingsPanel.open=true;gear.setAttribute('aria-expanded','true');sheetClose.focus();};const closeSettings=()=>{suppressViewerShortcuts();sheet.hidden=true;gear.setAttribute('aria-expanded','false');gear.focus();};gear.onclick=openSettings;sheetClose.onclick=closeSettings;
  const openReview=()=>{swipeFeedback.reset();const video=mediaElement.querySelector('video');if(video&&!video.paused){video.pause();resumeReviewPlayback=true;}reviewItems=reviewTrashCandidates(state).map(item=>({...item,legacy:!!item.queueSent}));previewKey=null;reviewPanel.hidden=false;reviewStatus.textContent='';reviewStatus.hidden=true;renderTrashReview();moveTrash.focus();};reviewButton.onclick=openReview;
- overlayElement.addEventListener('click',event=>{if(event.target===overlayElement)close();});
+ overlayElement.addEventListener('click',event=>{if(event.target===overlayElement){if(!pairingModal.modal.hidden)return pairingModal.close();if(activePairingDialog())return;return close();}});
  document.documentElement.append(host);
  const icon=(button,label,paths)=>{button.replaceChildren();button.setAttribute('aria-label',label);const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');for(const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'2','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(key,value);for(const path of paths){const element=document.createElementNS('http://www.w3.org/2000/svg','path');element.setAttribute('d',path);svg.append(element);}button.append(svg);};
  icon(removeElement,'Mark for deletion',['M6 6l12 12M18 6L6 18']);icon(keepElement,'Keep',['M12 21s-10-6-10-12a5 5 0 0 1 10-3 5 5 0 0 1 10 3c0 6-10 12-10 12Z']);icon(undoElement,'Undo',['M9 14L4 9l5-5','M4 9h10.5a5.5 5.5 0 0 1 0 11H11']);icon(enlargeElement,'Fullscreen photo',['M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7']);icon(closeElement,'Close Photos Swipe',['M6 6l12 12M18 6L6 18']);icon(gear,'Settings',['M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2','M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0']);icon(reviewButton,'Going to Trash',['M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13']);
@@ -1163,7 +1169,29 @@ function mountPhotosSwipe(environment) {
  refreshDevices.onclick=()=>run(showDevices);devicesPanel.ontoggle=()=>{if(devicesPanel.open&&syncEnabled)return run(showDevices);};
  revokeOthers.onclick=()=>{if(window.confirm('Revoke all other devices? They will stop syncing immediately, including the legacy shared token.'))return run(async()=>{await syncClient.revokeOthers();await showDevices();});};
  pairAgain.onclick=()=>{openSettings();settingsPanel.open=true;pairingPanel.open=true;$('pair-code').focus();};dismissUnpaired.onclick=()=>{unpairedBanner.hidden=true;};pairedNotice.onclick=()=>{openSettings();settingsPanel.open=true;devicesPanel.open=true;return run(showDevices);};
- pairSubmit.onclick=()=>run(async()=>{const url=validateSyncSettings($('sync-url').value.trim(),'pairing').url,code=$('pair-code').value.trim(),name=$('pair-name').value.trim();if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');const result=await syncClient.pair(url,code,name,window.navigator?.platform||'Browser');const settings={url,token:result.token,onboardingDismissed:true};await (await pairingPromise).saveSettings(settings);$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;unpairedBanner.hidden=true;pairingPanel.open=false;await synchronize();await showDevices();});
+ let pendingPairSettings;
+ pairSubmit.onclick=async()=>{
+  if(busy||pairSubmit.disabled){pairFeedback.textContent='Pairing is already in progress.';return;}
+  busy=true;controls();pairFeedback.textContent='Pairing\u2026';
+  activeOperation=(async()=>{
+  try{
+   if(!pendingPairSettings){
+    const previous=await (await pairingPromise).settings(),url=$('sync-url').value.trim()||previous.url||'https://photoswiper-sync.sidlakkoju.workers.dev',code=$('pair-code').value.replace(/\s/g,''),name=$('pair-name').value.trim()||'New browser';
+    const result=await syncClient.pair(url,code,name,window.navigator?.platform||'Browser');
+    pendingPairSettings={url:new URL(url).origin,token:result.token,onboardingDismissed:true};
+   }
+   await syncRunning;
+   const settings=pendingPairSettings,wasSyncEnabled=syncEnabled;syncEnabled=false;
+   try{await (await pairingPromise).saveSettings(settings);}catch(error){syncEnabled=wasSyncEnabled;throw error;}
+   pendingPairSettings=null;
+   $('sync-url').value=settings.url;$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;unpairedBanner.hidden=true;
+   message(idleMessage());
+   pairFeedback.textContent='Device paired. Sync will resume when this tab can access local progress.';
+   if(!leaseError&&lockedAccount)await synchronize();
+  }catch(error){pairFeedback.textContent=pendingPairSettings?`${error.message}. Device claimed; choose Pair and sync to retry saving.`:error.message;}finally{busy=false;controls();}
+  })();
+  await activeOperation;activeOperation=null;
+ };
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
@@ -1225,7 +1253,7 @@ function mountPhotosSwipe(environment) {
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer)return;
   leaseTimer=setInterval(()=>{refreshLease();},20000);
@@ -1542,18 +1570,19 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
     inspected=null;focused=null;stopMedia();dropWarmVideo();buffer.clear();videoURLs.clear();previousKey=null;
    }
    identity=result.data;$('account').textContent=identity.label;db=await database();
+   let settings={};try{settings=await (await pairingPromise).settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}unpairedBanner.hidden=!settings.unpaired;
+   $('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';
+   syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
+   settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
+   if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
    if(!await renewLease())return;
    if(!changed){
     await writes.flush();
     if(writes.pending){if(!writeConflict)message('Local changes are still pending. Close and reopen to retry saving.');return;}
    }
-   $('close').focus();message('Reading local progress\u2026');
+   if(!receivingPanel||receivingPanel.hidden)$('close').focus();message('Reading local progress\u2026');
    state=await db.read(identity.account);writeRevision=state.revision;persistedItems=state.items;
    resume=await db.resume(identity.account);$('filter').value=resume.filter||'all';$('sort').value=resume.sort||'original';reviewEvery.value=String(resume.reviewEvery||25);deleteMethod.value='trash';trashOptIn.checked=true;focused=resume.currentId||null;inspected=resume.inspected&&state.items.some(item=>item.mediaKey===focused)?focused:null;const missing=focused&&!state.items.some(item=>item.mediaKey===focused&&item.state==='active');if(missing){focused=null;inspected=null;}
-   let settings={};try{settings=await (await pairingPromise).settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}unpairedBanner.hidden=!settings.unpaired;
-   $('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';
-   syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
-   settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
    if(syncEnabled)await synchronize();
    message(missing?'Saved item is unavailable. Continuing with the next unreviewed item.':idleMessage());
   }catch(error){
@@ -1612,7 +1641,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  $('sync-save').onclick=()=>run(async()=>{const previous=await (await pairingPromise).settings();const url=$('sync-url').value.trim();const normalized=url?new URL(url).origin:'';const settings={...previous,...validateSyncSettings(url,$('sync-token').value||(normalized===previous.url?previous.token||'':''))};if(settings.token)delete settings.unpaired;await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});$('sync-token').value='';if(settings.token)unpairedBanner.hidden=true;syncEnabled=!!(settings.url&&settings.token);onboarding.hidden=true;syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=true;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
  let receivingPanel;
- const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;receivingPanel.querySelector('input').focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:open,onClose:suppressViewerShortcuts,manual,url:$('sync-url').value.trim()||undefined});};
+ const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;(receivingPanel.querySelector('#pairing-short-code')||receivingPanel.querySelector('input')).focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:async()=>{await openingPromise;await open();},onClose:suppressViewerShortcuts,manual,url:$('sync-url').value.trim()||undefined});};
  const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=onboardPair.onclick;receivePairing(false);
  window.addEventListener('hashchange',()=>receivePairing(false));
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
@@ -1675,7 +1704,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.43":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.44":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
