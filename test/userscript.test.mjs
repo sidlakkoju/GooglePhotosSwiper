@@ -1,3 +1,4 @@
+import {LEASE_HEARTBEAT_MS,LEASE_EXPIRY_MS} from '../lib/userscript-db.mjs';
 import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -313,7 +314,7 @@ function fakeIndexedDB(fault={}) {
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='settings'&&String(key).startsWith('resume:')&&fault.resumeGate){fault.resumeStarted?.();await fault.resumeGate;}if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
     delete:key=>staged.delete(key),
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
@@ -322,18 +323,14 @@ function fakeIndexedDB(fault={}) {
  };
  return {open(){const request={result:database};queueMicrotask(()=>{if(!initialized){initialized=true;request.onupgradeneeded();}request.onsuccess();});return request;}};
 }
-test('fake IndexedDB persists account-isolated progress and rejects stale revisions and takes over unexpired foreign leases',async()=>{
+test('fake IndexedDB persists account-isolated progress and rejects stale revisions and foreign leases',async()=>{
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),indexedDB=fakeIndexedDB();
  const first=await openReviewDatabase(indexedDB),initial=await first.read('account-a');
  const saved=await first.save('account-a',{...initial,cursor:'older',items:[item('a',{decision:'keep'})]});assert.equal(saved.revision,1);
  await first.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  const reopened=await openReviewDatabase(indexedDB);assert.deepEqual(await reopened.settings(),{url:'https://sync.example',token:'synthetic-token'});assert.deepEqual(await reopened.read('account-a'),saved);assert.deepEqual(await reopened.read('account-b'),emptyReview());
  await assert.rejects(first.save('account-a',initial),/another tab/);assert.deepEqual(await first.read('account-a'),saved);
- const previous=await first.lease('account-a','owner-a');assert.ok(previous.expires>Date.now());
- const acquired=await reopened.lease('account-a','owner-b');assert.equal(acquired.owner,'owner-b');assert.ok(acquired.expires>Date.now());
- const database=await new Promise(resolve=>{const request=indexedDB.open();request.onsuccess=()=>resolve(request.result);});
- const stored=await new Promise(resolve=>{const tx=database.transaction('leases'),request=tx.objectStore().get('account-a');request.onsuccess=()=>{};tx.oncomplete=()=>resolve(request.result);});
- assert.deepEqual(stored,acquired);
+ await first.lease('account-a','owner-a');await assert.rejects(reopened.lease('account-a','owner-b'),/busy/);
  await reopened.lease('account-b','owner-b');await first.lease('account-a','owner-a',true);await reopened.lease('account-a','owner-b');
 });
 test('item revisions prevent stale undo after another tab changes or sends the same decision',()=>{
@@ -419,7 +416,7 @@ test('mounted bundle keeps album links and Undo responds before failed storage',
  fault.failSave=true;mounted.nodes.get('undo').onclick();
  assert.match(mounted.nodes.get('caption').textContent,/^a · /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
- await new Promise(resolve=>setTimeout(resolve,10));
+ await waitForReview(()=>/Local save failed.*pending changes/.test(mounted.nodes.get('status').textContent));
  assert.match(mounted.nodes.get('status').textContent,/Local save failed.*pending changes/);
  assert.equal((await db.read(account)).items[0].decision,'keep');
  fault.failSave=false;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
@@ -948,7 +945,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
  }finally{await rm(directory,{recursive:true,force:true});}
 });
 
-test('opening with sync takes over a foreign lease while sync saves',async()=>{
+test('opening with sync respects an in-flight Trash lease and holds the lease until sync saves',async()=>{
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  let finishTrash,trashStarted;
  const started=new Promise(resolve=>{trashStarted=resolve;});
@@ -971,20 +968,22 @@ test('opening with sync takes over a foreign lease while sync saves',async()=>{
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
  first.nodes.get('trash-opt-in').checked=true;first.nodes.get('trash-opt-in').onchange();
  const moving=first.click('move-trash');await started;
- assert.equal(syncCalls,0);
+ const before=await first.read();
+ await second.nodes.get('launcher').onclick();
+ assert.match(second.nodes.get('status').textContent,/busy in another tab/);
+ assert.equal(syncCalls,0);assert.deepEqual(await first.read(),before);
  finishTrash();await moving;await first.nodes.get('close').onclick();
  const completed=await first.read();
  assert.equal(completed.items[0].state,'in_trash');
  assert.equal(first.nodes.get('status').textContent,'Verified 1 items in Trash.');
- const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
- await db.lease(account,'other-tab');
  const opening=second.nodes.get('launcher').onclick();await syncing;
- assert.equal((await db.lease(account,'other-tab')).owner,'other-tab');
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);
  assert.deepEqual(await first.read(),completed);
  finishSync();await opening;
  assert.equal((await first.read()).revision,completed.revision+1);
  assert.equal((await first.read()).items[0].state,'in_trash');
- assert.equal((await db.lease(account,'other-tab')).owner,'other-tab');await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
@@ -1262,21 +1261,28 @@ test('Keep instead reports saved album job locks without changing the candidate'
  assert.equal((await mounted.read()).items[0].decision,'remove');
  await mounted.nodes.get('close').onclick();
 });
-test('foreign unexpired leases allow library writes and visible pages renew ownership',async()=>{
- const mounted=await mountedReview([item('a')]);
+test('fresh foreign leases block library RPCs and recover automatically after expiry',async()=>{
+ const timers=new Map();let timerId=0,rpcs=0;
+ const mounted=await mountedReview([item('a')],{fetch:async()=>{rpcs++;throw Error('Unexpected RPC');}},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
- await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:Date.now()+90000},account);tx.oncomplete=resolve;});
- await mounted.click('load');
- assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
- assert.equal((await mounted.read()).items.length,1);
  const readLease=()=>new Promise(resolve=>{const tx=database.transaction('leases'),request=tx.objectStore().get(account);request.onsuccess=()=>{};tx.oncomplete=()=>resolve(request.result);});
- const acquired=await readLease();assert.notEqual(acquired.owner,'other-tab');assert.ok(acquired.expires>Date.now());
- mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
- assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
- assert.equal((await readLease()).owner,acquired.owner);
- await mounted.nodes.get('close').onclick();
+ const actualNow=Date.now;let now=actualNow();Date.now=()=>now;
+ try{
+  await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:now+LEASE_EXPIRY_MS},account);tx.oncomplete=resolve;});
+  await mounted.click('load');
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.equal(rpcs,0);assert.equal((await mounted.read()).items.length,1);
+  mounted.environment.document.listeners.visibilitychange();await mounted.settle();
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.equal((await readLease()).owner,'other-tab');
+  now+=LEASE_EXPIRY_MS;await [...timers.values()][0]();
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
+  const acquired=await readLease();assert.notEqual(acquired.owner,'other-tab');assert.ok(acquired.expires>now);
+  await mounted.click('keep');assert.equal((await mounted.read()).items[0].decision,'keep');
+ }finally{Date.now=actualNow;await mounted.nodes.get('close').onclick();}
 });
+
 test('page lifecycle events cannot sync over an in-flight library snapshot',async()=>{
  let finish,started;const loading=new Promise(resolve=>{started=resolve;}),requests=[];
  const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
@@ -2202,12 +2208,12 @@ test('durable unpair preserves settings on reopen and saving a new token clears 
   mounted.environment.window.fetch=async()=>reject?new Response('{}',{status:401}):new Response(JSON.stringify({decisions:[],history:[],progress:{}}));
   vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();return mounted;
  };
- const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);revoked.nodes.get('close').onclick();
+ const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);await revoked.nodes.get('close').onclick();
  const reopened=await mount();assert.equal(reopened.nodes.get('sync-url').value,'https://sync.example');assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);
  reject=false;reopened.nodes.get('sync-token').value='synthetic-new-token';reopened.nodes.get('sync-save').onclick();await waitForReview(()=>reopened.nodes.get('overlay')['aria-busy']==='false');
  assert.equal(pairing.token,'synthetic-new-token');assert.equal(pairing.deviceId,'synthetic-device');assert.equal(pairing.deviceName,'Synthetic phone');assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);assert.match(reopened.nodes.get('sync-status').textContent,/Synced/);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.equal((await (await openReviewDatabase(indexedDB)).settings()).unpaired,undefined);
- reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
+ await reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
 });
 
 test('mixed decisions and Undo retain input order across a delayed save',async()=>{
@@ -2869,4 +2875,231 @@ test('onboarding dismissal belongs to the GM installation and survives reopening
  await store.saveSettings({...await store.settings(),onboardingDismissed:true});
  assert.equal((await (await create(GM)).settings()).onboardingDismissed,true);
  assert.equal((await (await create(otherGM)).settings()).onboardingDismissed,undefined);
+
+});
+
+test('killed owners expire and foreign release cannot replace fresh ownership',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(fakeIndexedDB());
+ const actualNow=Date.now;let now=100000;Date.now=()=>now;
+ try{
+  await db.lease('account','killed');
+  now+=LEASE_EXPIRY_MS-1;
+  await assert.rejects(db.lease('account','next'),/busy in another tab/);
+  now++;
+  await db.lease('account','next');
+  await db.lease('account','killed',true);
+  await assert.rejects(db.lease('account','killed'),/busy in another tab/);
+ }finally{Date.now=actualNow;}
+});
+
+test('blocked review retries each heartbeat and loads progress after a killed owner expires',async()=>{
+ const timers=new Map();let timerId=0;
+ const mounted=await mountedReview([item('a')],{},undefined,{setInterval:(handler,delay)=>{assert.equal(delay,LEASE_HEARTBEAT_MS);timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();
+ const actualNow=Date.now;let now=actualNow();Date.now=()=>now;
+ try{
+  await db.lease(account,'killed');
+  await mounted.nodes.get('launcher').onclick();
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  now+=LEASE_HEARTBEAT_MS;await [...timers.values()][0]();
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  now+=LEASE_EXPIRY_MS-LEASE_HEARTBEAT_MS;await [...timers.values()][0]();
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.match(mounted.nodes.get('caption').textContent,/^a ·/);
+  now+=LEASE_EXPIRY_MS-1;await [...timers.values()][0]();
+  now+=LEASE_EXPIRY_MS-1;
+  await assert.rejects(db.lease(account,'other'),/busy in another tab/);
+ }finally{Date.now=actualNow;await mounted.nodes.get('close').onclick();}
+});
+
+test('hidden and pagehide release ownership and resumed pages cannot steal a fresh lease',async()=>{
+ for(const lifecycle of ['hidden','pagehide']){
+  const mounted=await mountedReview([item('a')]);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+  else mounted.environment.window.listeners.pagehide();
+  await new Promise(resolve=>setTimeout(resolve,10));
+  await db.lease(account,'live');
+  if(lifecycle==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
+  else await mounted.environment.window.listeners.pageshow({persisted:true});
+  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  await mounted.click('keep');assert.equal((await db.read(account)).items[0].decision,null);
+  await assert.rejects(db.lease(account,'third'),/busy in another tab/);
+  await mounted.nodes.get('close').onclick();
+ }
+});
+
+for(const interruption of ['hidden','load','refresh'])test(`blocked review retries loading after recovery is interrupted by ${interruption}`,async()=>{
+ const timers=new Map();let timerId=0,digests=0,holding=false,releaseRecovery,releaseOperation;
+ const recoveryGate=new Promise(resolve=>{releaseRecovery=resolve;}),operationGate=new Promise(resolve=>{releaseOperation=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  if(holding){
+   digests++;
+   if(digests===(interruption==='hidden'?2:1))await recoveryGate;
+   else if(interruption!=='hidden')await operationGate;
+  }
+  return webcrypto.subtle.digest(...args);
+ }}};
+ const mounted=await mountedReview([item('a')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();
+ await db.lease(account,'other');await mounted.nodes.get('launcher').onclick();
+ assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+ await db.save(account,{...(await db.read(account)),items:[item('recovered')]});
+ await db.lease(account,'other',true);
+ holding=true;
+ try{
+  const recovering=[...timers.values()][0]();
+  await waitForReview(()=>digests===(interruption==='hidden'?2:1));
+  let operation;
+  if(interruption==='hidden'){
+   mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+  }else{
+   operation=mounted.nodes.get(interruption).onclick();
+   await waitForReview(()=>digests>=2);
+  }
+  releaseRecovery();await recovering;
+  holding=false;releaseOperation();await operation;await mounted.settle();
+  if(interruption==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await mounted.settle();}
+  await [...timers.values()][0]();
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.match(mounted.nodes.get('caption').textContent,/^recovered ·/);
+ }finally{holding=false;releaseRecovery();releaseOperation();mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();}
+});
+
+for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} drains a swipe awaiting identity before releasing ownership`,async()=>{
+ let holding=false,started,finish;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview([item('a')],{crypto});
+ mounted.nodes.get('keep').onclick();holding=true;await checking;
+ if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+ else mounted.environment.window.listeners.pagehide();
+ holding=false;finish();await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,'other');await db.lease(account,'other',true);
+ mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();
+});
+
+test('Close cancels a busy lease recovery awaiting identity',async()=>{
+ const timers=new Map();let timerId=0,holding=false,started,finish;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview([item('a')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();await db.lease(account,'other');await mounted.nodes.get('launcher').onclick();await db.lease(account,'other',true);
+ holding=true;const recovering=[...timers.values()][0]();await checking;
+ const closing=mounted.nodes.get('close').onclick();holding=false;finish();await Promise.all([recovering,closing]);await mounted.settle();
+ assert.equal(mounted.nodes.get('overlay').hidden,true);assert.equal(timers.size,0);await db.lease(account,'other');
+});
+
+for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} stops album RPCs after an in-flight mutation`,async()=>{
+ const requests=[];let started,finish;
+ const creating=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],{confirm:()=>true,fetch:async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];requests.push(id);
+  if(id==='OXvT9d'){started();await gate;}
+  return {ok:true,text:async()=>envelope(id,id==='Z5xsfc'?[[],null]:id==='OXvT9d'?[['album']]:[])};
+ }});
+ const operation=mounted.nodes.get('send').onclick();await creating;
+ if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+ else mounted.environment.window.listeners.pagehide();
+ const before=requests.length;finish();await operation;await mounted.settle();
+ assert.equal(requests.length,before);assert.match(mounted.nodes.get('status').textContent,/Session changed/);
+ mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();
+});
+
+for(const openingStage of ['identity','lease'])for(const resumeTiming of ['after opening','during opening'])test(`visibility resumes the first open interrupted at ${openingStage} when shown ${resumeTiming}`,async()=>{
+ const mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('saved-first-open')]});
+ let started,finish,holding=true,digests=0;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ mounted.environment.window.crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding&&++digests===(openingStage==='identity'?1:2)){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ const opening=mounted.nodes.get('launcher').onclick();await checking;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ if(resumeTiming==='during opening'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ holding=false;finish();await opening;
+ if(resumeTiming==='after opening'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ await waitForReview(()=>mounted.nodes.get('caption').textContent.startsWith('saved-first-open ·'));
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ await mounted.nodes.get('close').onclick();
+});
+
+
+test('automatic library loading resumes after hiding an open that already read progress',async()=>{
+ const fault={},mounted=bundleEnvironment(fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),started:true,items:[item('saved')]});
+ let finish,started,libraryCalls=0;
+ const reading=new Promise(resolve=>{started=resolve;});
+ fault.resumeStarted=started;fault.resumeGate=new Promise(resolve=>{finish=resolve;});
+ mounted.environment.window.fetch=async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];
+  if(id==='lcxiM')libraryCalls++;
+  return {ok:true,text:async()=>envelope(id,[[],null])};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ const opening=mounted.nodes.get('launcher').onclick();await reading;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ finish();await opening;
+ assert.equal(libraryCalls,0);
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/Library loading failed/);
+ fault.resumeGate=null;mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();
+ await waitForReview(async()=>libraryCalls===1&&(await db.read(account)).exhausted);
+ await mounted.nodes.get('close').onclick();
+});
+
+for(const overlappingLoad of [false,true])test(`showing during a pending swipe save recovers ownership with overlapping Load more ${overlappingLoad}`,async()=>{
+ const timers=new Map();let timerId=0,holding=false,started,finish;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview([item('a'),item('b'),item('c')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ mounted.nodes.get('keep').onclick();holding=true;await checking;
+ const loading=overlappingLoad?mounted.nodes.get('load').onclick():null;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();
+ holding=false;finish();await loading;await mounted.settle();
+ await waitForReview(()=>mounted.nodes.get('caption').textContent.startsWith('b ·')&&mounted.nodes.get('keep').disabled===false);
+ await mounted.click('keep');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep',null]);
+ assert.equal(timers.size,1);
+ mounted.nodes.get('keep').onclick();mounted.environment.window.listeners.pagehide();await mounted.settle();
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep','keep']);
+ await mounted.nodes.get('close').onclick();
+});
+
+for(const resumeTiming of ['after request','during request'])test(`automatic library loading retries a hidden in-flight request when shown ${resumeTiming}`,async()=>{
+ const mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),started:true,items:[item('saved')]});
+ let finish,started,libraryCalls=0;
+ const requesting=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ mounted.environment.window.fetch=async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];
+  if(id==='lcxiM'&&++libraryCalls===1){started();await gate;}
+  return {ok:true,text:async()=>envelope(id,[[],null])};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ await mounted.nodes.get('launcher').onclick();await requesting;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ if(resumeTiming==='during request'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ finish();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/Library loading failed/);
+ if(resumeTiming==='after request'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ await waitForReview(async()=>libraryCalls===2&&(await db.read(account)).exhausted);
+ await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
+ assert.equal(libraryCalls,2);
+ await mounted.nodes.get('close').onclick();
 });
