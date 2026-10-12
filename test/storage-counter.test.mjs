@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSessionStorageCounter,formatStorageBytes} from '../lib/userscript-counter.mjs';
+import {createSessionStorageCounter,formatStorageBytes,createStorageCapsule} from '../lib/userscript-counter.mjs';
 const item=(mediaKey,options={})=>({mediaKey,decision:'remove',state:'active',size:38.2e6,...options});
 test('session storage counts queued and newly trashed metadata without prior Trash history',()=>{
  const counter=createSessionStorageCounter();counter.total([]);
@@ -29,18 +29,56 @@ test('storage formatting follows approved decimal units and precision',()=>{
  assert.equal(formatStorageBytes(0),'0.00 MB');assert.equal(formatStorageBytes(38.2e6),'38.2 MB');assert.equal(formatStorageBytes(500e6),'500 MB');assert.equal(formatStorageBytes(1.24e9),'1.24 GB');
 });
 
-test('capsule follows logarithmic heat, orbit timing, count-up and immediate reset',async()=>{
- const {createStorageCapsule}=await import('../lib/userscript-counter.mjs');
- const node=()=>({children:[],style:{setProperty(key,value){this[key]=value;}},attributes:{},classList:{add(){},remove(){}},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},setAttribute(key,value){this.attributes[key]=value;}});
- let now=0,id=0;const frames=new Map(),window={performance:{now:()=>now},matchMedia:()=>({matches:false}),requestAnimationFrame:callback=>{frames.set(++id,callback);return id;}};
+function capsuleFixture({reduced=false}={}){
+ const node=()=>({children:[],style:{setProperty(key,value){this[key]=value;}},attributes:{},classList:{values:new Set(),add(value){this.values.add(value);},remove(value){this.values.delete(value);}},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},setAttribute(key,value){this.attributes[key]=value;}});
+ let now=0,id=0;const frames=new Map(),motion={matches:reduced,addEventListener(type,callback){this.change=callback;}},window={performance:{now:()=>now},matchMedia:()=>motion,requestAnimationFrame:callback=>{frames.set(++id,callback);return id;},cancelAnimationFrame:id=>frames.delete(id)};
  const document={createElement:tag=>tag==='canvas'?{getContext:()=>({measureText:()=>({width:7})})}:node(),createElementNS:()=>node(),addEventListener(){}};
  const element=node(),capsule=createStorageCapsule({document,window,root:node(),element,isVisible:()=>true});
- const svg=element.children[0].children[0].children[0],face=element.children[0].children[0].children[1];
+ const svg=element.children[0].children[0].children[0],face=element.children[0].children[0].children[1],chip=element.children[1];
  const tick=time=>{now=time;const callbacks=[...frames.values()];frames.clear();for(const callback of callbacks)callback(now);};
- capsule.update(0);tick(100);assert.equal(svg.attributes.width,78);assert.equal(svg.attributes.height,32);assert.equal(svg.children[1].attributes.fill,'rgba(52,199,89,1)');
- capsule.update(50e9);tick(500);assert.equal(svg.attributes.width,116);assert.equal(svg.attributes.height,38);assert.equal(svg.children[1].attributes.fill,'rgba(255,69,58,1)');
- const front=face.children.map(glyph=>glyph.style.transform);tick(999);assert.deepEqual(face.children.map(glyph=>glyph.style.transform),front);tick(1100);assert.notDeepEqual(face.children.map(glyph=>glyph.style.transform),front);
+ const transforms=()=>face.children.map(glyph=>glyph.style.transform);
+ const centerX=()=>Number(/translate\(([-\d.]+)px/.exec(face.children[Math.floor(face.children.length/2)].style.transform)[1]);
+ return {capsule,element,svg,chip,frames,motion,tick,transforms,centerX};
+}
+
+test('capsule stays still while idle and unchanged updates do not restart a turn',()=>{
+ const {capsule,frames,tick,transforms}=capsuleFixture();
+ capsule.update(0);const idle=transforms();tick(2000);capsule.update(0,{animate:true,delta:1e6});
+ assert.equal(frames.size,0);assert.deepEqual(transforms(),idle);
+ capsule.update(1e6);tick(2050);assert.equal(frames.size,1);capsule.update(1e6);tick(2550);
+ assert.equal(frames.size,0);const settled=transforms();tick(5000);capsule.update(1e6);assert.deepEqual(transforms(),settled);
+});
+
+for(const [name,initial,next,direction] of [['right',0,1e6,1],['left',1e6,0,-1]])test(`capsule rotates ${name} when the value ${direction>0?'increases':'decreases'}`,()=>{
+ const {capsule,frames,tick,centerX,transforms}=capsuleFixture();
+ capsule.update(initial);const restingX=centerX();capsule.update(next);assert.equal(frames.size,1);tick(25);
+ assert.ok(direction*(centerX()-restingX)>0);tick(550);assert.equal(frames.size,0);
+ const settled=transforms();tick(2000);assert.deepEqual(transforms(),settled);
+});
+
+for(const [initial,next,direction] of [[0,1e6,1],[1e6,0,-1]])test(`capsule overshoots and bounces back to the front on ${direction>0?'increase':'decrease'}`,()=>{
+ const animated=capsuleFixture(),resting=capsuleFixture();
+ resting.capsule.update(next);const restingX=resting.centerX();
+ animated.capsule.update(initial);animated.capsule.update(next);animated.tick(350);
+ const overshoot=direction*(animated.centerX()-restingX);
+ assert.ok(overshoot>10);
+ animated.tick(450);const returning=direction*(animated.centerX()-restingX);
+ assert.ok(returning>0);assert.ok(returning<overshoot);
+ animated.tick(550);assert.equal(animated.frames.size,0);assert.deepEqual(animated.transforms(),resting.transforms());
+ animated.tick(2000);assert.deepEqual(animated.transforms(),resting.transforms());
+});
+
+test('capsule follows logarithmic heat, count-up and immediate reset',()=>{
+ const {capsule,svg,element,chip,frames,tick}=capsuleFixture();
+ capsule.update(0);assert.equal(svg.attributes.width,78);assert.equal(svg.attributes.height,32);assert.equal(svg.children[1].attributes.fill,'rgba(52,199,89,1)');
+ capsule.update(50e9,{animate:false});assert.equal(svg.attributes.width,116);assert.equal(svg.attributes.height,38);assert.equal(svg.children[1].attributes.fill,'rgba(255,69,58,1)');
  capsule.reset();assert.equal(svg.attributes.width,78);assert.match(element.attributes['aria-label'],/^0.00 MB/);
- capsule.update(38.2e6,{animate:true,delta:38.2e6});assert.equal(element.children[1].textContent,'+38.2 MB');tick(1200);assert.ok(svg.attributes.width>78);assert.ok(svg.attributes.width<116);
- capsule.reset();tick(1800);assert.equal(svg.attributes.width,78);assert.match(element.attributes['aria-label'],/^0.00 MB/);
+ capsule.update(38.2e6,{animate:true,delta:38.2e6});assert.equal(chip.textContent,'+38.2 MB');tick(100);assert.ok(svg.attributes.width>78);assert.ok(svg.attributes.width<116);
+ capsule.reset();assert.equal(frames.size,0);tick(1800);assert.equal(svg.attributes.width,78);assert.match(element.attributes['aria-label'],/^0.00 MB/);
+});
+
+test('capsule respects reduced motion and stops a running turn when the preference changes',()=>{
+ const {capsule,frames,motion,chip,element}=capsuleFixture({reduced:true});
+ capsule.update(0);capsule.update(38.2e6,{animate:true,delta:38.2e6});assert.equal(frames.size,0);assert.equal(chip.classList.values.has('go'),false);assert.match(element.attributes['aria-label'],/^38.2 MB/);
+ motion.matches=false;capsule.update(0);assert.equal(frames.size,1);motion.matches=true;motion.change();assert.equal(frames.size,0);
 });
