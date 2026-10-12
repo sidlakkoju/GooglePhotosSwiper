@@ -2476,3 +2476,42 @@ test('hidden and pagehide release ownership and resumed pages cannot steal a fre
   await mounted.nodes.get('close').onclick();
  }
 });
+
+for(const interruption of ['hidden','load','refresh'])test(`blocked review retries loading after recovery is interrupted by ${interruption}`,async()=>{
+ const timers=new Map();let timerId=0,digests=0,holding=false,releaseRecovery,releaseOperation;
+ const recoveryGate=new Promise(resolve=>{releaseRecovery=resolve;}),operationGate=new Promise(resolve=>{releaseOperation=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  if(holding){
+   digests++;
+   if(digests===(interruption==='hidden'?2:1))await recoveryGate;
+   else if(interruption!=='hidden')await operationGate;
+  }
+  return webcrypto.subtle.digest(...args);
+ }}};
+ const mounted=await mountedReview([item('a')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await mounted.nodes.get('close').onclick();
+ await db.lease(account,'other');await mounted.nodes.get('launcher').onclick();
+ assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+ await db.save(account,{...(await db.read(account)),items:[item('recovered')]});
+ await db.lease(account,'other',true);
+ holding=true;
+ try{
+  const recovering=[...timers.values()][0]();
+  await waitForReview(()=>digests===(interruption==='hidden'?2:1));
+  let operation;
+  if(interruption==='hidden'){
+   mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+  }else{
+   operation=mounted.nodes.get(interruption).onclick();
+   await waitForReview(()=>digests>=2);
+  }
+  releaseRecovery();await recovering;
+  holding=false;releaseOperation();await operation;await mounted.settle();
+  if(interruption==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await mounted.settle();}
+  await [...timers.values()][0]();
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.match(mounted.nodes.get('caption').textContent,/^recovered ·/);
+ }finally{holding=false;releaseRecovery();releaseOperation();mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();}
+});

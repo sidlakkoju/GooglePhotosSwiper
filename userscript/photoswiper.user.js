@@ -1120,7 +1120,7 @@ function mountPhotosSwipe(environment) {
  document.documentElement.append(host);
  const $=id=>root.getElementById(id);
  let resume={},resumeWrite=Promise.resolve(),videoSavedAt=0;
- let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
+ let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,leaseRecoveryPending=false,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const pairingNotice=document.createElement('p');settingsPanel.append(pairingNotice);
  const pairingPromise=createPairingStore({GM:environment.GM,database,crypto:environment.crypto}).then(async store=>{
@@ -1230,8 +1230,9 @@ function mountPhotosSwipe(environment) {
   }finally{if(token===leaseGeneration)acquiringAccount=null;}
  }
  async function refreshLease(){
-  const token=leaseGeneration,recovering=!!leaseError;
+  const token=leaseGeneration,recovering=leaseRecoveryPending||!!leaseError;
   if(!pageActive||document.hidden||$('overlay').hidden||(recovering&&(busy||activeOperation)))return;
+  if(recovering)leaseRecoveryPending=true;
   if(!await renewLease()||token!==leaseGeneration)return;
   if(recovering){await open();return;}
   writes.flush();refill();
@@ -1515,6 +1516,7 @@ function mountPhotosSwipe(environment) {
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
    if(syncEnabled)await synchronize();
+   leaseRecoveryPending=false;
    message(missing?'Saved item is unavailable. Continuing with the next unreviewed item.':idleMessage());
   }catch(error){
    await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
