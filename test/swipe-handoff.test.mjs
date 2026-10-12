@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {createWriteQueue} from '../lib/userscript-performance.mjs';
 import {readFile} from 'node:fs/promises';
 import {throwSwipe as throwPublicSwipe} from '../public/swipe.js';
 import {throwSwipe as throwUserscriptSwipe} from '../lib/swipe.mjs';
@@ -66,19 +67,27 @@ for(const surface of ['viewer']){
   const {context,card,writes,finish}=fixture({fail});
   let removed=false;
   const copy={style:{},removeAttribute(){},setAttribute(){},querySelectorAll:()=>[],remove(){removed=true;},getBoundingClientRect:()=>({width:300})};
-  if(fallback==='reduced motion')copy.animate=()=>assert.fail('Reduced motion must skip animation');
+  if(fallback==='reduced motion')copy.animate=(frames,options)=>{assert.deepEqual(frames,[{opacity:1},{opacity:0}]);assert.equal(options.duration,150);return {finished:Promise.resolve()};};
   Object.assign(card,{ownerDocument:{body:{}},parentNode:{append(){}},cloneNode:()=>copy,getBoundingClientRect:()=>({left:0,top:0,width:300,height:400})});
   const matchMedia=globalThis.matchMedia;
   globalThis.matchMedia=()=>({matches:fallback==='reduced motion'});
   context.throwSwipe=throwPublicSwipe;
   context.render=()=>assert.equal(card.style.visibility,'');
-  context.show=async()=>assert.equal(card.style.visibility,'');
+  let finishPreview;
+  const previewWaiting=new Promise(resolve=>{finishPreview=resolve;});
+  context.show=async()=>{assert.equal(card.style.visibility,'');await previewWaiting;assert.equal(card.style.visibility,'');};
   try{
    const result=context.decide('keep',{dx:120,duration:240});
-   assert.equal(removed,true);
+   assert.equal(removed,fallback==='missing animate');
    assert.equal(card.style.visibility,'');
    assert.deepEqual(writes,['save']);
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(removed,true);
+   assert.equal(card.style.visibility,'');
    finish();
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(card.style.visibility,'');
+   finishPreview();
    await result;
    await new Promise(resolve=>setImmediate(resolve));
    assert.equal(card.style.visibility,'');
@@ -114,28 +123,29 @@ test('deck card reset cannot transition the next photo from the release offset',
 
 const userscriptSource=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
 function userscriptDecisionFixture({busy=false,inspection=false,fail=false,delayTask=false}={}){
- const decisions=[],writes=[],pendingDecisions=[];
+ const decisions=[],writes=[];
  let finish,startTask;
  const waiting=new Promise(resolve=>{finish=resolve;}),taskReady=new Promise(resolve=>{startTask=resolve;});
- let result;
- const context=vm.createContext({identity:{account:'synthetic'},$:()=>({hidden:false}),deferredReviewInputs:[],reviewingUndo:false,finishCardAnimation(){},busy,savingDecisions:false,inspected:inspection?'first':null,focused:null,pendingDecisions,state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({}),save:async next=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},run:task=>{context.busy=true;result=(async()=>{try{if(delayTask)await taskReady;await task();}catch{}finally{pendingDecisions.length=0;context.savingDecisions=false;context.busy=false;context.render();}})();}});
- const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function applyUndo(',start);
+ const context=vm.createContext({identity:{account:'synthetic'},$:()=>({hidden:false}),leaseError:null,busy,inspected:inspection?'first':null,focused:null,previousKey:null,swipeAt:null,window:{performance:{mark(){},now:()=>0}},state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({})});
+ const queue=createWriteQueue({snapshot:()=>context.state,write:async next=>{if(delayTask)await taskReady;writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},committed(){}});
+ context.apply=next=>{context.state=next;context.render();queue.enqueue();};
+ const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function undo(',start);
  vm.runInContext(userscriptSource.slice(start,end),context);
- return {context,decisions,writes,finish,startTask,settle:()=>result};
+ return {context,decisions,writes,finish,startTask,settle:()=>queue.flush(),pending:()=>queue.pending};
 }
 for(const fail of [false,true])for(const delayTask of [false,true])test(`userscript advances before a ${delayTask?'delayed task and ':''}${fail?'failed':'successful'} save`,async()=>{
  const fixture=userscriptDecisionFixture({fail,delayTask}),{context,decisions,writes,finish,startTask}=fixture;
  let displayed='first';
- context.render=()=>{displayed=context.pendingDecisions.length?'next':fail?'first':'next';};
+ context.render=()=>{displayed=context.state.history.length?'next':'first';};
  context.decide('keep');
  assert.deepEqual(decisions,['keep']);
  assert.equal(displayed,'next');
- assert.deepEqual(writes,delayTask?[]:['save']);
+ assert.deepEqual(writes,[]);
  startTask();await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(writes,['save']);
  assert.equal(displayed,'next');
  finish();await fixture.settle();
- assert.equal(displayed,fail?'first':'next');
+ assert.equal(displayed,'next');assert.equal(fixture.pending(),fail);
 });
 test('userscript does not fly off a gesture rejected by busy state',()=>{
  const {context,decisions,writes}=userscriptDecisionFixture({busy:true});

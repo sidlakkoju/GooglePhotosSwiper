@@ -53,6 +53,13 @@ export async function syncRequest(request,env={}) {
    const migration=await db.prepare('SELECT id FROM devices WHERE is_legacy = 1 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM devices WHERE is_legacy = 0 AND revoked_at IS NULL)').first();
    return respond({...state,...(migration?{suggestRevokeLegacy:true}:{})});
   }
+  if(route==='/api/decisions'&&method==='PUT'){
+   const value=await body(request);
+   if(Object.keys(value).length!==1||!Array.isArray(value.decisions)||value.decisions.length>2000||!value.decisions.every(entry=>entry&&Object.keys(entry).length===2&&identifier(entry.id)&&decision(entry.decision)))throw Error('Invalid decisions');
+   const statements=value.decisions.map(entry=>entry.decision===null?db.prepare('DELETE FROM decisions WHERE scope = ? AND id = ?').bind(scope,entry.id):db.prepare('INSERT INTO decisions (scope, id, decision) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET decision = excluded.decision').bind(scope,entry.id,entry.decision));
+   if(statements.length)await db.batch(statements);
+   return respond({ok:true});
+  }
   const match=route.match(/^\/api\/decisions\/([^/]+)$/);
   if(match&&['PUT','DELETE'].includes(method)){
    const id=decodeURIComponent(match[1]);if(!identifier(id))return respond({error:'Invalid item ID'},400);

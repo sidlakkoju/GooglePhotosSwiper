@@ -20,7 +20,28 @@ test('manual fallback sends only the six-digit short code in the claim body',asy
 test('countdown keeps updating while a status request is slow',async()=>{const elements=dom(),timers=[];let time=10000,resolve;const f=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'token'}),fetch:async url=>url.includes('status')?new Promise(done=>resolve=done):{ok:true,json:async()=>({id:'id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:20000})},now:()=>time,setTimeout:callback=>{timers.push(callback);return callback;},clearTimeout:callback=>{const index=timers.indexOf(callback);if(index>=0)timers.splice(index,1);},renderQR:document=>document.createElement('canvas')});await f.open();time=12500;const pending=timers.shift()();time=14000;await timers.shift()();assert.equal(f.modal.children[3].textContent,'00:06');resolve({ok:true,json:async()=>({claimed:true,name:'Phone'})});await pending;assert.equal(timers.length,0);});
 
 test('QR renderer includes a four-module white quiet zone',()=>{const elements=dom(),fills=[];const create=elements.document.createElement;elements.document.createElement=tag=>{const canvas=create(tag);canvas.getContext=()=>({fillRect:(...args)=>fills.push(args)});return canvas;};const canvas=renderPairingQR(elements.document,'https://photoswiper-sync.sidlakkoju.workers.dev/pair#abcdefghijklmnopqrstuv');assert.equal(canvas.width,270);assert.equal(canvas.height,270);assert.deepEqual(fills[0],[0,0,270,270]);for(const [x,y,width,height] of fills.slice(1)){assert.ok(x>=24&&y>=24&&x+width<=246&&y+height<=246);}});
-test('pairing and recovery bundle stays within the 15 KB pairing and 4 KB recovery budgets without runtime dependencies',async()=>{const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);assert.ok(source.length<=83032+isolationBytes+(15+4)*1024);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);});
+const prePairingMainBytes=84973;
+const photoURLRefreshGrowthBytes=3194;
+const themeGrowthBytes=3078;
+const performanceGrowthBytes=76764-58137;
+const loaderPairingOnboardingGrowthBytes=701;
+const iosSwipeCancelGrowthBytes=200;
+const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
+const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
+const centeredShellGrowthBytes=12000;
+const prePairingCurrentBytes=performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
+const recoveryGrowthBudgetBytes=4*1024;
+const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes;
+function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
+test('pairing bundle stays within the 15 KB pairing and 4 KB recovery growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
+test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
+ const boundary=Buffer.alloc(prePairingCurrentBytes+pairingGrowthBudgetBytes,32);
+ assertPairingBundleBudget(boundary);
+ assert.throws(()=>assertPairingBundleBudget(Buffer.concat([boundary,Buffer.from(' ')])),assert.AssertionError);
+});
+test('pairing budget rejects runtime dependencies even below the size limit',()=>{
+ for(const directive of ['require','connect'])assert.throws(()=>assertPairingBundleBudget(Buffer.from(`// @${directive} https://synthetic.example/dependency.js`)),assert.AssertionError);
+});
 
 test('custom Worker hand-off and manual codes claim and save the issuing origin',async()=>{
  for(const manual of [false,true]){
@@ -86,7 +107,7 @@ test('busy viewer controls leave pairing Cancel enabled',()=>{
 test('hash changes in an already mounted Photos tab open consent for the latest code',async()=>{
  const elements=dom(),listeners={},calls=[],location={hash:'',pathname:'/',search:''};let saved;
  elements.document.createElement=((create)=>tag=>{const node=create(tag);node.remove=()=>{elements.parent.children=elements.parent.children.filter(child=>child!==node);};return node;})(elements.document.createElement);
- const context={receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div')};
+ const context={receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div'),onboardPair:{onclick(){}}};
  vm.runInNewContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(" $('launcher').onclick=open;")),context);
  assert.equal(elements.parent.children.length,0);
  for(const code of ['abcdefghijklmnopqrstuv','zyxwvutsrqponmlkjihgfe']){
@@ -94,4 +115,35 @@ test('hash changes in an already mounted Photos tab open consent for the latest 
   await elements.parent.children[0].children[1].onclick();assert.equal(calls.at(-1).body.code,code);assert.equal(saved.url,'https://issuer.example');
  }
  location.hash='#unrelated';listeners.hashchange();assert.equal(elements.parent.children[0].hidden,true);
+});
+
+test('unpaired onboarding opens the existing receiver and Continue locally dismisses it',async()=>{
+ const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom();
+ let received=false;
+ const context={document:elements.document,divElement4:{insertBefore(){}},cardElement:{},receivePairing:manual=>received=manual};
+ vm.runInNewContext(ui.slice(ui.indexOf(" const onboarding=document.createElement"),ui.indexOf(" for(const [id,title,type]"))+ '\nglobalThis.card=onboarding;globalThis.local=syncLocal;',context);
+ const card=context.card;
+ assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
+ card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
+ const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('  }catch(error)',ui.indexOf(' async function openSession()')));
+ for(const settings of [{},{onboardingDismissed:true},{url:'https://worker.example',token:'synthetic-token'}]){
+  const nodes={},node=id=>nodes[id]||(nodes[id]={});
+  const state={$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,message(){},idleMessage:()=>''};
+  await vm.runInNewContext('(async()=>{'+opening+'})()',state);
+  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');
+ }
+ let saved;
+ const dismissal={closeSettings(){},$:()=>context.local,run:fn=>fn(),pairingPromise:Promise.resolve({settings:async()=>({}),saveSettings:async value=>saved=value}),settingsPanel:{},onboarding:card,message(){},idleMessage:()=>''};
+ vm.runInNewContext(ui.split('\n').find(line=>line.includes("$('sync-local').onclick=")),dismissal);await context.local.onclick();
+ assert.equal(saved.onboardingDismissed,true);assert.equal(card.hidden,true);
+});
+
+test('settings and onboarding pairing buttons share receiver activation',()=>{
+ const elements=dom();let received=0;
+ const onboardPair={onclick:()=>received++};
+ const context={document:elements.document,settingsPanel:elements.parent,onboardPair,receivePairing:()=>{}};
+ vm.runInNewContext(ui.split('\n').find(line=>line.includes(' const pairThis=')),context);
+ const button=elements.parent.children[0];
+ assert.equal(button.textContent,'Pair this device');assert.equal(button.onclick,onboardPair.onclick);
+ button.onclick();assert.equal(received,1);
 });

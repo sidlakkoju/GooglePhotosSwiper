@@ -1,17 +1,18 @@
+import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,access,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {readFile,access,mkdtemp,writeFile,rm,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {webcrypto} from 'node:crypto';
+import {webcrypto,generateKeyPairSync,sign} from 'node:crypto';
 import vm from 'node:vm';
 import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
 import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
-const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
+const item=(mediaKey,extra={})=>({mediaKey,name:mediaKey,type:'photo',urlFetchedAt:Date.now(),thumbUrl:'https://lh3.googleusercontent.com/fake',decision:null,state:'active',...extra});
 function fixture(responder){
  const calls=[],window={WIZ_global_data:{...tokens}};
  const api=createPhotosAPI({window,location:page,crypto:webcrypto,AbortController,setTimeout,clearTimeout,fetch:async(url,options)=>{
@@ -70,6 +71,18 @@ test('video and Trash reads use page-session RPCs and refuse direct deletion com
  assert.deepEqual((await call(f,'trashPage')).items,[{mediaKey:'photo',dedupKey:'stable'}]);
  const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
  const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
+});
+test('media URL refresh selects the preview tuple while video keeps the playback URL',async()=>{
+ const preview='https://photos.fife.usercontent.google.com/preview',playback='https://lh3.googleusercontent.com/playback';
+ const f=fixture(()=>[['photo',[preview,800,600]],playback]);
+ assert.deepEqual(await call(f,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ assert.deepEqual(await call(f,'video',{mediaKey:'photo'}),{url:playback});
+ assert.deepEqual(f.calls[0].args,['photo',null,null,null,null]);
+ const download=fixture(()=>[['photo',[preview,800,600]],'https://video-downloads.google.com/download']);
+ assert.deepEqual(await call(download,'mediaURL',{mediaKey:'photo'}),{url:preview});
+ for(const data of [[['other',[preview,800,600]],playback],[['photo'],playback],[['photo',['https://invalid.test/preview',800,600]],playback]]){
+  assert.equal((await fixture(()=>data).api('mediaURL',{mediaKey:'photo'})).ok,false);
+ }
 });
 test('page merges preserve decisions, sent markers and older progress through latest refresh',()=>{
  let state={...emptyReview(),items:[item('old',{decision:'remove',queueSent:true})]};
@@ -130,6 +143,8 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  const mounted=bundleEnvironment();
  vm.runInNewContext(source,mounted.environment);
  assert.equal(mounted.hosts.length,1);assert.equal(mounted.shadowMode,'open');
+ assert.equal(mounted.nodes.get('running-version').textContent,'v'+/^\/\/ @version (\S+)$/m.exec(source)[1]);
+ for(const field of ['updateURL','downloadURL'])assert.deepEqual([...source.slice(0,source.indexOf('// ==/UserScript==')).matchAll(new RegExp('^// @'+field+' (.*)$','gm'))].map(match=>match[1]),[url]);
  assert.equal(typeof mounted.nodes.get('launcher').onclick,'function');
  assert.match(mounted.root.childNodes[0].childNodes[0].textContent,/#zoom\{[^}]*min-height:44px/);
  assert.doesNotMatch(source,/innerHTML|outerHTML|insertAdjacentHTML/);
@@ -138,14 +153,32 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
 });
+test('rebuilt panel version follows a metadata version bump',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'photos-version-'));
+ try{
+  for(const name of ['scripts','lib','extension','public'])await cp(new URL('../'+name,import.meta.url),join(directory,name),{recursive:true});
+  const builderPath=join(directory,'scripts/build-userscript.mjs');
+  const builder=await readFile(builderPath,'utf8');
+  const version='9.8.7';
+  await writeFile(builderPath,builder.replace(/^\/\/ @version .*$/gm,'// @version '+version));
+  const result=spawnSync(process.execPath,[builderPath],{cwd:directory,encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  const source=await readFile(join(directory,'userscript/photoswiper.user.js'),'utf8');
+  const metadataVersion=/^\/\/ @version (\S+)$/m.exec(source)[1];
+  assert.equal(metadataVersion,version);
+  const mounted=bundleEnvironment();
+  vm.runInNewContext(source,mounted.environment);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+metadataVersion);
+ }finally{await rm(directory,{recursive:true,force:true});}
+});
 test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
  const bytes=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));
  assert.ok(bytes.every(byte=>byte<128),'Installable userscript must contain only ASCII bytes');
  const mounted=bundleEnvironment();
  vm.runInNewContext(bytes.toString('latin1'),mounted.environment);
  await mounted.nodes.get('launcher').onclick();
- assert.equal(mounted.nodes.get('remove').textContent,'\u00d7 Queue');
- assert.equal(mounted.nodes.get('keep').textContent,'\u2713 Keep');
+ assert.equal(mounted.nodes.get('remove').textContent,'\u2715');
+ assert.equal(mounted.nodes.get('keep').textContent,'\u2665');
  assert.match(mounted.nodes.get('stats').textContent,/ to review \u00b7 /);
 });
 test('unreadable legacy albums retain their target with title-sensitive lookup and resume safely',async()=>{
@@ -225,7 +258,7 @@ function fakeIndexedDB(fault={}) {
    const tx={objectStore:()=>({
     get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
     delete:key=>staged.delete(key),
-    put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
+    put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
@@ -252,13 +285,15 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
- const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),toggle(name){if(this.values.has(name))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id')nodes.set(value,this);if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){this.childNodes.push(...children);},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){this.childNodes=children;},querySelector(tag){return this.childNodes.find(node=>node.tagName===tag.toUpperCase())||null;},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById:id=>nodes.get(id),querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{append:host=>hosts.push(host)}};
- const window={WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;}};window.top=window;
- result.environment={window,document,location:{...page},structuredClone,URL,URLSearchParams,TextEncoder,Uint8Array,setInterval,clearInterval};
+ const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},documentElement:{dataset:{},append:host=>hosts.push(host)}};
+ const events=new EventTarget();
+ const window={requestAnimationFrame:callback=>{callback();return null;},cancelAnimationFrame(){},dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;events.addEventListener(name,handler);}};window.top=window;
+ result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,AbortController,AbortSignal,setInterval,clearInterval};
  return result;
 }
 test('library sightings restore active state and retain local album membership on load and refresh',()=>{
@@ -307,34 +342,36 @@ test('undo eligibility rejects missing, trashed, revised and job-locked decision
  assert.equal(canUndoReview(state,entry),true);
  for(const changed of [{...state,items:[]},{...state,items:[item('a',{decision:'keep',revision:2})]},{...state,items:[item('a',{decision:'keep',revision:1,state:'in_trash'})]},{...state,job:{mediaKeys:['a']}}])assert.equal(canUndoReview(changed,entry),false);
 });
-test('mounted bundle keeps album links in the page account and undo skips stale history',async()=>{
+test('mounted bundle keeps album links and Undo responds before failed storage',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),fault={};
  mounted.environment.window.indexedDB=fakeIndexedDB(fault);
- if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),albumKey:'album',items:[item('a'),item('b')]});
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(mounted.nodes.get('album').href,'https://photos.google.com/u/2/album/album');
- const idle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
- mounted.nodes.get('keep').onclick();await idle();mounted.nodes.get('keep').onclick();await idle();
- const state=await db.read(account);await db.save(account,{...state,items:state.items.map(row=>row.mediaKey==='b'?{...row,state:'in_trash',revision:row.revision+1}:row)});
- fault.failSave=true;mounted.nodes.get('undo').onclick();await idle();
- assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');assert.equal((await db.read(account)).items[0].decision,'keep');
- fault.failSave=false;mounted.nodes.get('undo').onclick();await idle();
- const undone=await db.read(account);assert.equal(undone.items[0].decision,null);assert.equal(undone.items[1].decision,'keep');assert.equal(mounted.nodes.get('status').textContent,'Decision undone for a.');
+ mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ fault.failSave=true;mounted.nodes.get('undo').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^a · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/Local save failed.*pending changes/);
+ assert.equal((await db.read(account)).items[0].decision,'keep');
+ fault.failSave=false;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal((await db.read(account)).items[0].decision,'keep');
 });
-async function mountedReview(items,windowOverrides={},fault={}) {
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(fault);
+async function mountedReview(items,windowOverrides={},syncSettings,environmentOverrides={}) {
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(syncSettings?.url?{}:syncSettings);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
  if(windowOverrides?.indexedDB)mounted.environment.window.indexedDB=windowOverrides.indexedDB;
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items});
- Object.assign(mounted.environment.window,windowOverrides);
+ if(syncSettings?.url)await db.saveSettings(syncSettings);
+ Object.assign(mounted.environment.window,windowOverrides);Object.assign(mounted.environment,environmentOverrides);
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const settle=async()=>{for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
- const click=async id=>{mounted.nodes.get(id).onclick();await settle();};
+ const settle=async()=>{await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(mounted.nodes.get('overlay')['aria-busy']==='false')return;}throw Error('Fake UI stayed busy');};
+ const click=async id=>{mounted.nodes.get(id).onclick();await new Promise(resolve=>setTimeout(resolve,10));await settle();};
  return {...mounted,click,settle,read:()=>db.read(account)};
 }
 test('mounted undo restores undecided after queue, keep instead, and two undos',async()=>{
@@ -371,33 +408,33 @@ test('Trash writes require confirmation and bounded valid stable identifiers',as
 });
 test('mounted undo survives a fresh script instance with the same IndexedDB',async()=>{
  const first=await mountedReview([item('a',{size:1}),item('b',{size:100})]);await first.click('keep');
- const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
+ await first.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
  second.nodes.get('undo').onclick();
- for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
  assert.equal(second.nodes.get('status').textContent,'Decision undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
- for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
-test('mounted Trash is opt-in, confirms the exact count and verifies synthetic Trash',async()=>{
+test('mounted Trash requires confirmation, confirms the exact count and verifies synthetic Trash',async()=>{
  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})]);const requests=[],prompts=[];
  mounted.environment.window.fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['a',null,null,'stable']],null])};};
- assert.equal(mounted.nodes.get('move-trash').hidden,true);await mounted.click('move-trash');assert.equal(requests.length,0);
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);assert.equal(requests.length,0);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return false;};await mounted.click('move-trash');assert.equal(requests.length,0);assert.match(prompts[0],/exactly 1 items/);
  mounted.environment.window.confirm=()=>true;
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
+ await mounted.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('move-trash').onclick();
- for(let count=0;count<100&&second.nodes.get('overlay')['aria-busy']==='true';count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.deepEqual(requests,['XwAOJf','zy0IHe']);assert.equal((await mounted.read()).items[0].state,'in_trash');
 });
 test('Trash completion status resets on reload and cached-page restore while estimates retain a running total',async()=>{
@@ -408,7 +445,7 @@ test('Trash completion status resets on reload and cached-page restore while est
   return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['previous'],...candidates.map(row=>[row.mediaKey,null,null,row.dedupKey])],null])};
  };
  const mounted=await mountedReview([item('previous',{decision:'remove',state:'in_trash',spaceTaken:55000}),...candidates],{fetch,confirm:()=>true});
- const ready='Ready. Decisions are saved locally on this browser.';
+ const ready='';
  assert.match(mounted.nodes.get('stats').textContent,/In Trash: 55 KB \(running total\)/);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  await mounted.click('move-trash');
@@ -417,7 +454,7 @@ test('Trash completion status resets on reload and cached-page restore while est
  await mounted.environment.window.listeners.pageshow({persisted:true});
  assert.equal(mounted.nodes.get('status').textContent,ready);
  assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
- const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
  assert.equal(reloaded.nodes.get('status').textContent,ready);
@@ -453,7 +490,7 @@ test('sent candidates remain listed for Trash after the removal queue clears and
  const enable=target=>{target.nodes.get('trash-opt-in').checked=true;target.nodes.get('trash-opt-in').onchange();};
  const listed=target=>target.nodes.get('trash-candidates-list').childNodes.map(button=>button.childNodes[1].textContent);
  assert.equal(mounted.nodes.get('queue-title').textContent,'Removal queue (0)');
- assert.equal(mounted.nodes.get('trash-candidates').hidden,true);
+ assert.equal(mounted.nodes.get('trash-candidates').hidden,false);
  enable(mounted);
  assert.equal(mounted.nodes.get('trash-candidates').hidden,false);
  assert.equal(mounted.nodes.get('move-trash').textContent,'Move 5 items to Trash');
@@ -469,7 +506,7 @@ test('sent candidates remain listed for Trash after the removal queue clears and
  assert.match(mounted.nodes.get('caption').textContent,/Candidate inspection · QA-DUMMY-0/);
  await mounted.click('keep');
  assert.equal(listed(mounted).length,4);assert.equal(mounted.nodes.get('move-trash').textContent,'Move 4 items to Trash');
- const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
  await second.nodes.get('launcher').onclick();enable(second);
  assert.deepEqual(listed(second),listed(mounted));assert.equal(second.nodes.get('queue').childNodes.length,0);
@@ -484,13 +521,184 @@ test('Trash candidate list includes queued and sent items regardless of review f
  mounted.nodes.get('trash-opt-in').checked=false;mounted.nodes.get('trash-opt-in').onchange();
  assert.equal(mounted.nodes.get('trash-candidates').hidden,true);assert.equal(mounted.nodes.get('move-trash').hidden,true);
 });
-test('shadow overlay puts the card above stats and touch swipes persist decisions',async()=>{
+for(const mediaType of ['IMG','VIDEO'])test(`shadow overlay puts the card above stats and ${mediaType} touch swipes persist decisions`,async()=>{
  const mounted=await mountedReview([item('a')]);assert.equal(mounted.shadowMode,'open');
  const content=mounted.nodes.get('overlay').childNodes[0];assert.ok(content.childNodes.indexOf(mounted.nodes.get('card'))<content.childNodes.indexOf(mounted.nodes.get('stats')));
- mounted.nodes.get('card').offsetWidth=300;
- const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'VIDEO',getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
+ mounted.nodes.get('card').offsetWidth=280;
+ const media=mounted.nodes.get('media');media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:mediaType,getBoundingClientRect:()=>({bottom:300})},pointerId:1,clientX:20,clientY:20});media.listeners.pointermove({pointerId:1,clientX:120,clientY:25,preventDefault(){}});media.listeners.pointerup({pointerId:1,clientX:140,clientY:25});
  await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
+
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal((await mounted.read()).history.length,1);
+});
+
+function swipeEvent(overrides={}) {
+ return {isPrimary:true,button:0,target:{tagName:'VIDEO'},pointerId:1,clientX:20,clientY:20,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...overrides};
+}
+test('zoomed photos allow touch panning without swiping and reset for the next photo',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {nodes}=mounted,card=nodes.get('card'),media=nodes.get('media'),zoom=nodes.get('zoom');
+ const css=mounted.root.childNodes[0].childNodes[0].textContent;
+ assert.match(css,/\.card\.zoomed,\.card\.zoomed \.media\{touch-action:pan-x pan-y pinch-zoom\}/);
+ assert.match(css,/\.card\.zoomed \.media img\{pointer-events:auto\}/);
+ assert.equal(card.classList.contains('expanded'),false);
+ for(const value of ['2','2.5','1','3']){
+  zoom.value=value;zoom.oninput();
+  assert.equal(card.classList.contains('zoomed'),Number(value)>1);
+ }
+ const image=media.querySelector('img');
+ assert.equal(image.style.touchAction,'pan-x pan-y pinch-zoom');
+ media.setPointerCapture=()=>assert.fail('Zoomed photos must keep native touch panning');
+ media.listeners.pointerdown(swipeEvent({target:image,pointerType:'touch'}));
+ const move=swipeEvent({target:image,clientX:120});media.listeners.pointermove(move);
+ media.listeners.pointerup(swipeEvent({target:image,clientX:120}));
+ assert.equal(move.prevented,undefined);
+ assert.equal((await mounted.read()).history.length,0);
+ await mounted.click('keep');
+ assert.equal(zoom.value,'1');
+ assert.equal(card.classList.contains('zoomed'),false);
+});
+
+test('swipes lock direction after slop and cancellation releases capture without deciding',async()=>{
+ for(const scenario of ['vertical','cancel','short','other-pointer']){
+  const mounted=await mountedReview([item('synthetic')]),media=mounted.nodes.get('media');
+  let captured=false,captures=0,releases=0;
+  media.setPointerCapture=id=>{assert.equal(id,1);captured=true;captures++;};
+  media.hasPointerCapture=()=>captured;
+  media.releasePointerCapture=()=>{captured=false;releases++;};
+  media.listeners.pointerdown(swipeEvent());assert.equal(captures,0);
+  const slop=swipeEvent({clientX:25,clientY:24});media.listeners.pointermove(slop);
+  assert.equal(captures,0);assert.equal(slop.prevented,undefined);
+  if(scenario==='vertical'){
+   const vertical=swipeEvent({clientX:24,clientY:35});media.listeners.pointermove(vertical);
+   assert.equal(vertical.prevented,undefined);
+   media.listeners.pointermove(swipeEvent({clientX:150,clientY:35}));
+   assert.equal(captures,0);
+  }else{
+   const move=swipeEvent({clientX:scenario==='short'?40:150});media.listeners.pointermove(move);
+   assert.equal(captures,1);assert.equal(move.prevented,true);assert.match(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,/translate3d/);
+   if(scenario==='other-pointer'){
+    media.listeners.pointercancel(swipeEvent({pointerId:2}));assert.equal(captured,true);
+   }
+   if(scenario!=='short')media.listeners.pointercancel(swipeEvent());
+  }
+  media.listeners.pointerup(swipeEvent({clientX:scenario==='short'?40:150}));
+  assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'');assert.equal(captured,false);
+  assert.equal(releases,scenario==='vertical'?0:1);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+test('touch drag, spring-back and outgoing copy share the card transform',async()=>{
+ for(const surface of ['media','swipe'])for(const release of ['short','cancel','keep','remove']){
+  const mounted=await mountedReview([item('synthetic-video',{type:'video'})]);
+  const card=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card'),target=mounted.nodes.get(surface),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  const animations=[],copies=[],dx=release==='short'?20:release==='remove'?-120:120;
+  const committing=release==='keep'||release==='remove',pose=`translate3d(${dx}px,0px,0) rotate(${dx/300*15}deg) scale(1.02)`;
+  card.animate=(frames,options)=>{animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}};};
+  card.parentNode={append(copy){copies.push(copy);}};
+  card.cloneNode=deep=>{
+   assert.equal(deep,true);
+   assert.equal(card.style.transform,pose);
+   assert.equal(media.style.transform,undefined);
+   assert.equal(mounted.nodes.get('swipe').style.transform,undefined);
+   return {style:{},querySelectorAll:()=>[],removeAttribute(){},setAttribute(){},animate(frames,options){animations.push({frames,options});return {finished:Promise.resolve(),finish(){},cancel(){}};},remove(){}};
+  };
+  let captured=false;
+  target.setPointerCapture=()=>{captured=true;};
+  target.hasPointerCapture=()=>captured;
+  target.releasePointerCapture=()=>{captured=false;};
+  target.listeners.pointerdown(swipeEvent({target:surface==='media'?video:target,pointerType:'touch',timeStamp:0}));
+  const move=swipeEvent({clientX:20+dx,timeStamp:200});
+  target.listeners.pointermove(move);
+  assert.equal(move.prevented,true);
+  assert.equal(card.style.transform,pose);
+  assert.equal(target.style.transform,undefined);
+  target.listeners[release==='cancel'?'pointercancel':'pointerup'](swipeEvent({clientX:20+dx,timeStamp:400}));
+  if(committing)await mounted.settle();
+  assert.equal(captured,false);
+  assert.equal(card.style.transform,'');
+  assert.equal(animations.length,1);
+  assert.equal(animations[0].frames[0].transform,pose);
+  if(release==='short'||release==='cancel'){
+   assert.equal(animations[0].frames[1].transform,'none');
+   assert.equal(copies.length,0);
+   assert.equal((await mounted.read()).items[0].decision,null);
+  }else{
+   assert.equal(copies.length,1);
+   assert.match(copies[0].style.transform,/translate3d/);
+   assert.match(animations[0].frames[1].transform,new RegExp(`translate3d\\(${dx>0?'':'-'}[0-9]+px,0,0\\) rotate`));
+   await mounted.settle();
+   assert.equal((await mounted.read()).items[0].decision,release);
+  }
+ }
+});
+test('video capture transfer preserves the swipe until media capture ends',async()=>{
+ for(const cancel of [false,true]){
+  const mounted=await mountedReview([item('video',{type:'video'})]),media=mounted.nodes.get('media'),video=media.querySelector('video');
+  let captured=false;
+  media.setPointerCapture=()=>{captured=true;};
+  media.hasPointerCapture=()=>captured;
+  media.releasePointerCapture=()=>{captured=false;};
+  media.listeners.pointerdown(swipeEvent({target:video,pointerType:'touch'}));
+  media.listeners.pointermove(swipeEvent({target:video,clientX:120}));
+  media.listeners.lostpointercapture(swipeEvent({target:video}));
+  assert.equal(captured,true);assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'translate3d(100px,0px,0) rotate(5deg) scale(1.02)');
+  if(cancel){
+   captured=false;
+   media.listeners.lostpointercapture(swipeEvent({target:media}));
+   assert.equal(mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card').style.transform,'');
+  }
+  media.listeners.pointerup(swipeEvent({target:media,clientX:120}));
+  await mounted.settle();
+  assert.equal((await mounted.read()).items[0].decision,cancel?null:'keep');
+ }
+});
+test('mouse capture delivers release outside either swipe surface during slop and allows the next swipe',async()=>{
+ for(const surface of ['media','swipe']){
+  const mounted=await mountedReview([item('mouse')]),target=mounted.nodes.get(surface);
+  let captured=false;
+  target.setPointerCapture=()=>{captured=true;};
+  target.hasPointerCapture=()=>captured;
+  target.releasePointerCapture=()=>{captured=false;};
+  target.listeners.pointerdown(swipeEvent({target,pointerType:'mouse'}));
+  assert.equal(captured,true);
+  target.listeners.pointermove(swipeEvent({target,clientX:25,clientY:24}));
+  if(captured)target.listeners.pointerup(swipeEvent({target,clientX:25,clientY:24}));
+  assert.equal(captured,false);assert.equal((await mounted.read()).items[0].decision,null);
+  target.listeners.pointerdown(swipeEvent({target,pointerType:'mouse'}));
+  target.listeners.pointermove(swipeEvent({target,clientX:120}));
+  target.listeners.pointerup(swipeEvent({target,clientX:120}));
+  await mounted.settle();
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+ }
+});
+test('deck videos support tap playback and swiping with native controls only when enlarged',async()=>{
+ const mounted=await mountedReview([item('synthetic-video',{type:'video'}),item('next')],{fetch:async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])})});
+ const media=mounted.nodes.get('media'),video=media.querySelector('video');
+ for(let count=0;count<100&&!video.src;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.ok(video.src);assert.equal(video.controls,false);
+ assert.equal(video.paused,false);
+ media.listeners.click(swipeEvent());assert.equal(video.paused,true);
+ media.listeners.click(swipeEvent());assert.equal(video.paused,false);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);
+ media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
+ assert.equal((await mounted.read()).items[0].decision,null);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);
+ media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
+ const click=swipeEvent();media.listeners.click(click);assert.equal(click.prevented,true);assert.equal(click.stopped,true);
+ await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+test('overlay isolates pointer touch wheel and all key events while preserving native defaults',async()=>{
+ const mounted=await mountedReview([item('synthetic')]),overlay=mounted.nodes.get('overlay');
+ for(const type of ['pointerdown','pointermove','pointerup','pointercancel','touchstart','touchmove','touchend','touchcancel','wheel','keydown','keyup','keypress']){
+  const event=swipeEvent();overlay.listeners[type](event);assert.equal(event.stopped,true,type);assert.equal(event.prevented,undefined,type);
+ }
+ const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
+ const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+ assert.match(source,/\.card\{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media\{touch-action:none;[^}]*overflow:auto/);
+ assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
+ assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
 
 test('obsolete userscript artifact is absent',async()=>{await assert.rejects(access(new URL('../userscript/photos-swipe.user.js',import.meta.url)),{code:'ENOENT'});});
@@ -505,16 +713,24 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch,confirm:()=>true});
  await mounted.click('send');
  assert.equal((await mounted.read()).items[0].queueSent,true);
- assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
- const content=mounted.nodes.get('overlay').childNodes[0],toolbar=content.childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash'))),footer=toolbar.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
- assert.equal(footer.childNodes[0].textContent,'Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
- assert.ok(content.childNodes.indexOf(mounted.nodes.get('status'))<content.childNodes.indexOf(toolbar));
+ assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Choose Trash in Settings to use this panel, or open the review album to move items manually in Google Photos.');
+ const content=mounted.nodes.get('overlay').childNodes[0],toolbar=mounted.nodes.get('review-panel').childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash'))),footer=toolbar.childNodes.find(node=>node.textContent==='Review marked items before moving them to Google Photos Trash.');
+ assert.equal(footer.textContent,'Review marked items before moving them to Google Photos Trash.');
+ assert.ok(mounted.nodes.get('review-panel').childNodes.includes(toolbar));
  assert.ok(toolbar.childNodes.includes(footer));
  assert.equal(footer.class,'album-explanation');
- assert.ok(content.childNodes.indexOf(mounted.nodes.get('trash-candidates'))<content.childNodes.indexOf(toolbar));
+ assert.ok(mounted.nodes.get('review-panel').childNodes.indexOf(mounted.nodes.get('trash-candidates'))<mounted.nodes.get('review-panel').childNodes.indexOf(toolbar));
  assert.ok(toolbar.childNodes.some(node=>node.childNodes.includes(mounted.nodes.get('trash-opt-in'))));
- assert.equal(mounted.nodes.get('move-trash').hidden,true);
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);
  assert.ok(!requests.includes('XwAOJf'));
+});
+test('card stack clips outgoing cards without a later overflow override',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const css=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent||node.childNodes.map(child=>child.textContent).join('')).join('');
+ const cardRules=[...css.matchAll(/\.card\{([^}]*)\}/g)].map(match=>match[1]);
+ assert.ok(cardRules.length>0);
+ assert.match(cardRules.at(-1),/overflow:hidden/);
+ assert.ok(mounted.nodes.get('card').childNodes.some(node=>node.class==='top-card'));
 });
 test('phone controls keep zoom together, order in a grid and Trash below the library controls',async()=>{
  const mounted=await mountedReview([item('a')]);
@@ -556,7 +772,7 @@ test('mounted album send creates a readable title and saves the verified album',
  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],fetch);
  mounted.environment.window.confirm=()=>true;
  await mounted.click('send');
- assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
+ assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Choose Trash in Settings to use this panel, or open the review album to move items manually in Google Photos.');
  assert.deepEqual(titles,['Photos Swipe · Review']);
  assert.equal((await mounted.read()).albumKey,'album');
  assert.equal((await mounted.read()).job,null);
@@ -564,46 +780,45 @@ test('mounted album send creates a readable title and saves the verified album',
  assert.ok(requests.includes('E1Cajb'));
 });
 
-test('phone layout keeps library controls clear and Trash text inside its cell in Chrome',async t=>{
+test('centered shell and grouped sheet fit desktop and phone viewports in Chrome',async t=>{
  const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
  if(!browser){t.skip('Chrome is unavailable');return;}
  const mounted=await mountedReview([item('a')]);
  mounted.nodes.get('overlay').hidden=false;mounted.nodes.get('move-trash').hidden=false;
  const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+ const parents=new Map();
+ const recordParents=node=>{for(const child of node.childNodes||[]){parents.set(child,node);recordParents(child);}};recordParents(mounted.root);
  const serialize=node=>{
   if(!node.tagName)return escape(node.textContent||'');
   const tag=node.tagName.toLowerCase();
   const attributes=['id','class','type','min','max','step','value'].filter(key=>typeof node[key]==='string'&&node[key]).map(key=>` ${key}="${escape(node[key])}"`).join('');
-  return `<${tag}${attributes}${node.hidden?' hidden':''}>${escape(node.textContent||'')}${node.childNodes.map(serialize).join('')}</${tag}>`;
+  return `<${tag}${attributes}${node.hidden?' hidden':''}>${(node.textContent!==undefined?escape(node.textContent):'')+node.childNodes.filter(child=>parents.get(child)===node).map(serialize).join('')}</${tag}>`;
  };
  const markup=mounted.root.childNodes.map(serialize).join('');
  const directory=await mkdtemp(join(tmpdir(),'photos-layout-'));
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true]]){
+  for(const [width,height,expanded] of [[1440,900,false],[400,713,true],[320,633,true],[390,844,false]]){
    const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
-   root.getElementById('move-trash').hidden=!expanded;root.getElementById('album').hidden=!expanded;
-   const footer=root.querySelector('.album-controls'),overlay=root.querySelector('.overlay'),label=root.querySelector('.trash-toggle');
+   const content=root.querySelector('.content'),overlay=root.querySelector('.overlay'),sheet=root.getElementById('settings-sheet');
    const bounds=element=>element.getBoundingClientRect();
-   const controls=['load','refresh','filter','sort'].map(id=>root.getElementById(id)).filter(Boolean);
-   const clear=()=>controls.every(control=>bounds(control).bottom<=bounds(footer).top);
-   const initialClear=clear();overlay.scrollTop=overlay.scrollHeight;
-   const range=doc.createRange();range.selectNodeContents(label);
-   const textFits=range.getBoundingClientRect().right<=bounds(label).right+1;
-   const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
-   const zoomFits=bounds(slider).right<=bounds(zoom).right+1&&bounds(slider).top>=bounds(zoom).top&&bounds(slider).bottom<=bounds(zoom).bottom;
-   const toggleVisible=bounds(label).top>=bounds(overlay).top&&bounds(label).bottom<=bounds(overlay).bottom;
-   const explanation=root.querySelector('.album-explanation'),check=root.getElementById('trash');
-   const inside=(element,container)=>bounds(element).left>=bounds(container).left&&bounds(element).right<=bounds(container).right+1&&bounds(element).top>=bounds(container).top&&bounds(element).bottom<=bounds(container).bottom;
-   const textInside=element=>{range.selectNodeContents(element);return Array.from(range.getClientRects()).every(rect=>rect.left>=bounds(element).left&&rect.right<=bounds(element).right+1);};
-   const explanationVisible=inside(explanation,footer)&&inside(explanation,overlay)&&textInside(explanation);
-   const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
-   const checkFits=inside(check,footer)&&textInside(check);
-   const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   const modal=bounds(content),backdrop=bounds(overlay);
+   sheet.hidden=false;
+   const controls=['filter','sort','review-every','delete-method'].map(id=>root.getElementById(id));
+   const sheetBounds=bounds(sheet);
+   const settings=root.getElementById('sync-settings');settings.open=true;
+   const range=doc.createRange(),settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
+   const buttons=Array.from(settings.querySelectorAll('button')).filter(button=>button.getClientRects().length);
+   const syncFields=['sync-url','sync-token'].map(id=>{
+    const input=root.getElementById(id),field=input.parentElement;
+    range.selectNodeContents(field.firstChild);const text=range.getBoundingClientRect(),box=bounds(input),fieldBox=bounds(field);
+    return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
+   });
+   const controlsFit=controls.every(control=>bounds(control).left>=sheetBounds.left&&bounds(control).right<=sheetBounds.right+1);
+   results.push({width,height,syncFields,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -611,12 +826,11 @@ test('phone layout keeps library controls clear and Trash text inside its cell i
   const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
   if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
   assert.equal(result.status,0,result.stderr);
-  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,3,result.stdout);
+  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,4,result.stdout);
   for(const measurement of measurements){
-   assert.equal(measurement.initialClear,true,JSON.stringify(measurement));assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
-   assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
-   for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
-   assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
+   for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
+   for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder'])assert.equal(measurement[key],true,JSON.stringify(measurement));
+   assert.equal(measurement.modalWidth,Math.min(540,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
 });
@@ -648,7 +862,7 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  await second.nodes.get('launcher').onclick();
  assert.match(second.nodes.get('status').textContent,/busy in another tab/);
  assert.equal(syncCalls,0);assert.deepEqual(await first.read(),before);
- finishTrash();await moving;
+ finishTrash();await moving;await first.nodes.get('close').onclick();
  const completed=await first.read();
  assert.equal(completed.items[0].state,'in_trash');
  assert.equal(first.nodes.get('status').textContent,'Verified 1 items in Trash.');
@@ -659,7 +873,7 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  finishSync();await opening;
  assert.equal((await first.read()).revision,completed.revision+1);
  assert.equal((await first.read()).items[0].state,'in_trash');
- await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
@@ -778,28 +992,29 @@ test('pairing settings failure after sign-in preserves the loaded review session
  assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);
  assert.match(mounted.nodes.get('caption').textContent,/^synthetic-photo · /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
- assert.equal(mounted.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ assert.equal(mounted.nodes.get('status').textContent,'');
  assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>node.textContent==='Pairing storage unavailable: Synthetic pairing read failure'));
  assert.deepEqual(await db.read(account),saved);
  await mounted.nodes.get('keep').onclick();
- await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
+ await waitForReview(async()=>(await db.read(account)).items[0].decision==='keep');
  assert.equal(mounted.nodes.get('keep').disabled,false);
  assert.equal((await db.read(account)).items[0].decision,'keep');
  assert.equal(mounted.nodes.get('status').textContent,'Kept synthetic-photo.');
 });
 
-test('first-use sync setup is above the card and local dismissal survives reopening',async()=>{
+test('sync setup lives in the gear sheet and local dismissal survives reopening',async()=>{
  const mounted=await mountedReview([item('a')]);
  const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
- assert.ok(content.childNodes.indexOf(settings)<content.childNodes.indexOf(mounted.nodes.get('card')));
- assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
+ assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
+ mounted.nodes.get('settings').onclick();assert.equal(mounted.nodes.get('settings-sheet').hidden,false);
  assert.equal(settings.open,true);
+ assert.equal(mounted.nodes.get('pair-onboarding').hidden,false);
  assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
- await mounted.click('sync-local');assert.equal(settings.open,false);
- const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.click('sync-local');assert.equal(mounted.nodes.get('settings-sheet').hidden,true);assert.equal(mounted.nodes.get('pair-onboarding').hidden,true);
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
- await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('sync-settings').open,false);
- assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('settings-sheet').hidden,true);assert.equal(reopened.nodes.get('pair-onboarding').hidden,true);
+ assert.equal(reopened.nodes.get('status').textContent,'');
 });
 
 test('sync setup actions preserve the saved album retry status and job',async()=>{
@@ -821,15 +1036,15 @@ test('sync setup actions preserve the saved album retry status and job',async()=
   assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
   assert.equal(mounted.nodes.get('send').textContent,'Retry saved album operation');
   assert.deepEqual((await mounted.read()).job,job);
-  assert.equal(mounted.nodes.get('sync-settings').open,false);
+  assert.equal(mounted.nodes.get('sync-settings').open,true);
   if(action==='sync-save')assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
  }
 });
 
-test('main and visible sync status report successful sync, failures and disabling sync',async()=>{
+test('sync success stays quiet and errors show a toast and gear dot',async()=>{
  const mounted=await mountedReview([item('a')]);
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
- const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
  reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  let fail=false,requests=0;
  reopened.environment.window.fetch=async(url,options)=>{
@@ -841,15 +1056,15 @@ test('main and visible sync status report successful sync, failures and disablin
  const db=await openReviewDatabase(reopened.environment.window.indexedDB);
  await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  vm.runInNewContext(source,reopened.environment);await reopened.nodes.get('launcher').onclick();
- assert.equal(requests,2);assert.match(reopened.nodes.get('status').textContent,/sync enabled.*Synced/);
+ assert.equal(requests,2);assert.equal(reopened.nodes.get('status').textContent,'');assert.equal(reopened.nodes.get('settings').classList.contains('gear-error'),false);
  assert.match(reopened.nodes.get('sync-status').textContent,/^Synced/);
- assert.equal(reopened.nodes.get('sync-settings').open,false);
+ assert.equal(reopened.nodes.get('settings-sheet').hidden,true);
  fail=true;await reopened.nodes.get('launcher').onclick();
- assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);
+ assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);assert.equal(reopened.nodes.get('settings').classList.contains('gear-error'),true);
  reopened.nodes.get('sync-url').value='';reopened.nodes.get('sync-token').value='';
  reopened.nodes.get('sync-save').onclick();
- for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
- assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ assert.equal(reopened.nodes.get('status').textContent,'');
  assert.equal(reopened.nodes.get('sync-status').textContent,'Sync off · saved locally');
 });
 
@@ -865,13 +1080,13 @@ test('decision history previews the same next Undo and updates after undo and re
  const retainedRow=mounted.nodes.get('history-list').childNodes[0];
  mounted.nodes.get('filter').onchange();
  assert.equal(mounted.nodes.get('history-list').childNodes[0],retainedRow);
- const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
- await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,'remove');
- assert.match(mounted.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);
- await mounted.click('undo');assert.equal(mounted.nodes.get('history-list').childNodes.length,1);
- assert.equal(mounted.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
+ reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal((await mounted.read()).items[0].decision,'remove');
+ assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);
+ reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('history-list').childNodes.length,1);
+ assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
 });
 
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
@@ -881,6 +1096,310 @@ test('release metadata names the author and install guide explains Chrome script
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
 });
 
+test('rapid decisions and Undo repaint synchronously while storage and video never resolve',async()=>{
+ const items=Array.from({length:12},(_,index)=>item(`fast-${index}`,{type:index===1?'video':'photo'}));
+ const mounted=await mountedReview(items,{fetch:()=>new Promise(()=>{}),setTimeout:(task,delay)=>{const timer=setTimeout(task,delay);timer.unref();return timer;}});
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;let blocked=false;
+ database.transaction=function(name,...args){if(name==='accounts'&&!blocked){blocked=true;return {objectStore:()=>({get:()=>({})})};}return transaction.call(this,name,...args);};
+ mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^fast-1 · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+ mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^fast-2 · /);
+ for(let index=2;index<10;index++)mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^fast-10 · /);
+ mounted.nodes.get('undo').onclick();assert.match(mounted.nodes.get('caption').textContent,/^fast-9 · /);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(blocked,true);assert.equal((await mounted.read()).items.filter(item=>item.decision).length,0);
+});
+
+test('sync pushes ten rapid decisions in one request while further input stays accepted',async()=>{
+ const requests=[];
+ const mounted=await mountedReview(Array.from({length:15},(_,index)=>item(`batch-${index}`)),{
+  fetch:async(url,options)=>{
+   requests.push({url,options});
+   if(options.method==='GET')return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+   if(new URL(url).pathname==='/api/progress')return {ok:true,json:async()=>({items:JSON.parse(options.body).items})};
+   return new Promise(()=>{});
+  },
+  setTimeout:(task,delay)=>{const timer=setTimeout(task,delay);timer.unref();return timer;}
+ },{url:'https://sync.example',token:'synthetic-token'});
+ for(let index=0;index<10;index++)mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/^batch-10 · /);
+ for(let count=0;count<100&&!requests.some(request=>new URL(request.url).pathname==='/api/decisions');count++)await new Promise(resolve=>setTimeout(resolve,2));
+ const batches=requests.filter(request=>new URL(request.url).pathname==='/api/decisions');
+ assert.equal(batches.length,1);assert.equal(JSON.parse(batches[0].options.body).decisions.length,10);
+ mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^batch-11 · /);
+ mounted.nodes.get('undo').onclick();assert.match(mounted.nodes.get('caption').textContent,/^batch-10 · /);
+ assert.equal(mounted.nodes.get('keep').disabled,false);
+});
+
+test('Keep instead reports saved album job locks without changing the candidate',async()=>{
+ const mounted=await mountedReview([item('queued',{decision:'remove'})]);
+ await mounted.nodes.get('close').onclick();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const saved=await db.read(account);await db.save(account,{...saved,job:{albumKey:'album',mediaKeys:['queued']}});
+ await mounted.nodes.get('launcher').onclick();
+ mounted.nodes.get('queue').childNodes[0].onclick();
+ assert.doesNotThrow(()=>mounted.nodes.get('keep').onclick());
+ assert.match(mounted.nodes.get('status').textContent,/Finish the saved album operation/);
+ assert.match(mounted.nodes.get('caption').textContent,/Candidate inspection/);
+ assert.equal((await mounted.read()).items[0].decision,'remove');
+ await mounted.nodes.get('close').onclick();
+});
+test('expired leases block library writes before any RPC and visible pages renew ownership',async()=>{
+ const mounted=await mountedReview([item('a')]);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:Date.now()+90000},account);tx.oncomplete=resolve;});
+ await mounted.click('load');
+ assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+ assert.equal((await mounted.read()).items.length,1);
+ mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+});
+test('page lifecycle events cannot sync over an in-flight library snapshot',async()=>{
+ let finish,started;const loading=new Promise(resolve=>{started=resolve;}),requests=[];
+ const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
+  requests.push(url);
+  if(new URL(url).origin==='https://sync.example')return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='lcxiM'){started();await new Promise(resolve=>{finish=resolve;});return {ok:true,text:async()=>envelope('lcxiM',[[],null])};}
+  throw Error('Unexpected RPC');
+ }},{url:'https://sync.example',token:'test-secret'});
+ const operation=mounted.nodes.get('load').onclick();await loading;
+ const before=requests.length;
+ mounted.environment.window.dispatchEvent(new Event('pagehide'));mounted.environment.document.listeners.visibilitychange();
+ await new Promise(resolve=>setTimeout(resolve,10));assert.equal(requests.length,before);
+ finish();await operation;assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();
+});
+test('failed saves release the lease on close and retain pending decisions for reopen',async()=>{
+ const mounted=bundleEnvironment(),fault={};mounted.environment.window.indexedDB=fakeIndexedDB(fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('a'),item('b')]});
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ await mounted.nodes.get('launcher').onclick();fault.failSave=true;mounted.nodes.get('keep').onclick();
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ await mounted.nodes.get('launcher').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
+ fault.failSave=false;await mounted.nodes.get('close').onclick();assert.equal((await db.read(account)).items[0].decision,'keep');await db.lease(account,'other-tab');
+});
+test('revision conflicts stay visible and do not retry the stale snapshot',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...await db.read(account),cursor:'other-tab'});
+ mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ await mounted.nodes.get('launcher').onclick();
+ assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('status').textContent,/Unsaved decisions remain visible.*Reload/);
+ assert.match(mounted.nodes.get('caption').textContent,/^b ·/);assert.equal((await db.read(account)).cursor,'other-tab');
+});
+
+test('lease recovery saves pending decisions and resumes input through visibility, reopen and close',async()=>{
+ for(const recovery of ['visibility','reopen','close']){
+  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')]);
+  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+  const transaction=database.transaction;
+  database.transaction=function(name,...args){if(name==='accounts'&&fault.failSave)throw Error('Synthetic save failure');if(name==='leases'&&fault.failLease)throw Error('Synthetic lease failure');return transaction.call(this,name,...args);};
+  fault.failSave=true;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
+  fault.failLease=true;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+  assert.match(mounted.nodes.get('status').textContent,/lease failure/);
+  mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
+  fault.failLease=false;fault.failSave=false;
+  if(recovery==='visibility'){mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
+  else if(recovery==='reopen')await mounted.nodes.get('launcher').onclick();
+  else {await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);await mounted.nodes.get('launcher').onclick();}
+  assert.equal((await mounted.read()).items[0].decision,'keep');
+  await mounted.click('keep');assert.equal((await mounted.read()).items[1].decision,'keep');
+  await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ }
+});
+test('a delayed save failure preserves the active lease failure status',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]),current=await mounted.read();
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;let finish,started,failLease=false,holdSave=true;
+ const saving=new Promise(resolve=>{started=resolve;});
+ database.transaction=function(name,...args){
+  if(name==='leases'&&failLease)throw Error('Synthetic lease failure');
+  if(name==='accounts'&&holdSave){
+   holdSave=false;
+   const tx={objectStore:()=>({get(){const request={result:structuredClone(current)};finish=()=>request.onsuccess();started();return request;},put(){throw Error('Synthetic delayed save failure');}}),abort(){queueMicrotask(()=>tx.onabort());}};
+   return tx;
+  }
+  return transaction.call(this,name,...args);
+ };
+ mounted.nodes.get('keep').onclick();await saving;
+ failLease=true;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(mounted.nodes.get('status').textContent,'Synthetic lease failure');
+ finish();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(mounted.nodes.get('status').textContent,'Synthetic lease failure');
+ assert.equal((await mounted.read()).items[0].decision,null);
+ mounted.nodes.get('keep').onclick();assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
+ failLease=false;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ await mounted.click('keep');assert.equal((await mounted.read()).items[1].decision,'keep');
+ await mounted.nodes.get('close').onclick();
+});
+test('a failed video RPC does not reject the next visible video waiting for it',async()=>{
+ let fail,started;const pending=new Promise(resolve=>{started=resolve;}),requests=[];
+ const mounted=await mountedReview([item('first',{type:'video'}),item('second',{type:'video'})],{fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(JSON.parse(entry[1]));
+  if(requests.length===1){started();await new Promise(resolve=>{fail=resolve;});throw Error('Synthetic video failure');}
+  return {ok:true,text:async()=>envelope('VrseUb',[['second'],'https://lh3.googleusercontent.com/second-video'])};
+ }});
+ await pending;mounted.nodes.get('keep').onclick();const video=mounted.nodes.get('media').querySelector('video');
+ fail();await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(requests.length,2);assert.match(video.src,/second-video/);assert.equal(video.paused,false);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('Close waits for an in-flight swipe account check before releasing the session',async()=>{
+ let finish,started,delay=false;
+ const checking=new Promise(resolve=>{started=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  const result=await webcrypto.subtle.digest(...args);
+  if(delay){delay=false;started();await new Promise(resolve=>{finish=resolve;});}
+  return result;
+ }}};
+ const mounted=await mountedReview([item('a')],{crypto});
+ delay=true;mounted.nodes.get('keep').onclick();await checking;
+ const closing=mounted.nodes.get('close').onclick();
+ finish();await closing;
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+});
+
+test('pagehide and unload start release immediately while a library operation is pending',async()=>{
+ for(const event of ['pagehide','unload']){
+  let finish,started;const loading=new Promise(resolve=>{started=resolve;});
+  const mounted=await mountedReview([item('a')],async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+   if(!finish){started();await new Promise(resolve=>{finish=resolve;});}
+   return {ok:true,text:async()=>envelope(entry[0],[[],null])};
+  });
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+  const transaction=database.transaction;let releasing=false;
+  database.transaction=function(name,...args){if(name==='leases')releasing=true;return transaction.call(this,name,...args);};
+  const operation=mounted.nodes.get('load').onclick();await loading;releasing=false;
+  mounted.environment.window.dispatchEvent(new Event(event));
+  assert.equal(releasing,true);
+  await new Promise(resolve=>setTimeout(resolve,10));
+  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+  const before=await db.read(account);
+  finish();await operation;
+  assert.deepEqual(await db.read(account),before);
+  await mounted.nodes.get('close').onclick();
+ }
+});
+test('visibility account changes allow close and reopening the new account',async()=>{
+ const mounted=await mountedReview([item('old')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const nextEmail='next@example.test',nextAccount=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(nextEmail))).toString('hex');
+ await db.save(nextAccount,{...emptyReview(),items:[item('new')]});
+ mounted.environment.window.WIZ_global_data.oPEP7c=nextEmail;
+ mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/Google account changed/);
+ await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await db.lease(account,'other-tab');
+ await mounted.nodes.get('launcher').onclick();assert.match(mounted.nodes.get('caption').textContent,/^new ·/);
+ await mounted.click('keep');assert.equal((await db.read(nextAccount)).items[0].decision,'keep');
+ await mounted.nodes.get('close').onclick();
+});
+
+test('reopening with a pending save starts renewal before returning',async()=>{
+ const timers=new Map();let timerId=0;
+ const mounted=await mountedReview([item('a'),item('b')],{},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;let fail=true;
+ database.transaction=function(name,...args){if(name==='accounts'&&args[0]==='readwrite'&&fail)throw Error('Save unavailable');return transaction.call(this,name,...args);};
+ await mounted.click('keep');await mounted.nodes.get('close').onclick();assert.equal(timers.size,0);
+ await mounted.nodes.get('launcher').onclick();assert.equal(timers.size,1);
+ fail=false;await [...timers.values()][0]();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+ await mounted.nodes.get('close').onclick();assert.equal(timers.size,0);
+});
+test('late account checks after Close or an account mismatch cannot renew or clear errors',async()=>{
+ for(const ending of ['close','change']){
+  let finish,started,delay=false;
+  const checking=new Promise(resolve=>{started=resolve;});
+  const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{const result=await webcrypto.subtle.digest(...args);if(delay){delay=false;started();await new Promise(resolve=>{finish=resolve;});}return result;}}};
+  const mounted=await mountedReview([item('a')],{crypto});delay=true;
+  mounted.environment.document.listeners.visibilitychange();await checking;
+  if(ending==='close')await mounted.nodes.get('close').onclick();
+  else {mounted.environment.window.WIZ_global_data.oPEP7c='changed@example.test';mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
+  const status=mounted.nodes.get('status').textContent;finish();await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(mounted.nodes.get('status').textContent,status);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+  await mounted.nodes.get('close').onclick();
+ }
+});
+test('account changes during library operations block every old-account save and allow reopen',async()=>{
+ let checks=0,loading=false;
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  const result=await webcrypto.subtle.digest(...args);
+  if(loading&&++checks===4)mounted.environment.window.WIZ_global_data.oPEP7c='new-library@example.test';
+  return result;
+ }}};
+ const mounted=await mountedReview([item('old')],{crypto,fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  return {ok:true,text:async()=>envelope(entry[0],[[],null])};
+ }});loading=true;
+ await mounted.click('load');assert.match(mounted.nodes.get('status').textContent,/Google account changed/);
+ assert.equal((await mounted.read()).items.length,1);
+ await mounted.click('keep');assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
+ assert.equal(mounted.nodes.get('account').textContent,'new-library@example.test');
+ await mounted.nodes.get('close').onclick();
+});
+test('late lease renewal results after Close or account change do not restore ownership',async()=>{
+ for(const ending of ['close','change']){
+  const mounted=await mountedReview([item('a')]);
+  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+  const transaction=database.transaction;let finish,started,delay=true;
+  const renewing=new Promise(resolve=>{started=resolve;});
+  database.transaction=function(name,...args){
+   const tx=transaction.call(this,name,...args);
+   if(name==='leases'&&delay){delay=false;Object.defineProperty(tx,'oncomplete',{set(handler){this.complete=()=>{finish=handler;started();};},get(){return this.complete;}});}
+   return tx;
+  };
+  mounted.environment.document.listeners.visibilitychange();await renewing;
+  if(ending==='close')await mounted.nodes.get('close').onclick();
+  else {mounted.environment.window.WIZ_global_data.oPEP7c='renewal-new@example.test';mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
+  const status=mounted.nodes.get('status').textContent;finish();await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(mounted.nodes.get('status').textContent,status);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+  await mounted.nodes.get('close').onclick();
+ }
+});
+test('pagehide releases ownership while sync is pending',async()=>{
+ let finish,started,block=false;const syncing=new Promise(resolve=>{started=resolve;});
+ const mounted=await mountedReview([item('a')],{fetch:async(url)=>{
+  if(block&&new URL(url).pathname==='/api/decisions'){block=false;started();await new Promise(resolve=>{finish=resolve;});}
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+ }},{url:'https://sync.example',token:'test-secret'});
+ await mounted.click('keep');block=true;mounted.environment.window.dispatchEvent(new Event('focus'));await syncing;
+ mounted.environment.window.dispatchEvent(new Event('pagehide'));
+ await new Promise(resolve=>setTimeout(resolve,10));
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ finish();await mounted.nodes.get('close').onclick();
+});
 test('GM pairing migrates once, removes page credentials and survives page storage replacement',async()=>{
  const {createPairingStore}=await import('../lib/userscript-settings.mjs');
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
@@ -985,7 +1504,7 @@ function isolatedPageBridge(mounted,timers={setTimeout,clearTimeout},fetchOverri
  const context={window:pageWindow,location:page,crypto:webcrypto,AbortController,...timers,TextEncoder,Uint8Array,URL,URLSearchParams,fetch:fetchOverride||pageWindow.fetch};
  const document=mounted.environment.document,append=document.documentElement.append,createElement=document.createElement;
  document.querySelector=()=>null;document.createElement=tag=>{const element=createElement(tag);element.remove=()=>{};return element;};
- document.documentElement={append(element){if(element.tagName==='SCRIPT')vm.runInNewContext(element.textContent,context);else append(element);}};
+ document.documentElement={dataset:{},append(element){if(element.tagName==='SCRIPT')vm.runInNewContext(element.textContent,context);else append(element);}};
  return {pageWindow,contentWindow,messages};
 }
 
@@ -1095,13 +1614,29 @@ test('signed-in privileged bundle uses page AbortSignals for library, album and 
  test('mounted next preview is reused after a swipe and respects the review filter',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
  const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');
- assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');
+ assert.equal(under.hidden,false);assert.equal(preview.dataset.key,'b');preview.complete=true;preview.naturalWidth=800;
  await mounted.click('keep');
- assert.equal(mounted.nodes.get('media').querySelector('img'),preview);
+ assert.equal(mounted.nodes.get('media').querySelector('img'),preview);assert.equal(preview.hidden,false);
  assert.equal(under.querySelector('img').dataset.key,'c');
  mounted.nodes.get('filter').value='video';mounted.nodes.get('filter').onchange();
  assert.equal(under.hidden,true);
  });
+
+test('a failed reused under-card preview refreshes and exposes Retry on another failure',async()=>{
+ const calls=[],mounted=await mountedReview([item('a'),item('b'),item('c')],async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://video-downloads.google.com/download'])};
+ });
+ const under=mounted.nodes.get('next-card'),preview=under.querySelector('img');preview.complete=true;preview.naturalWidth=0;
+ await mounted.click('keep');await settlePreviews();
+ assert.deepEqual(calls,['b']);
+ const media=mounted.nodes.get('media'),refreshed=media.querySelector('img');assert.ok(refreshed);assert.notEqual(refreshed,preview);
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+ await refreshed.onerror();assert.equal(media.querySelector('button').textContent,'Retry');
+ media.querySelector('button').onclick();await settlePreviews();
+ assert.deepEqual(calls,['b','b']);assert.ok(media.querySelector('img'));
+ assert.equal(under.hidden,false);assert.equal(under.querySelector('img').dataset.key,'c');
+});
 
 test('an unresolved fly animation never blocks the next decision',async()=>{
  const mounted=await mountedReview([item('a'),item('b'),item('c')]);
@@ -1123,7 +1658,7 @@ test('mounted under-card shares the media origin and image gestures reach the me
  const css=styles.map(node=>node.textContent||node.childNodes.map(child=>child.textContent||'').join('')).join('');
  assert.match(css,/\.under-card\{position:absolute;inset:0 0 auto;/);
  assert.match(css,/\.media img\{pointer-events:none;/);
- mounted.nodes.get('media').ondblclick();assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
+ mounted.nodes.get('media').listeners.dblclick({target:{tagName:'IMG'}});assert.equal(mounted.nodes.get('card').classList.contains('expanded'),true);
 });
 
 test('empty and filtered decks cannot latch swipe dismissal',async()=>{
@@ -1167,7 +1702,7 @@ for(const delayed of ['identity','save'])test(`swipes, arrow keys and buttons ad
  try {
   swipe(150);shown('b');
   await new Promise(resolve=>setTimeout(resolve,5));
-  assert.equal(nodes.get('overlay')['aria-busy'],'true');
+  assert.equal(nodes.get('overlay')['aria-busy'],'false');
   swipe(-150);shown('c');
   mounted.environment.window.listeners.keydown({key:'ArrowRight',preventDefault(){},stopImmediatePropagation(){}});shown('d');
   nodes.get('remove').onclick();shown('e');
@@ -1180,17 +1715,17 @@ for(const delayed of ['identity','save'])test(`swipes, arrow keys and buttons ad
  shown('e');
 });
 
-test('a failed decision save restores every unsaved card without recording queued decisions',async()=>{
+test('a failed decision save retains visible pending decisions and retries them on fresh input',async()=>{
  const fault={},mounted=await mountedReview(['a','b','c'].map(key=>item(key)),{indexedDB:fakeIndexedDB(fault)});
  fault.failSave=true;
  mounted.nodes.get('keep').onclick();mounted.nodes.get('remove').onclick();
  await mounted.settle();
- assert.equal(mounted.nodes.get('media').querySelector('img').alt,'a');
+ assert.equal(mounted.nodes.get('media').querySelector('img').alt,'c');
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null,null]);
  assert.match(mounted.nodes.get('status').textContent,/Fake storage failure/);
  fault.failSave=false;
  await mounted.click('remove');
- assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove',null,null]);
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','remove','remove']);
 });
 
 test('a decision arriving as the save operation finishes remains queued for its own item',async()=>{
@@ -1200,7 +1735,7 @@ test('a decision arriving as the save operation finishes remains queued for its 
   mounted.nodes.get('keep').onclick();
   for(let count=0;count<100;count++){if((await mounted.read()).items[0].decision==='keep')break;await new Promise(resolve=>setTimeout(resolve,1));}
   assert.equal((await mounted.read()).items[0].decision,'keep');
-  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
+  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'false');
   mounted.nodes.get('remove').onclick();
   assert.equal(mounted.nodes.get('media').querySelector('img').alt,'c');
  }finally{release();}
@@ -1282,8 +1817,8 @@ test('ahead video completion does not write leases during an active sync',async(
  const before=fault.leaseWrites;
  response.resolve();await new Promise(resolve=>setImmediate(resolve));
  try{assert.equal(fault.leaseWrites,before);}finally{sync.resolve();}
- await waitForReview(()=>mounted.nodes.get('overlay')['aria-busy']==='false');
- await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
+ await mounted.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
 test('resize and enlarge preserve the next media node while a decision awaits sync',async()=>{
@@ -1300,7 +1835,7 @@ test('resize and enlarge preserve the next media node while a decision awaits sy
   await mounted.click('sync-save');
   holdSync=true;
   const media=mounted.nodes.get('media');
-  const deciding=mounted.click('keep');await started.promise;
+  const deciding=mounted.click('keep');await deciding;mounted.environment.window.dispatchEvent(new Event('focus'));await started.promise;
   const node=media.childNodes[0];
   assert.equal((await mounted.read()).items[0].decision,'keep');
   media.getBoundingClientRect=()=>({width:900,height:500});
@@ -1359,16 +1894,16 @@ test('mounted ten rapid arrow inputs advance and persist ten ordered decisions',
  assert.equal(state.items[10].decision,null);
 });
 
-test('failed decisions discard the rest of a burst and accept fresh input',async()=>{
+test('failed decisions retain the burst locally and retry when the page becomes visible',async()=>{
  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
  fault.failSave=true;
  pressReviewKey(mounted,'ArrowLeft');pressReviewKey(mounted,'ArrowRight');pressReviewKey(mounted,'ArrowLeft');
  await mounted.settle();
- assert.equal(mounted.nodes.get('status').textContent,'Fake storage failure');
+ assert.match(mounted.nodes.get('status').textContent,/Fake storage failure/);
  assert.equal((await mounted.read()).history.length,0);
  fault.failSave=false;
- await mounted.click('keep');
- assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null,null]);
+ mounted.environment.document.listeners.visibilitychange();await mounted.settle();
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove','keep','remove']);
 });
 
 test('decision and Undo key repeats do not enqueue actions',async()=>{
@@ -1411,7 +1946,7 @@ test('an Undo animation that never settles releases the review task at its deadl
 });
 
 test('revoked userscript shows recovery, keeps local swipes and clears credentials',async()=>{
- const mounted=await mountedReview([item('synthetic')]);
+ const mounted=await mountedReview([item('synthetic')]);await mounted.nodes.get('close').onclick();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');const db=await openReviewDatabase(mounted.environment.window.indexedDB);
  await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.AbortSignal=AbortSignal;
@@ -1440,7 +1975,7 @@ test('paired devices render names safely and inline rename and confirmed revoke 
  assert.ok(requests.some(([path,method])=>path==='/api/devices/qa'&&method==='PATCH'));
 });
 
-test('paired notice stays visible with settings closed and opens the device list',async()=>{
+test('paired notice lives in Sync and opens the device list',async()=>{
  const requests=[];
  const mounted=await mountedReview([], {fetch:async url=>{
   const path=new URL(url).pathname;requests.push(path);
@@ -1450,8 +1985,8 @@ test('paired notice stays visible with settings closed and opens the device list
  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
  await mounted.click('sync-save');
  const notice=mounted.nodes.get('paired-notice'),settings=mounted.nodes.get('sync-settings');
- assert.equal(settings.open,false);assert.equal(notice.hidden,false);
- assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(notice));
+ assert.equal(settings.open,true);assert.equal(notice.hidden,false);
+ assert.ok(settings.childNodes.includes(notice));
  await mounted.click('paired-notice');
  assert.equal(settings.open,true);assert.equal(mounted.nodes.get('paired-devices').open,true);
  assert.ok(requests.includes('/api/devices'));
@@ -1474,6 +2009,61 @@ test('device actions are disabled before configuration and after revoking this d
  assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
 });
 
+const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
+
+test('stale saved previews refresh only the current and preload window on open and resume',async()=>{
+ const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
+ const mounted=await mountedReview(items,async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
+ });
+ await settlePreviews();
+ assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
+ assert.equal(calls.length,4);
+ assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
+ assert.equal((await mounted.read()).items.filter(row=>row.decision).length,0);
+ calls.length=0;
+ mounted.environment.document.visibilityState='visible';
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();
+ assert.equal(calls.length,0);
+ const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
+ try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+ assert.equal(calls.length,4);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
+ mounted.nodes.get('close').onclick();calls.length=0;
+ mounted.environment.document.listeners.visibilitychange();await settlePreviews();assert.equal(calls.length,0);
+});
+
+test('photo and video errors refresh once then replace failed media with an explicit Retry card',async()=>{
+ for(const type of ['photo','video']){
+  const calls=[];
+  const mounted=await mountedReview([item('expired',{type})],async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];calls.push(entry[0]);
+   return {ok:true,text:async()=>envelope('VrseUb',[['expired',[`https://photos.fife.usercontent.google.com/fresh-preview-${calls.length}`,800,600]],`https://lh3.googleusercontent.com/fresh-playback-${calls.length}`])};
+  });
+  await settlePreviews();calls.length=0;
+  const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
+  await first.onerror();await settlePreviews();
+  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-playback-/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
+  assert.equal(calls.length,type==='video'?2:1);
+  await retried.onerror();assert.equal(container.querySelector(tag),null);
+  const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
+  const count=calls.length;retry.onclick();await settlePreviews();
+  assert.ok(container.querySelector(tag));assert.ok(calls.length>count);
+  assert.equal((await mounted.read()).items[0].decision,null);
+ }
+});
+
+test('late expired preview responses cannot replace a newly selected card',async()=>{
+ const response=Promise.withResolvers();
+ const mounted=await mountedReview([item('old'),item('next')],async()=>{await response.promise;return {ok:true,text:async()=>envelope('VrseUb',[['old',['https://photos.fife.usercontent.google.com/fresh-old',800,600]],'https://video-downloads.google.com/download'])};});
+ const failed=mounted.nodes.get('media').querySelector('img').onerror();
+ await mounted.click('keep');const next=mounted.nodes.get('media').querySelector('img');
+ response.resolve();await failed;await settlePreviews();
+ assert.equal(mounted.nodes.get('media').querySelector('img'),next);
+ assert.match(mounted.nodes.get('caption').textContent,/^next/);
+});
 
 test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
@@ -1550,7 +2140,7 @@ test('paired wiped database rebuilds synced batch, Undo and storage totals befor
   finishState();await fetchingLibrary;assert.equal(mounted.nodes.get('media').childNodes.length,0);
   finishLibrary();await new Promise(resolve=>setTimeout(resolve,20));assert.equal(mounted.nodes.get('media').childNodes.length,0);assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
  }finally{finishState();finishLibrary();fault.saveGate=null;finishSave();}
- await opening;
+ await opening;await settlePreviews();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB),restored=await db.read(account);
  assert.equal(restored.started,true);assert.equal(restored.items.length,64);assert.equal(restored.items.filter(item=>item.decision).length,10);
  assert.deepEqual(restored.history,history);assert.equal(canUndoReview(restored,history.at(-1)),true);assert.equal(restored.lifetimeFreed,224000);
@@ -1577,4 +2167,213 @@ test('paired wiped database falls back without cards or a blocking error when st
  assert.match(mounted.nodes.get('stats').textContent,/0\/0 reviewed/);assert.equal(mounted.nodes.get('load').disabled,false);
  await mounted.nodes.get('load').onclick();
  assert.match(mounted.nodes.get('caption').textContent,/^QA-FRESH/);assert.equal(mounted.nodes.get('keep').disabled,false);
+});
+
+test('loader panel displays the selected signed release version instead of the bundled version',async()=>{
+ const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ for(const version of ['1.2.99','1.2.8']){
+  const mounted=bundleEnvironment();
+  const GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
+  const pair=generateKeyPairSync('ed25519'),release={version,code};
+  release.signature=sign(null,Buffer.from(releaseMessage(release)),pair.privateKey).toString('base64');
+  const key=Buffer.from(pair.publicKey.export({format:'jwk'}).x,'base64url').toString('base64');
+  assert.equal(await verifyRelease(release,webcrypto,key),true);
+  assert.equal(injectRelease({...mounted.environment,GM},release),true);
+  assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
+ }
+});
+
+test('resume record survives reload independently of decisions and is account scoped',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const indexedDB=fakeIndexedDB(),db=await openReviewDatabase(indexedDB);
+ const saved=await db.save('synthetic-account',{...emptyReview(),items:[item('synthetic-video',{type:'video'}),item('synthetic-marked',{decision:'remove'})],history:[{key:'synthetic-marked',decision:'remove',previous:null,revision:1}]});
+ const resume={currentId:'synthetic-video',video:{key:'synthetic-video',time:37.25},filter:'video',sort:'largest',reviewEvery:25,deleteMethod:'trash'};
+ await db.saveResume('synthetic-account',resume);
+ const reopened=await openReviewDatabase(indexedDB);
+ assert.deepEqual(await reopened.resume('synthetic-account'),resume);
+ assert.deepEqual(await reopened.resume('different-synthetic-account'),{});
+ assert.deepEqual(await reopened.read('synthetic-account'),saved);
+});
+
+test('mounted shell restores exact card and Escape closes settings and enlarged view before shell',async()=>{
+ const mounted=await mountedReview([item('synthetic-first'),item('synthetic-second')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ mounted.nodes.get('close').onclick();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ await db.saveResume(account,{currentId:'synthetic-second',reviewEvery:7});
+ await mounted.nodes.get('launcher').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/synthetic-second/);
+ assert.equal(mounted.nodes.get('review-every').value,'7');
+ const escape=()=>mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
+ mounted.nodes.get('settings').onclick();
+ assert.equal(mounted.nodes.get('settings-sheet').hidden,false);
+ escape();assert.equal(mounted.nodes.get('settings-sheet').hidden,true);assert.equal(mounted.nodes.get('overlay').hidden,false);
+ mounted.nodes.get('enlarge').onclick();escape();assert.equal(mounted.nodes.get('card').classList.contains('expanded'),false);assert.equal(mounted.nodes.get('overlay').hidden,false);
+ escape();await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ await db.saveResume(account,{currentId:'synthetic-missing'});
+ await mounted.nodes.get('launcher').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/synthetic-first/);
+ assert.match(mounted.nodes.get('status').textContent,/Saved item is unavailable/);
+});
+
+test('video resume is throttled, flushed on close and seeks after metadata on reload',async()=>{
+ const fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])});
+ const mounted=await mountedReview([item('synthetic-video',{type:'video',urlFetchedAt:Date.now()-41*60*1000})],{fetch});
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const video=mounted.nodes.get('media').querySelector('video');video.duration=120;video.listeners.loadedmetadata();
+ video.currentTime=12.5;video.listeners.timeupdate();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ assert.equal((await db.resume(account)).video.time,12.5);
+ video.currentTime=13;video.listeners.timeupdate();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).video.time,12.5);
+ video.currentTime=37.25;mounted.nodes.get('close').onclick();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).video.time,37.25);
+ const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.window.fetch=fetch;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ await reopened.nodes.get('launcher').onclick();await new Promise(resolve=>setTimeout(resolve,20));
+ const restored=reopened.nodes.get('media').querySelector('video');restored.duration=120;restored.listeners.loadedmetadata();
+ assert.equal(restored.currentTime,37.25);
+ assert.equal((await db.read(account)).items[0].decision,null);
+});
+
+test('Tab traps focus in the shell and settings while backdrop click closes the window',async()=>{
+ const mounted=await mountedReview([item('synthetic-card')]);
+ const overlay=mounted.nodes.get('overlay'),sheet=mounted.nodes.get('settings-sheet');
+ const controls=['settings','review','close','remove','undo','keep','enlarge'].map(id=>mounted.nodes.get(id));
+ for(const control of controls)control.getClientRects=()=>[{}];
+ overlay.querySelectorAll=()=>controls;
+ const tab=shiftKey=>mounted.environment.window.listeners.keydown({key:'Tab',shiftKey,preventDefault(){},stopImmediatePropagation(){}});
+ controls.at(-1).focus();tab(false);assert.equal(mounted.root.activeElement,controls[0]);
+ controls[0].focus();tab(true);assert.equal(mounted.root.activeElement,controls.at(-1));
+ mounted.nodes.get('settings').onclick();const done=sheet.childNodes[0];done.getClientRects=()=>[{}];sheet.querySelectorAll=()=>[done];
+ done.focus();tab(false);assert.equal(mounted.root.activeElement,done);
+ overlay.listeners.click({target:mounted.nodes.get('card')});assert.equal(overlay.hidden,false);
+ overlay.listeners.click({target:overlay});await mounted.nodes.get('close').onclick();assert.equal(overlay.hidden,true);assert.equal(sheet.hidden,true);
+});
+
+test('Settings exposes Load more and continues the cursor after Refresh latest',async()=>{
+ const cursors=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');cursors.push(args[0]);
+  const key=args[0]?'older-photo':'latest-photo';
+  return {ok:true,text:async()=>envelope(entry[0],[[[key,['https://lh3.googleusercontent.com/fake'],1720000000000,key+'-stable',0,{}]],args[0]?null:'older-cursor'])};
+ };
+ const mounted=await mountedReview([],{fetch});
+ mounted.nodes.get('settings').onclick();
+ const load=mounted.nodes.get('load');
+ assert.equal(load.hidden,false);
+ assert.ok(mounted.nodes.get('settings-sheet').childNodes.some(group=>group.childNodes.includes(load)));
+ const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('\n');
+ assert.doesNotMatch(styles,/[^{}]*#load[^{}]*\{[^}]*display:\s*none/);
+ await mounted.click('refresh');await mounted.click('refresh');await mounted.click('load');
+ assert.deepEqual(cursors,[null,null,'older-cursor']);
+ assert.deepEqual((await mounted.read()).items.map(row=>row.mediaKey),['latest-photo','older-photo']);
+ assert.equal((await mounted.read()).exhausted,true);
+});
+
+test('Trash mode remains usable for a second batch after a verified move',async()=>{
+ const trashed=new Set(),batches=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){batches.push(args[2]);for(const key of args[2])trashed.add(key);}
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};
+ };
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a'}),item('b',{dedupKey:'stable-b'})],{fetch,confirm:()=>true});
+ await mounted.click('move-trash');
+ assert.equal(mounted.nodes.get('delete-method').value,'trash');
+ assert.equal(mounted.nodes.get('trash-opt-in').checked,true);
+ await mounted.click('remove');
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);
+ assert.equal(mounted.nodes.get('move-trash').textContent,'Move 1 items to Trash');
+ await mounted.click('move-trash');
+ assert.deepEqual(batches,[['stable-a'],['stable-b']]);
+ assert.ok((await mounted.read()).items.every(row=>row.state==='in_trash'));
+});
+
+test('resume stays on an uncommitted item and advances after persistence before reopening',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b')],{},fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).currentId,'a');
+ let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
+ try{
+  mounted.nodes.get('keep').onclick();
+  assert.match(mounted.nodes.get('caption').textContent,/^b · /);
+  mounted.nodes.get('close').onclick();
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal((await db.read(account)).items[0].decision,null);
+  assert.equal((await db.resume(account)).currentId,'a');
+  fault.saveGate=null;release();await mounted.nodes.get('close').onclick();
+  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+  await reopened.nodes.get('launcher').onclick();
+  assert.match(reopened.nodes.get('caption').textContent,/^b · /);
+ }finally{fault.saveGate=null;release();await mounted.settle();}
+});
+
+test('failed sync remains visible alongside keep, queue and undo confirmations',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')],{fetch:async()=>new Response('{}',{status:503})});
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ await mounted.click('sync-save');
+ for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Decision undone for b\./]]){
+  await mounted.click(action);
+  assert.match(mounted.nodes.get('status').textContent,confirmation);
+  assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
+  assert.equal(mounted.nodes.get('settings').classList.contains('gear-error'),true);
+ }
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
+});
+
+test('URL refreshes preserve resume settings and inspection across close and reopen',async()=>{
+ const fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-preview',['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://lh3.googleusercontent.com/synthetic-video'])});
+ const mounted=await mountedReview([item('synthetic-preview',{urlFetchedAt:Date.now()-41*60*1000}),item('synthetic-queued',{decision:'remove'})],{fetch});
+ await settlePreviews();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ for(const [id,value] of [['filter','photo'],['sort','largest'],['review-every','7'],['delete-method','trash']]){mounted.nodes.get(id).value=value;mounted.nodes.get(id).onchange();}
+ await mounted.settle();
+ mounted.nodes.get('queue').childNodes[0].onclick();
+ await mounted.nodes.get('close').onclick();
+ const saved=await db.resume(account);
+ assert.equal(saved.filter,'photo');assert.equal(saved.sort,'largest');assert.equal(saved.reviewEvery,7);assert.equal(saved.deleteMethod,'trash');assert.equal(saved.inspected,true);assert.equal(saved.currentId,'synthetic-queued');
+ await mounted.nodes.get('launcher').onclick();
+ await settlePreviews();
+ await mounted.nodes.get('close').onclick();
+ assert.deepEqual(await db.resume(account),saved);
+});
+
+test('URL refresh during a decision save advances resume only after the snapshot commits',async()=>{
+ for(const laterDecision of [false,true]){
+  const fault={},fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-refresh',['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://lh3.googleusercontent.com/synthetic-video'])});
+  const mounted=await mountedReview([item('synthetic-a'),item('synthetic-b'),item('synthetic-c')],{fetch},fault);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await settlePreviews();
+  let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
+  try{
+   mounted.nodes.get('keep').onclick();await settlePreviews();
+   const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
+   try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+   if(laterDecision)mounted.nodes.get('keep').onclick();
+   mounted.nodes.get('sort').value='largest';mounted.nodes.get('sort').onchange();
+   await settlePreviews();
+   assert.equal((await db.resume(account)).currentId,'synthetic-a');
+   fault.saveGate=null;release();await mounted.settle();await settlePreviews();
+   assert.equal((await db.resume(account)).currentId,laterDecision?'synthetic-c':'synthetic-b');
+   assert.equal((await db.resume(account)).sort,'largest');
+  }finally{fault.saveGate=null;release();await mounted.nodes.get('close').onclick();}
+ }
 });
