@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {previewURL,createPreloadBuffer,createWriteQueue} from '../lib/userscript-performance.mjs';
+import {cardPreviewURL,reusablePreview,previewURL,createPreloadBuffer,createWriteQueue} from '../lib/userscript-performance.mjs';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const item=mediaKey=>({mediaKey});
 test('preview sizes use capped DPR and CDN buckets without original downloads',()=>{
@@ -11,7 +11,7 @@ test('preview sizes use capped DPR and CDN buckets without original downloads',(
  assert.match(previewURL('https://lh3.googleusercontent.com/image',{width:800,height:800,dpr:3,mobile:true}),/=w1024-h1024/);
  assert.throws(()=>previewURL('https://evil.example/image'));
 });
-test('buffer bounds concurrent loads, evicts, aborts and ignores stale generations',async()=>{
+test('buffer bounds concurrent loads, evicts, aborts and ignores evicted work',async()=>{
  const loads=[];
  const buffer=createPreloadBuffer({size:3,concurrency:2,load:(item,signal)=>new Promise(resolve=>loads.push({item,signal,resolve}))});
  buffer.update(['a','b','c','d'].map(item));await tick();
@@ -61,4 +61,47 @@ test('failed lookahead preloads retry on the next buffer update',async()=>{
  buffer.update([item('a')]);await tick();
  assert.equal(buffer.get('a'),image);assert.equal(attempts,2);
  buffer.clear();
+});
+
+test('buffer and display share an exact synthetic preview URL and reuse without assigning src',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+ const {runInNewContext}=await import('node:vm');
+ const context={cardPreviewURL,previewURL,createPreloadBuffer,URL,AbortController,smallBuffer:true,location:{pathname:'/u/2/'},$:()=>({getBoundingClientRect:()=>({width:359.5,height:480.2})}),window:{devicePixelRatio:3,navigator:{userAgent:'iPhone'}}};
+ const urlFunctions=ui.slice(ui.indexOf(' function mediaURL('),ui.indexOf(' const preloader='))+ui.slice(ui.indexOf(' function previewSource('),ui.indexOf(' function preloadReview('));
+ runInNewContext(urlFunctions,context);
+ const previewSource=context.previewSource;
+ const photo={mediaKey:'synthetic',thumbUrl:'https://lh3.googleusercontent.com/synthetic-photo=w512-h512-k-no?authuser=0'};
+ let assignments=0,source;
+ const image={complete:true,naturalWidth:360,get src(){return source;},set src(value){assignments++;source=value;queueMicrotask(()=>this.onload());},decode:async()=>{}};
+ context.window.Image=function(){return image;};
+ runInNewContext(ui.slice(ui.indexOf(' const buffer=createPreloadBuffer('),ui.indexOf(' const videoURLs='))+'\n globalThis.testBuffer=buffer;',context);
+ const buffer=context.testBuffer;
+ buffer.update([photo]);await tick();
+ const displayURL=previewSource(photo.thumbUrl),cached=buffer.take(photo.mediaKey);
+ assert.equal(cached.src,displayURL);
+ assert.equal(displayURL,'https://lh3.googleusercontent.com/synthetic-photo=w360-h481-k-no?authuser=2');
+ assert.equal(reusablePreview(cached,displayURL),image);
+ assert.equal(assignments,1);
+ assert.equal(reusablePreview(cached,previewSource(photo.thumbUrl.replace('synthetic-photo','other'))),null);
+ assert.equal(reusablePreview({...image,complete:false},displayURL),null);
+ assert.match(ui,/image.src=previewSource\(item.thumbUrl\);/);
+ assert.match(ui,/const source=previewSource\(item.thumbUrl\);/);
+ assert.match(ui,/const reused=!!cached;[\s\S]*?if\(!reused\)media.src=source/);
+});
+
+test('clearing preserves upcoming in-flight downloads and evicts replaced URLs',async()=>{
+ const loads=[],photos=['a','b'].map(mediaKey=>({mediaKey,thumbUrl:`https://fixture.invalid/${mediaKey}`}));
+ const buffer=createPreloadBuffer({load:(item,signal)=>new Promise(resolve=>loads.push({item,signal,resolve}))});
+ buffer.update(photos);await tick();
+ buffer.clear([photos[1]]);
+ assert.equal(loads[0].signal.aborted,true);
+ assert.equal(loads[1].signal.aborted,false);
+ const image={src:'ready'};loads[1].resolve(image);await tick();
+ assert.equal(buffer.take('b'),image);
+ buffer.update([photos[1]]);await tick();
+ buffer.clear([{...photos[1],thumbUrl:'https://fixture.invalid/replaced'}]);
+ assert.equal(loads[2].signal.aborted,true);
+ loads[0].resolve({src:'late'});loads[2].resolve({src:'late'});await tick();
+ assert.equal(buffer.entries.size,0);
 });

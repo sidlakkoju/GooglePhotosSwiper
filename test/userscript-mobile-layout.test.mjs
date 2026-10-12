@@ -210,6 +210,7 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
    const $=id=>root.getElementById(id),swipeFeedback={reset(){}};
    let busy=false,identity={},leaseError=null,state={items:Array.from({length:6},(_,index)=>({mediaKey:'fixture-'+index,name:'IMG_'+index+'.JPG',type:index===2?'video':'photo',duration:14000,decision:index===1?'keep':'remove',queueSent:index===4,state:'active',thumbUrl:'synthetic'}))};
    const mediaURL=()=> 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#436887"/></svg>');
+   const previewSource=mediaURL;
    const estimate=()=> '96.4 MB',itemSize=()=> '4.1 MB',previewSize=()=>({}),message=()=>{},reviewTrashCandidates=state=>state.items;
    const apply=next=>{state=next;renderTrashReview();},decideReview=(state,key,decision)=>({...state,items:state.items.map(item=>item.mediaKey===key?{...item,decision}:item)});
    ${methods}
