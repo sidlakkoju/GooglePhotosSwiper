@@ -389,7 +389,39 @@ test('mounted undo restores undecided after queue, keep instead, and two undos',
  const state=await mounted.read();
  assert.equal(state.items[0].decision,null);assert.equal(state.items[0].revision,4);
  assert.equal(mounted.nodes.get('queue').childNodes.length,0);
- assert.equal(mounted.nodes.get('status').textContent,'Decision undone for a.');
+ assert.equal(mounted.nodes.get('status').textContent,'Last swipe undone for a.');
+});
+test('Undo after a synced Keep keeps its confirmation through the next sync',async()=>{
+ let scheduledSync,syncGate;
+ const uploads=[];
+ const mounted=await mountedReview([item('synthetic-undo')],{
+  setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
+  clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
+  fetch:async(url,options)=>{
+   assert.equal(new URL(url).origin,'https://sync.example');
+   if(options.body)uploads.push(JSON.parse(options.body));
+   if(syncGate)await syncGate;
+   return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'},{AbortSignal});
+ const status=mounted.nodes.get('status'),syncStatus=mounted.nodes.get('sync-status');
+ assert.match(syncStatus.textContent,/^Synced/);
+ await mounted.click('keep');
+ scheduledSync();
+ await waitForReview(()=>syncStatus.textContent==='Synced · 1 reviewed IDs');
+ await mounted.click('undo');
+ assert.match(status.textContent,/Last swipe undone/);
+ let releaseSync;
+ syncGate=new Promise(resolve=>{releaseSync=resolve;});
+ scheduledSync();
+ await waitForReview(()=>syncStatus.textContent==='Syncing…');
+ assert.match(status.textContent,/Last swipe undone/);
+ releaseSync();
+ await waitForReview(()=>syncStatus.textContent==='Synced · 0 reviewed IDs');
+ assert.match(status.textContent,/Last swipe undone/);
+ await mounted.settle();
+ assert.equal((await mounted.read()).items[0].decision,null);
+ assert.ok(uploads.some(value=>value.decisions?.some(row=>row.id==='synthetic-undo'&&row.decision===null)));
 });
 test('mounted oldest-first puts missing dates at the epoch before dated media',async()=>{
  const mounted=await mountedReview([item('dated',{date:'1990-01-01T00:00:00.000Z'}),item('missing')]);
@@ -416,7 +448,7 @@ test('mounted undo survives a fresh script instance with the same IndexedDB',asy
  second.nodes.get('undo').onclick();
  await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  assert.equal((await first.read()).items[0].decision,null);assert.equal((await first.read()).history.length,0);
- assert.equal(second.nodes.get('status').textContent,'Decision undone for a.');
+ assert.equal(second.nodes.get('status').textContent,'Last swipe undone for a.');
  assert.match(second.nodes.get('caption').textContent,/^a · /);
  assert.equal(second.nodes.get('media').childNodes[0].alt,'a');
  second.nodes.get('keep').onclick();
@@ -2266,7 +2298,7 @@ test('failed sync remains visible alongside keep, queue and undo confirmations',
  mounted.environment.AbortSignal=AbortSignal;
  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
  await mounted.click('sync-save');
- for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Decision undone for b\./]]){
+ for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Last swipe undone for b\./]]){
   await mounted.click(action);
   assert.match(mounted.nodes.get('status').textContent,confirmation);
   assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
