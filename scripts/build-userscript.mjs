@@ -4,7 +4,7 @@ const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.53
+// @version 1.2.54
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -42,7 +42,7 @@ const loaderURL='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loa
 const loaderMetadata=`// ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.53
+// @version 1.2.54
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content
@@ -74,7 +74,7 @@ else await writeFile(loaderDestination,loaderOutput);
 
 const autoSource=await readFile(new URL('../lib/userscript-auto-loader.mjs',import.meta.url),'utf8');
 const versionSource=loaderSource.slice(loaderSource.indexOf('export function compareVersions'),loaderSource.indexOf('export async function verifyRelease'));
-const autoMetadata=metadata.replace('// @grant GM.getValue','// @grant GM.xmlHttpRequest\n// @grant GM_info\n// @grant GM_xmlhttpRequest\n// @grant GM_getValue\n// @grant GM_setValue\n// @grant GM_deleteValue\n// @connect photoswiper-sync.sidlakkoju.workers.dev\n// @grant GM.getValue');
+const autoMetadata=metadata.replace(/^\/\/ @version \S+$/m,/^\/\/ @version \S+$/m.exec(loaderMetadata)[0]).replace('// @grant GM.getValue','// @grant GM.xmlHttpRequest\n// @grant GM_info\n// @grant GM_xmlhttpRequest\n// @grant GM_getValue\n// @grant GM_setValue\n// @grant GM_deleteValue\n// @connect photoswiper-sync.sidlakkoju.workers.dev\n// @grant GM.getValue');
 const autoOutput=autoMetadata+'\n(async()=>{\n'+versionSource.replace(/^export /gm,'')+autoSource.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')+loaderOutput.slice(loaderOutput.indexOf('await startLoader({')).replace('await startLoader({','await startAutoLoader({').replace('document,window,location,','document,window,location,GM_info:typeof GM_info===\'undefined\'?undefined:GM_info,');
 const autoDestination=new URL('../userscript/photoswiper.user.js',import.meta.url);
 if(process.argv.includes('--check')){if(await readFile(autoDestination,'utf8')!==autoOutput)throw Error('Auto loader is stale. Run node scripts/build-userscript.mjs.');}
