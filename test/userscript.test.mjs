@@ -573,6 +573,31 @@ for(const mediaType of ['IMG','VIDEO'])test(`shadow overlay puts the card above 
 function swipeEvent(overrides={}) {
  return {isPrimary:true,button:0,target:{tagName:'VIDEO'},pointerId:1,clientX:20,clientY:20,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...overrides};
 }
+test('expanded photos swipe at initial fit and after zoom reset, while zoomed photos block swipes',async()=>{
+ for(const [clientX,decision,resetZoom] of [[150,'keep',false],[-150,'remove',false],[150,'keep',true],[-150,'remove',true]]){
+  const mounted=await mountedReview([item('a'),item('b')]);
+  const {nodes}=mounted,card=nodes.get('card'),media=nodes.get('media'),zoom=nodes.get('zoom');
+  nodes.get('enlarge').onclick();
+  assert.equal(card.classList.contains('expanded'),true);
+  assert.equal(zoom.value,'1');
+  const drag=()=>{
+   const target=media.querySelector('img');
+   media.listeners.pointerdown(swipeEvent({target,pointerType:'touch'}));
+   media.listeners.pointermove(swipeEvent({target,pointerType:'touch',clientX}));
+   media.listeners.pointerup(swipeEvent({target,pointerType:'touch',clientX}));
+  };
+  if(resetZoom){
+   zoom.value='2';zoom.oninput();drag();
+   assert.equal((await mounted.read()).history.length,0);
+   zoom.value='1';zoom.oninput();
+  }
+  drag();
+  await waitForReview(async()=>(await mounted.read()).items[0].decision===decision);
+  assert.equal((await mounted.read()).history.length,1);
+  assert.equal(card.classList.contains('expanded'),true);
+ }
+});
+
 test('zoomed photos allow touch panning without swiping and reset for the next photo',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
  const {nodes}=mounted,card=nodes.get('card'),media=nodes.get('media'),zoom=nodes.get('zoom');
@@ -719,8 +744,6 @@ test('deck videos support tap playback and swiping with native controls only whe
  media.listeners.click(swipeEvent());assert.equal(video.paused,true);
  media.listeners.click(swipeEvent());assert.equal(video.paused,false);
  mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);
- media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
- assert.equal((await mounted.read()).items[0].decision,null);
  mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);
  media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
  const click=swipeEvent();media.listeners.click(click);assert.equal(click.prevented,true);assert.equal(click.stopped,true);
@@ -736,7 +759,7 @@ test('overlay isolates pointer touch wheel and all key events while preserving n
  const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
  assert.match(source,/\.card\{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
  assert.match(source,/\.media\{touch-action:none;[^}]*overflow:auto/);
- assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
+ assert.match(source,/\.card\.expanded \.media\{height:72vh;/);
  assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
 

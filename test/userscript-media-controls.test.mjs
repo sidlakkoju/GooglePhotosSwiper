@@ -34,7 +34,7 @@ test('Play and Mute button clicks bubble without toggling media playback again',
  f.video.controls=true;f.click(f.video);assert.equal(f.video.plays,2);
 });
 
-test('display and zoom reset leave touch actions to expanded CSS, while zoom above one allows pan and pinch',async()=>{
+test('display and zoom reset preserve swipe touch actions when expanded, while zoom above one allows pan and pinch',async()=>{
  const f=fixture();
  vm.runInContext(source.slice(source.indexOf(' async function display(item,'),source.indexOf(' function updateVideoControls()')),f.context);
  f.mediaElement.style.color='';
@@ -53,7 +53,8 @@ test('display and zoom reset leave touch actions to expanded CSS, while zoom abo
  await f.context.display(null);
  assert.equal(f.classes.has('expanded'),true);
  assert.equal(f.mediaElement.style.touchAction,'');
- assert.ok(source.includes('.card.expanded .media{touch-action:pan-x pan-y pinch-zoom'));
+ assert.ok(!source.includes('.card.expanded .media{touch-action:pan-x pan-y pinch-zoom'));
+ assert.equal(f.classes.has('zoomed'),false);
  f.context.toggleEnlarge();assert.equal(f.classes.has('expanded'),false);
  assert.equal(f.mediaElement.style.touchAction,'');
  assert.ok(source.includes('.media{touch-action:none;'));

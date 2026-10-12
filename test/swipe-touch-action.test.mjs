@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createSwipeFeedback} from '../lib/userscript-swipe.mjs';
 const css=async()=>{const src=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');return [...src.matchAll(/([^{}"']+)\{([^{}]*touch-action:[^{}]*)\}/g)].map(m=>({sel:m[1].trim(),body:m[2]}));};
-test('no swipe target (card, media, swipe strip) allows pan-y; pinch/pan only on zoomed or expanded view',async()=>{
+test('no swipe target (card, media, swipe strip) allows pan-y; pinch/pan only on zoomed view',async()=>{
  const rules=await css();
  for(const sel of ['.card','.media','.swipe']){const r=rules.find(r=>r.sel===sel);assert.ok(r,sel);assert.match(r.body,/touch-action:none/,sel);}
- for(const r of rules.filter(r=>/pan-y/.test(r.body)))assert.match(r.sel,/\.(zoomed|expanded)/,`${r.sel} must not allow pan-y`);
+ for(const r of rules.filter(r=>/pan-y/.test(r.body)))assert.match(r.sel,/\.zoomed/,`${r.sel} must not allow pan-y`);
 });
 test('touchmove is prevented non-passively only after the drag locks horizontal; cancel springs back without deciding',()=>{
  const handlers={},opts={},decisions=[],anims=[];
