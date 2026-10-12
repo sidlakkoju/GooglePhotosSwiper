@@ -15,6 +15,16 @@ test('counter reset permits a retained item to be kept and queued again',()=>{
  const counter=createSessionStorageCounter(),items=[item('a')];assert.equal(counter.total(items),38.2e6);
  counter.reset(items);assert.equal(counter.total(items),0);items[0].decision='keep';counter.total(items);items[0].decision='remove';assert.equal(counter.total(items),38.2e6);
 });
+test('reset excludes only submitted items and preserves queued items after hydration',()=>{
+ const counter=createSessionStorageCounter(),submitted=item('submitted'),queued=item('queued',{size:5e6}),synced=item('synced',{needsPreview:true,size:7e6});
+ const items=[submitted,queued,synced];
+ assert.equal(counter.total(items),43.2e6);
+ submitted.state='in_trash';counter.reset([submitted]);
+ assert.equal(counter.total(items),5e6);
+ synced.needsPreview=false;
+ assert.equal(counter.total(items),12e6);
+ assert.equal(counter.total(items),12e6);
+});
 test('storage formatting follows approved decimal units and precision',()=>{
  assert.equal(formatStorageBytes(0),'0.00 MB');assert.equal(formatStorageBytes(38.2e6),'38.2 MB');assert.equal(formatStorageBytes(500e6),'500 MB');assert.equal(formatStorageBytes(1.24e9),'1.24 GB');
 });

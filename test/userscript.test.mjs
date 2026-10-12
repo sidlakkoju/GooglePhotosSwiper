@@ -3618,6 +3618,21 @@ test('completed Move to Trash resets the session capsule and new swipes count fr
  mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('remove');assert.match(capsule['aria-label'],/^5.00 MB/);
  await mounted.nodes.get('close').onclick();
 });
+test('completed Move to Trash preserves queued items outside the review snapshot',async()=>{
+ const trashed=new Set();
+ const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf')for(const key of args[2])trashed.add(key);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6}),item('b',{size:5e6})],{fetch,confirm:()=>true});
+ const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
+ await mounted.click('review');
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('remove');
+ mounted.nodes.get('review-panel').hidden=false;
+ assert.match(capsule['aria-label'],/^43.2 MB/);
+ await mounted.click('move-trash');
+ const state=await mounted.read();
+ assert.equal(state.items[0].state,'in_trash');assert.equal(state.items[1].state,'active');assert.equal(state.items[1].decision,'remove');
+ assert.match(capsule['aria-label'],/^5.00 MB/);
+ await mounted.nodes.get('close').onclick();
+});
 test('failed Move to Trash leaves the session capsule intact',async()=>{
  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6})],{fetch:async()=>({ok:false,status:500}),confirm:()=>true});
  const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
