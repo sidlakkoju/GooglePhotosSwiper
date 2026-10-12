@@ -1598,9 +1598,10 @@ function mountPhotosSwipe(environment) {
  function handleViewerSpace(event){
   if(activePairingDialog()||!sheet.hidden)return false;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
-  if(Date.now()<viewerShortcutsBlockedUntil||editingFieldFocused(event))return false;
-  const video=$('media').querySelector('video');
+  if(editingFieldFocused(event))return false;
   event.preventDefault();event.stopImmediatePropagation();
+  if(Date.now()<viewerShortcutsBlockedUntil)return true;
+  const video=$('media').querySelector('video');
   if(video&&event.type==='keydown'&&!event.repeat){if(video.paused)video.play().catch(()=>{});else video.pause();}
   return true;
  }

@@ -2454,7 +2454,16 @@ test('mounted settings close by Escape or Done blocks typing spillover before sh
   press('ArrowLeft');press('ArrowRight');
   if(method==='escape')press('Escape');else mounted.nodes.get('settings-sheet').childNodes[0].onclick();
   assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
-  press('ArrowLeft');time+=499;press('ArrowRight');await mounted.settle();
+  assert.equal(mounted.root.activeElement,mounted.nodes.get('settings'));
+  const space=async type=>{
+   const event={type,key:' ',repeat:type==='keydown',prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;}};
+   mounted.environment.window.listeners[type](event);
+   if(type==='keyup'&&!event.prevented)await mounted.root.activeElement?.onclick?.();
+   assert.equal(event.prevented,true);assert.equal(event.stopped,true);
+   assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
+  };
+  await space('keydown');await space('keyup');
+  press('ArrowLeft');time+=499;await space('keydown');await space('keyup');press('ArrowRight');await mounted.settle();
   assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null]);
   time++;press('ArrowRight');await mounted.settle();
   assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
