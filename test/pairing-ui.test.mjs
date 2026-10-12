@@ -302,37 +302,32 @@ for(const outcome of ['success','failure'])test(`Close waits for settings pairin
  }
 });
 
-test('Google sign-in waits for the browser code before privately claiming with the saved token',async()=>{
- const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom(),requests=[],values=new Map();
- let saved,opened;
- const store={durable:true,settings:async()=>({token:'previous-token'}),saveSettings:async value=>saved=value};
- const gm={setValue:async(key,value)=>values.set(key,value),getValue:async key=>values.get(key),deleteValue:async key=>values.delete(key),openInTab:url=>opened=url,xmlHttpRequest:options=>{requests.push(options);options.onload({status:200,responseText:JSON.stringify(options.url.endsWith('/session')?{url:'https://worker.example/auth/start'}:{token:'new-token',deviceId:'same-device'})});}};
- const notice=elements.document.createElement('div'),button={},sheet=elements.document.createElement('section'),settingsPanel=elements.document.createElement('details'),gear=elements.document.createElement('button'),sheetClose=elements.document.createElement('button');
- sheet.hidden=true;sheet.append(settingsPanel);settingsPanel.append(notice);
- const context={sheet,settingsPanel,gear,sheetClose,environment:{GM:gm,crypto},pairingPromise:Promise.resolve(store),googleSignIn:button,googleSettings:{},window:{navigator:{}},document:elements.document,pairingNotice:notice,identity:{account:'scope'},btoa,Uint8Array,syncClient:{configure(){}},onboarding:{},syncLocal:{},showSyncAccount(){},synchronize:async()=>{}};
+async function googleFixture(outcome='done',options={}){
+ const elements=dom(),requests=[],values=new Map(),timers=new Map();let saved,opened,closed=0;
+ const store={durable:true,settings:async()=>({token:'previous-token'}),saveSettings:async value=>{saved=value;}};
+ const gm={setValue:async(key,value)=>values.set(key,value),getValue:async key=>values.get(key),deleteValue:async key=>{values.delete(key);if(options.cleanupFailure)throw Error('Storage unavailable');},openInTab:url=>{opened=url;},xmlHttpRequest:request=>{requests.push(request);if(options.slow&&request.url.endsWith('/poll'))return;request.onload({status:options.sessionFailure?500:200,responseText:JSON.stringify(request.url.endsWith('/session')?{url:'https://worker.example/auth/start'}:{status:outcome,token:'new-token',deviceId:'same-device'})});}};
+ const sheet=elements.document.createElement('section'),settingsPanel=elements.document.createElement('details'),notice=elements.document.createElement('p'),button={},settingsButton={};sheet.hidden=true;sheet.append(settingsPanel);settingsPanel.append(notice);
+ const popup={location:{href:'about:blank'},close(){closed++;}};
+ const context={sheet,settingsPanel,gear:elements.document.createElement('button'),sheetClose:elements.document.createElement('button'),environment:{GM:gm,crypto,setTimeout:(fn,delay)=>{timers.set(fn,delay);return fn;},clearTimeout:fn=>timers.delete(fn)},pairingPromise:Promise.resolve(store),googleSignIn:button,googleSettings:settingsButton,window:{navigator:{userAgent:options.ios?'iPhone':''},open:(url,target,features)=>{opened={url,target,features};return popup;}},document:elements.document,pairingNotice:notice,identity:{account:'scope'},btoa,Uint8Array,suppressViewerShortcuts(){},syncClient:{configure(value){context.configured=value;}},onboarding:{},syncLocal:{},showSyncAccount(){},synchronize:async()=>{}};
  const start=ui.indexOf(' const signInGoogle=async()=>{'),end=ui.indexOf(' const clearCredentials=',start);
- vm.runInNewContext(ui.slice(ui.indexOf(' const openSettings='),ui.indexOf('const closeSettings='))+ui.slice(start,end),context);
+ vm.runInNewContext('let cancelGoogleSignIn=null;'+ui.slice(ui.indexOf(' const openSettings='),ui.indexOf(' const openReview='))+ui.slice(start,end),context);
  const pending=button.onclick();
- await new Promise(resolve=>setImmediate(resolve));
- assert.equal(opened,'https://worker.example/auth/start');assert.equal(requests.length,1);
- const input=notice.children[0],submit=notice.children[1];
- assert.equal(sheet.hidden,false);assert.equal(settingsPanel.open,true);assert.equal(gear['aria-expanded'],'true');
- assert.ok(descendants(sheet).includes(input));assert.ok(descendants(sheet).includes(submit));
- assert.match(notice.textContent,/paste its sign-in code here/);
- input.remove=()=>{};submit.remove=()=>{};input.value='browser-only-code';submit.onclick();
- await pending;
- assert.equal(requests.length,2);assert.equal(requests[1].headers.Authorization,'Bearer previous-token');
- assert.equal(JSON.parse(requests[1].data).code,'browser-only-code');assert.equal(saved.token,'new-token');
+ const flush=()=>new Promise(resolve=>setImmediate(resolve));await flush();
+ const tick=async delay=>{const fn=[...timers].find(([,ms])=>ms===delay)?.[0];assert.ok(fn);timers.delete(fn);fn();await flush();};
+ return {context,requests,timers,notice,button,settingsButton,pending,tick,flush,popup,get saved(){return saved;},get opened(){return opened;},get closed(){return closed;}};
+}
+for(const ios of [false,true])test(`Google poll done signs in automatically (${ios?'iOS tab':'desktop popup'})`,async()=>{
+ const f=await googleFixture('done',{ios});assert.equal(f.opened.url,'about:blank');assert.equal(f.opened.features,ios?'':'popup,width=560,height=700');assert.equal(f.popup.location.href,'https://worker.example/auth/start');assert.match(f.notice.textContent,/Waiting for Google sign-in/);assert.equal(f.notice.children[0].textContent,'Cancel');
+ await f.tick(2000);await f.pending;assert.equal(f.saved.token,'new-token');assert.equal(f.context.configured.token,'new-token');assert.equal(f.context.onboarding.hidden,true);assert.equal(f.requests[1].headers.Authorization,'Bearer previous-token');assert.equal(JSON.parse(f.requests[1].data).code,undefined);assert.ok(f.requests[1].url.endsWith('/poll'));assert.equal(f.button.disabled,false);assert.equal(f.settingsButton.disabled,false);assert.equal(f.timers.size,0);
 });
-
-for(const failure of ['capabilities','session'])test(`first-run Google sign-in shows ${failure} errors in Settings`,async()=>{
- const elements=dom(),sheet=elements.document.createElement('section'),settingsPanel=elements.document.createElement('details'),notice=elements.document.createElement('p'),button={};
- sheet.hidden=true;sheet.append(settingsPanel);settingsPanel.append(notice);
- const gm={setValue:async()=>{},deleteValue:async()=>{},openInTab(){},xmlHttpRequest:options=>options.onload({status:500,responseText:'{}'})};
- const context={sheet,settingsPanel,gear:elements.document.createElement('button'),sheetClose:elements.document.createElement('button'),environment:{GM:gm,crypto},pairingPromise:Promise.resolve({durable:failure!=='capabilities',settings:async()=>({})}),googleSignIn:button,googleSettings:{},window:{navigator:{}},document:elements.document,pairingNotice:notice,identity:{},btoa,Uint8Array};
- const start=ui.indexOf(' const signInGoogle=async()=>{'),end=ui.indexOf(' const clearCredentials=',start);
- vm.runInNewContext(ui.slice(ui.indexOf(' const openSettings='),ui.indexOf('const closeSettings='))+ui.slice(start,end),context);
- await button.onclick();
- assert.equal(sheet.hidden,false);assert.equal(settingsPanel.open,true);assert.ok(descendants(sheet).includes(notice));
- assert.match(notice.textContent,failure==='capabilities'?/Google sync requires/:/Could not start Google sign-in/);
+for(const outcome of ['cancel','close','timeout','failed','expired','session','cleanup','inflight'])test(`Google sign-in ${outcome} stops and restores both buttons`,async()=>{
+ const f=await googleFixture(outcome==='cleanup'?'done':outcome,{sessionFailure:outcome==='session',cleanupFailure:outcome==='cleanup',slow:outcome==='inflight'});
+ if(outcome==='cancel')f.notice.children[0].onclick();
+ else if(outcome==='close')f.context.sheetClose.onclick();
+ else if(outcome==='timeout')await f.tick(300000);
+ else if(outcome==='inflight'){await f.tick(2000);f.notice.children[0].onclick();}
+ else if(outcome!=='session')await f.tick(2000);
+ await f.pending;assert.equal(f.button.disabled,false);assert.equal(f.settingsButton.disabled,false);assert.equal(f.timers.size,0);assert.equal(f.notice.children[0]?.hidden,true);
+ if(outcome!=='cleanup')assert.equal(f.saved,undefined);
+ const count=f.requests.length;await f.flush();assert.equal(f.requests.length,count);
 });

@@ -144,7 +144,7 @@ test('overlapping paired sign-ins cannot copy a legacy library to two Google acc
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_space_links').get().n,1);
 });
 
-test('a forwarded sign-in link cannot claim or link the victim account using state alone',async()=>{
+test('legacy claims require the code and original device token',async()=>{
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='m'.repeat(43);
  await syncRequest(new Request(syncOrigin+'/api/decisions/private',{method:'PUT',headers:{Authorization:'Bearer legacy-test'},body:JSON.stringify({decision:'remove'})}),env);
  await request(env,'/auth/session',{state,name:'Attacker',platform:'test'},'legacy-test');
@@ -220,12 +220,55 @@ test('sign-in page permits GIS styles while restricting scripts and framing',asy
  assert.deepEqual(csp['base-uri'],["'none'"]);
  assert.doesNotMatch(html,/\sstyle\s*=/i);
  assert.match(html,/name="viewport"/);
- const elements={status:{},code:{hidden:true},button:{}};
+ const elements={status:{},button:{}};
  let callback;
  runInNewContext(script,{google:{accounts:{id:{initialize:options=>callback=options.callback,renderButton:element=>assert.equal(element,elements.button)}}},document:{getElementById:id=>elements[id]},fetch:async()=>Response.json({code:'r'.repeat(43)})});
  await callback({credential:'test'});
- assert.equal(elements.status.textContent,'Copy this code back into Photos Swipe.');
- assert.equal(elements.code.hidden,false);
- assert.equal(elements.code.value,'r'.repeat(43));
- assert.match(html,/<input id="code"[^>]*readonly hidden>/);
+ assert.equal(elements.status.textContent,"You're signed in. Return to Google Photos.");
+ assert.doesNotMatch(html,/<input|Copy this code/);
+ assert.match(script,/window.close/);
+ assert.match(script,/BroadcastChannel/);
+ assert.match(script,/postMessage/);
+});
+
+test('polling is pending until completion, single-use across poll and legacy claim, and expires',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='p'.repeat(43);
+ await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ assert.deepEqual(await (await request(env,'/auth/poll',{state})).json(),{status:'pending'});
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ const {code}=await (await request(env,'/auth/complete',{state,credential:await token(pending.nonce)})).json();
+ const results=await Promise.all([request(env,'/auth/poll',{state}),request(env,'/auth/poll',{state})]);
+ const values=await Promise.all(results.map(response=>response.json()));assert.equal(values.filter(value=>value.status==='done').length,1);assert.ok(values.find(value=>value.status==='done').token);
+ assert.equal((await request(env,'/auth/claim',{state,code})).status,400);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'expired');
+ const expired='q'.repeat(43);await request(env,'/auth/session',{state:expired,name:'Test',platform:'test'});
+ await env.DB.prepare('UPDATE google_pending SET expires_at = ? WHERE state_hash = ?').bind(Math.floor(Date.now()/1000),await hash(expired)).run();
+ assert.equal((await (await request(env,'/auth/poll',{state:expired})).json()).status,'expired');
+});
+test('failed verification is reported by polling and paired polling requires the original token',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='r'.repeat(43);
+ await request(env,'/auth/session',{state,name:'Test',platform:'test'},'legacy-test');
+ assert.equal((await request(env,'/auth/poll',{state})).status,401);
+ await request(env,'/auth/complete',{state,credential:'invalid'});
+ assert.equal((await (await request(env,'/auth/poll',{state},'legacy-test')).json()).status,'failed');
+});
+
+test('sign-in page closes and signals success, and shows errors without a code box',async()=>{
+ const env={DB:new D1()},state='s'.repeat(43);await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ const html=await (await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env)).text(),script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+ for(const outcome of ['done','failed','network']){
+  let callback,closed=0,posted=0,broadcast=0;const status={};
+  runInNewContext(script,{google:{accounts:{id:{initialize:options=>{callback=options.callback;},renderButton(){}}}},document:{getElementById:()=>status},window:{close(){closed++;},opener:{postMessage(message,origin){assert.equal(origin,'https://photos.google.com');posted++;}}},BroadcastChannel:class{postMessage(){broadcast++;}close(){}},fetch:async()=>{if(outcome==='network')throw Error('Network unavailable');return Response.json({}, {status:outcome==='done'?200:400});}});
+  await callback({credential:'synthetic'});assert.equal(closed,outcome==='done'?1:0);assert.equal(posted,closed);assert.equal(broadcast,closed);assert.match(status.textContent,outcome==='done'?/You're signed in/:outcome==='failed'?/Sign-in failed/:/Network unavailable/);
+ }
+ assert.doesNotMatch(html,/<input|Copy this code/);
+});
+test('completed poll expires at five minutes and legacy claims consume the polling session',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='t'.repeat(43);
+ await signIn(env,state);assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'expired');
+ const next='u'.repeat(43);await request(env,'/auth/session',{state:next,name:'Test',platform:'test'});
+ const pending=await env.DB.prepare('SELECT * FROM google_pending WHERE state_hash = ?').bind(await hash(next)).first();assert.equal(pending.expires_at-Math.floor(Date.now()/1000),300);
+ await request(env,'/auth/complete',{state:next,credential:await token(pending.nonce)});
+ await env.DB.prepare('UPDATE google_pending SET expires_at = ? WHERE state_hash = ?').bind(Math.floor(Date.now()/1000),await hash(next)).run();
+ assert.equal((await (await request(env,'/auth/poll',{state:next})).json()).status,'expired');assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,1);
 });
