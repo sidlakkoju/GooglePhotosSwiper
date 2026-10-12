@@ -190,17 +190,28 @@ test('Keep and undo-to-keep replace synced removes through both write endpoints'
  }
 });
 
+test('sign-in HTML allows origin referrers while JSON auth responses suppress referrers',async()=>{
+ const env={DB:new D1()},state='s'.repeat(43);
+ const session=await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ assert.equal(session.status,200);
+ assert.equal(session.headers.get('Referrer-Policy'),'no-referrer');
+ const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('Referrer-Policy'),'strict-origin-when-cross-origin');
+ assert.match(await response.text(),/<meta name="referrer" content="strict-origin-when-cross-origin">/);
+});
+
 test('sign-in page permits GIS styles while restricting scripts and framing',async()=>{
  const env={DB:new D1()},state='q'.repeat(43);
  await request(env,'/auth/session',{state,name:'Test',platform:'test'});
  const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
  assert.equal(response.status,200);
  const html=await response.text(),csp=Object.fromEntries(response.headers.get('Content-Security-Policy').split(';').map(part=>part.trim().split(/\s+/)).map(([name,...sources])=>[name,sources]));
- const style=html.match(/<style>([\s\S]*?)<\/style>/)[1],script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+ const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
  const sourceHash=async value=>"'sha256-"+Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))).toString('base64')+"'";
  assert.deepEqual(csp['style-src'],['https://accounts.google.com/gsi/style',"'unsafe-inline'"]);
  assert.deepEqual(csp['style-src-attr'],["'unsafe-inline'"]);
- assert.deepEqual(csp['style-src-elem'],['https://accounts.google.com/gsi/style',await sourceHash(style)]);
+ assert.deepEqual(csp['style-src-elem'],['https://accounts.google.com/gsi/style',"'unsafe-inline'"]);
  assert.deepEqual(csp['script-src'],['https://accounts.google.com',await sourceHash(script)]);
  assert.deepEqual(csp['default-src'],["'none'"]);
  assert.deepEqual(csp['frame-src'],['https://accounts.google.com']);
