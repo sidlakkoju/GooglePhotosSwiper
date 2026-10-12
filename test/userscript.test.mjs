@@ -2128,7 +2128,7 @@ test('signed-in privileged bundle uses page AbortSignals for library, album and 
  assert.equal(under.hidden,true);
  });
 
-test('a failed reused under-card preview refreshes and exposes Retry on another failure',async()=>{
+test('a failed under-card preview refreshes and exposes Retry on another failure',async()=>{
  const calls=[],mounted=await mountedReview([item('a'),item('b'),item('c')],async(url,options)=>{
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
   return {ok:true,text:async()=>envelope('VrseUb',[[key,['https://photos.fife.usercontent.google.com/synthetic-fresh',800,600]],'https://video-downloads.google.com/download'])};

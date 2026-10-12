@@ -57,3 +57,19 @@ test('saved URL freshness expires at forty minutes and treats legacy batches as 
  assert.equal(reviewURLStale({urlFetchedAt:now-40*60*1000},now),true);
  assert.equal(reviewURLStale({urlFetchedAt:now-40*60*1000+1},now),false);
 });
+
+test('review clear preserves upcoming downloads and transfers a decoded element to the card',async()=>{
+ let finishDecode;
+ const f=fixture(undefined,()=>new Promise(resolve=>{finishDecode=resolve;})),items=[photo('a'),photo('b')],size={width:360,height:480};
+ f.buffer.update(items,items[0],size);await tick();
+ const image=f.images[0],source=image.src;
+ assert.equal(f.buffer.take('b',source),null);
+ f.buffer.clear([items[1]],size);
+ assert.deepEqual(image.removed,[]);
+ finishDecode();await tick();
+ assert.equal(f.buffer.take('b','wrong-url'),null);
+ assert.equal(f.buffer.take('b',source),image);
+ f.buffer.clear();
+ assert.equal(image.src,source);
+ assert.deepEqual(image.removed,[]);
+});
