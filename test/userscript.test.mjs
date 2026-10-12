@@ -1334,6 +1334,43 @@ test('fresh foreign leases block library RPCs and recover automatically after ex
   await mounted.click('keep');assert.equal((await mounted.read()).items[0].decision,'keep');
  }finally{Date.now=actualNow;await mounted.nodes.get('close').onclick();}
 });
+test('lease timer reclaims expired ownership and preserves in-flight Trash, album and library results',async()=>{
+ for(const operation of ['move-trash','send','load']){
+  const timers=new Map();let timerId=0,finish,started,added=false;
+  const pending=new Promise(resolve=>{started=resolve;});
+  const target=operation==='move-trash'?'XwAOJf':operation==='send'?'OXvT9d':'lcxiM';
+  const fetch=async(url,options)=>{
+   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],id=entry[0];
+   if(id===target){started();await new Promise(resolve=>{finish=resolve;});}
+   if(id==='E1Cajb')added=true;
+   const data=id==='OXvT9d'?[['album']]:id==='Z5xsfc'?[[],null]:id==='snAcKc'?[null,added?[['a',null,null,'stable-a']]:[],null,['album']]:id==='zy0IHe'?[[['a',null,null,'stable-a']],null]:id==='lcxiM'?[[['new',['https://lh3.googleusercontent.com/new',800,600],1720000000000,'stable-new']],null]:[];
+   return {ok:true,text:async()=>envelope(id,data)};
+  };
+  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a'})],{fetch,confirm:()=>true},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  if(operation==='move-trash'){mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();mounted.nodes.get('review').onclick();}
+  mounted.nodes.get(operation).onclick();await pending;
+  try{
+   await db.lease(account,(await db.readLease(account)).owner,true);
+   await db.lease(account,'other-tab');
+   await db.lease(account,'other-tab',true);
+   const tick=[...timers.values()][0];assert.ok(tick);tick();
+   await waitForReview(async()=> (await db.readLease(account)).owner!=='other-tab'||mounted.nodes.get('status').textContent==='Open in another tab');
+   assert.notEqual((await db.readLease(account)).owner,'other-tab');
+   assert.doesNotMatch(mounted.nodes.get('status').textContent,/Open in another tab/);
+   assert.equal(mounted.nodes.get('use-here').hidden,true);
+  }finally{finish();}
+  await mounted.settle();
+  const saved=await mounted.read();
+  if(operation==='move-trash')assert.equal(saved.items[0].state,'in_trash');
+  if(operation==='send'){assert.equal(saved.items[0].queueSent,true);assert.equal(saved.albumKey,'album');assert.equal(saved.job,null);}
+  if(operation==='load'){assert.ok(saved.items.some(row=>row.mediaKey==='new'));assert.equal(saved.exhausted,true);}
+  await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
+  assert.deepEqual((await mounted.read()).items,saved.items);
+  await mounted.nodes.get('close').onclick();
+ }
+});
 
 test('page lifecycle events cannot sync over an in-flight library snapshot',async()=>{
  let finish,started;const loading=new Promise(resolve=>{started=resolve;}),requests=[];
