@@ -19,7 +19,7 @@ function review({delayed=false}={}){
  };
  const timers=[],toastTimers=new Map(),writes=[];
  let timerId=0;
- const context=vm.createContext({sampleSwipe,releaseSwipe,animateSwipe,throwSwipe,photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceLoadsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,evict:async()=>{},mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
+ const context=vm.createContext({requestAnimationFrame:callback=>{callback();return null;},cancelAnimationFrame(){},sampleSwipe,releaseSwipe,animateSwipe,throwSwipe,photoViewer:{open:false},$,items,decisions,history,busy:false,animating:false,generation:0,reviewActionVersion:0,reviewActionsPending:0,workspaceLoadsPending:0,workspaceGeneration:0,workspaceRefreshGeneration:0,sessionGeneration:0,pendingDecisionWrites:0,decisionWriteWaiters:new Set(),historyRestored:true,loadUndoHistory,validUndoHistory,sessionStorage:{getItem:()=>null},reviewActions:Promise.resolve(),authenticated:true,evict:async()=>{},mode:'fake',workspace:{},active:()=>context.items.find(item=>!context.decisions[item.id]),pending:()=>context.items.filter(item=>!context.decisions[item.id]),summarize:()=>({kept:[],sent:[],reviewed:Object.keys(context.decisions).length}),removalQueue:()=>[],renderStorage(){},renderCard(){},renderQueue(){},renderOperations(){},renderReconciliation(){},renderControls(){},prefetchReview(){},updateDecision:async(item,decision)=>{writes.push([item.id,decision]);item.revision++;item.decision=decision;if(decision)context.decisions[item.id]=decision;else delete context.decisions[item.id];return true;},matchMedia:()=>({matches:true}),setTimeout:(fn,delay)=>{if(delay===2800){toastTimers.set(++timerId,fn);return timerId;}return delayed?timers.push(fn):fn();},clearTimeout:id=>toastTimers.delete(id)});
  context.setHistory=entries=>{context.history=entries;};
  vm.runInContext(source.slice(source.indexOf('function renderGuide('),source.indexOf("$('toast').onclick=")),context);
  vm.runInContext(source.split('\n').filter(line=>line.startsWith('let toastTimer')||line.startsWith('function dismissToast(')||line.startsWith('function toast(')).join('\n'),context);
@@ -624,4 +624,21 @@ for(const [name,y,expected] of [['picture',100,'keep'],['controls',280,undefined
  $('card').onpointerup({pointerId:1,clientX:180,clientY:name==='vertical drag'?400:y});
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(decisions.first,expected);
+});
+
+test('deck drag batches pointer moves into one frame and caches geometry through release',async()=>{
+ const {context,$}=review();const frames=new Map();let nextFrame=0,reads=0,writes=0;
+ context.requestAnimationFrame=callback=>{frames.set(++nextFrame,callback);return nextFrame;};
+ context.cancelAnimationFrame=id=>frames.delete(id);
+ const card=$('card'),stamp=$('stamp');
+ card.getBoundingClientRect=()=>{reads++;return {left:0,top:0,width:300,height:400};};
+ for(const element of [card,stamp])element.style=new Proxy(element.style,{set(target,key,value){writes++;target[key]=value;return true;}});
+ card.onpointerdown(pointer(0));const initialWrites=writes;
+ for(let x=20;x<=120;x+=20)card.onpointermove(pointer(x));
+ assert.equal(reads,1);assert.equal(writes,initialWrites);assert.equal(frames.size,1);
+ for(const [id,callback] of frames){frames.delete(id);callback();}
+ assert.equal(card.style.transform,'');assert.equal(card.style.willChange,'');assert.equal(stamp.textContent,'KEEP');
+ card.onpointermove(pointer(130));card.onpointerup(pointer(130));
+ assert.equal(frames.size,0);assert.equal(reads,1);assert.equal(card.style.willChange,'');
+ await context.reviewActions;assert.equal(reads,1);assertReset($);
 });

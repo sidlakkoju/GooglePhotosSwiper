@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.23
+// @version 1.2.24
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -122,29 +122,28 @@ function releaseSwipe(samples,event,startX,width,cancel=false){
   return {dx,velocity,commit:!cancel&&(Math.abs(dx)>width/3||(Math.abs(velocity)>.5&&velocity*dx>0)),duration:Math.round(Math.max(180,Math.min(300,300-Math.abs(velocity)*60)))};
 }
 function animateSwipe(element,dx,commit,duration=320){
-  if(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  if(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return commit?element.animate?.([{opacity:1},{opacity:0}],{duration:150,easing:'ease-out'}):undefined;
   const start=element.style.transform||'translateX(0px)',direction=dx>0?1:-1;
-  const distance=(globalThis.innerWidth||1000)+(element.getBoundingClientRect?.().width||350);
+  const distance=(globalThis.innerWidth||1000)+(Number.parseFloat(element.style.width)||350);
   return element.animate?.([{transform:start,opacity:1},{transform:commit?`translateX(${direction*distance}px) rotate(${direction*18}deg)`:'translateX(0px)',opacity:commit?0:1}],{duration,easing:commit?'ease-out':'cubic-bezier(.2,1.5,.5,1)'});
 }
-function throwSwipe(element,dx,duration){
+function throwSwipe(element,dx,duration,bounds){
   if(!element.cloneNode||!element.ownerDocument?.body)return;
   const transform=element.style.transform,transition=element.style.transition;
-  element.style.transition='none';
-  element.style.transform='none';
-  const rect=element.getBoundingClientRect();
-  element.style.transform=transform;
-  element.style.transition=transition;
-  const copy=element.cloneNode(true);
-  if(globalThis.getComputedStyle){
-    const originals=[element,...element.querySelectorAll('*')],copies=[copy,...copy.querySelectorAll('*')];
-    originals.forEach((original,index)=>{const computed=globalThis.getComputedStyle(original);for(const property of computed)copies[index].style.setProperty(property,computed.getPropertyValue(property));});
+  let rect=bounds;
+  if(!rect){
+    element.style.transition='none';
+    element.style.transform='none';
+    rect=element.getBoundingClientRect();
+    element.style.transform=transform;
+    element.style.transition=transition;
   }
+  const copy=element.cloneNode(true);
   copy.removeAttribute('id');
-  for(const child of copy.querySelectorAll('[id]'))child.removeAttribute('id');
+  for(const child of copy.querySelectorAll('[id]')){if(child.getAttribute?.('id')==='media')child.classList.add('swipe-media');child.removeAttribute('id');}
   copy.setAttribute('aria-hidden','true');
   copy.inert=true;
-  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',boxSizing:'border-box',right:'auto',bottom:'auto',transform,pointerEvents:'none',zIndex:'2147483647',transition:'none'});
+  Object.assign(copy.style,{position:'fixed',left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,margin:'0',boxSizing:'border-box',right:'auto',bottom:'auto',transform:globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'none':transform,pointerEvents:'none',zIndex:'2147483647',transition:'none',willChange:''});
   (element.parentNode||element.ownerDocument.body).append(copy);
   const animation=animateSwipe(copy,dx,true,duration);
   if(animation)animation.finished.then(()=>copy.remove(),()=>copy.remove());
@@ -454,30 +453,35 @@ function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}
 }
 
 function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onDecide,playbackOnClick=false}) {
- let gesture=null,frame=null,animation=null,dismissing=false,finished=Promise.resolve();
- const reduced=()=>window.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true;
+ let gesture=null,frame=null,animation=null,dismissing=false,finished=Promise.resolve(),cardWidth=300;
+ const motionPreference=window.matchMedia?.('(prefers-reduced-motion: reduce)');
+ const reduced=()=>motionPreference?.matches===true;
  const eligible=({dx,dy})=>Math.abs(dx)>Math.abs(dy)*1.5;
  const commits=value=>value.locked&&eligible(value)&&(Math.abs(value.dx)>=value.width*.33||Math.abs(value.velocity)>.5&&Math.sign(value.velocity)===Math.sign(value.dx))&&canSwipe();
  const paint=()=>{
   frame=null;
-  if(!gesture?.locked)return;
+  if(!gesture)return;
+  if(gesture.cancelled){reset();return;}
+  if(!gesture.locked)return;
+  card.style.willChange=reduced()?'':'transform';
   const {dx,dy,width}=gesture,progress=eligible(gesture)?Math.min(1,Math.abs(dx)/(width*.33)):0;
   card.style.transform=reduced()?'':`translate3d(${dx}px,${dy*.2}px,0) rotate(${Math.max(-15,Math.min(15,dx/width*15))}deg) scale(1.02)`;
   keep.style.opacity=String(dx>0?progress:0);
   remove.style.opacity=String(dx<0?progress:0);
-  under.style.transform=`scale(${.94+.06*progress})`;
+  under.style.transform=reduced()?'':`scale(${.94+.06*progress})`;
  };
  const release=()=>{
   const previous=gesture;
   gesture=null;
   if(frame!==null)window.cancelAnimationFrame?.(frame);
   frame=null;
+  card.style.willChange='';
   if(previous?.target.hasPointerCapture?.(previous.id))previous.target.releasePointerCapture(previous.id);
  };
  const reset=()=>{
   release();animation?.cancel();animation=null;dismissing=false;finished=Promise.resolve();
   card.style.transform='';card.style.willChange='';card.style.visibility='';
-  keep.style.opacity='0';remove.style.opacity='0';under.style.transform='scale(.94)';
+  keep.style.opacity='0';remove.style.opacity='0';under.style.transform=reduced()?'':'scale(.94)';
  };
  const animate=transform=>{
   const start=card.style.transform||'none';
@@ -489,18 +493,19 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
  };
  const dismiss=decision=>{
   if(dismissing)return finished;
-  dismissing=true;release();
-  const direction=decision==='keep'?1:-1,width=card.getBoundingClientRect?.().width||card.offsetWidth||300;
-  keep.style.opacity=decision==='keep'?'1':'0';remove.style.opacity=decision==='remove'?'1':'0';under.style.transform='scale(1)';
+  dismissing=true;const width=gesture?.width||cardWidth;release();
+  const direction=decision==='keep'?1:-1;
+  keep.style.opacity=decision==='keep'?'1':'0';remove.style.opacity=decision==='remove'?'1':'0';under.style.transform=reduced()?'':'scale(1)';
   const destination=reduced()?'':`translate3d(${direction*(Math.max(window.innerWidth||0,width)*1.5)}px,0,0) rotate(${direction*15}deg)`;
-  if(card.cloneNode&&card.parentNode&&!reduced()){
+  if(card.cloneNode&&card.parentNode){
    const outgoing=card.cloneNode(true);
    outgoing.setAttribute('aria-hidden','true');outgoing.inert=true;
    for(const element of outgoing.querySelectorAll?.('[id]')||[])element.removeAttribute('id');
+   outgoing.removeAttribute?.('id');outgoing.style.willChange='';outgoing.style.transform=reduced()?'':card.style.transform;
    outgoing.style.position='absolute';outgoing.style.inset='0';outgoing.style.pointerEvents='none';outgoing.style.zIndex='3';
    card.parentNode.append(outgoing);
    card.style.visibility='hidden';
-   const flight=outgoing.animate?.([{transform:card.style.transform||'none'},{transform:destination}],{duration:180,easing:'ease-out'});
+   const flight=outgoing.animate?.(reduced()?[{opacity:1},{opacity:0}]:[{transform:card.style.transform||'none',opacity:1},{transform:destination,opacity:0}],{duration:reduced()?150:180,easing:'ease-out'});
    outgoing.style.transform=destination;
    finished=flight?flight.finished.catch(()=>{}).then(()=>outgoing.remove()):Promise.resolve(outgoing.remove());
    return finished;
@@ -526,18 +531,19 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   gesture.dx=dx;gesture.dy=event.clientY-gesture.y;
   if(!gesture.locked){
    if(Math.hypot(gesture.dx,gesture.dy)<10)return;
-   if(Math.abs(gesture.dy)>=Math.abs(gesture.dx)){gesture.suppressClick();reset();return;}
-   gesture.locked=true;gesture.target.setPointerCapture(gesture.id);card.style.willChange='transform';
+   if(Math.abs(gesture.dy)>=Math.abs(gesture.dx))gesture.cancelled=true;
+   else {gesture.locked=true;gesture.target.setPointerCapture(gesture.id);}
   }
-  gesture.suppressClick();event.preventDefault?.();
+  gesture.suppressClick();
+  if(!gesture.cancelled)event.preventDefault?.();
   if(frame===null){if(window.requestAnimationFrame)frame=window.requestAnimationFrame(paint);else paint();}
  };
  const finishGesture=event=>{
    if(!gesture||event.pointerId!==gesture.id)return;
    update(event);
    if(!gesture)return;
-   const value=gesture,commit=commits(value);
-   if(commit){paint();release();dismiss(value.dx>0?'keep':'remove');onDecide(value.dx>0?'keep':'remove');}
+   const value=gesture,commit=!value.cancelled&&commits(value);
+   if(commit){if(frame!==null)window.cancelAnimationFrame?.(frame);frame=null;paint();release();dismiss(value.dx>0?'keep':'remove');onDecide(value.dx>0?'keep':'remove');}
    else {
     const transform=card.style.transform;
     reset();card.style.transform=transform;animate('');
@@ -552,7 +558,8 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   target.addEventListener('pointerdown',event=>{
    if(gesture||dismissing||!canSwipe()||event.isPrimary===false||event.button!==0)return;
    suppressClick=false;animation?.cancel();animation=null;
-   gesture={id:event.pointerId,x:event.clientX,y:event.clientY,dx:0,dy:0,samples:Number.isFinite(event.timeStamp)?[{dx:0,time:event.timeStamp}]:[],velocity:0,width:card.getBoundingClientRect?.().width||card.offsetWidth||300,target,suppressClick:()=>{suppressClick=true;},video:event.target.tagName==='VIDEO'?event.target:null,locked:false};
+   cardWidth=card.getBoundingClientRect?.().width||card.offsetWidth||300;
+   gesture={id:event.pointerId,x:event.clientX,y:event.clientY,dx:0,dy:0,samples:Number.isFinite(event.timeStamp)?[{dx:0,time:event.timeStamp}]:[],velocity:0,width:cardWidth,target,suppressClick:()=>{suppressClick=true;},video:event.target.tagName==='VIDEO'?event.target:null,locked:false};
    if(event.pointerType==='mouse')target.setPointerCapture(event.pointerId);
   });
   target.addEventListener('pointermove',update);
@@ -1253,7 +1260,7 @@ function mountPhotosSwipe(environment) {
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.23":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.24":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
