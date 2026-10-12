@@ -54,6 +54,6 @@ test('compacted rules preserve control, caption, queue and decision styling',()=
  assert.equal(rule('.keep'),'color:var(--ps-accent)');
  assert.equal(rule('.remove'),'color:var(--ps-destructive)');
  assert.match(css,/\.media\{touch-action:none;/);
- assert.match(css,/\.card.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
+ assert.match(css,/\.card.expanded \.media\{height:72vh;/);
  assert.doesNotMatch(css,/overflow:hidden;position:relative|\.album-controls\{background:|\.queue span\{font:/);
 });
