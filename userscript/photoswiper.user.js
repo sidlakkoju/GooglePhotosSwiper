@@ -278,6 +278,15 @@ async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},tar
 
 const LEASE_HEARTBEAT_MS=4000;
 const LEASE_EXPIRY_MS=12000;
+function createLeaseOwner(window,crypto) {
+ let owner=crypto.randomUUID();
+ try {
+  const key='photos-swipe-lease-owner',navigation=window.performance?.getEntriesByType('navigation')[0]?.type;
+  if(navigation==='reload'||navigation==='back_forward')owner=window.sessionStorage.getItem(key)||owner;
+  window.sessionStorage.setItem(key,owner);
+ }catch{}
+ return owner;
+}
 async function openReviewDatabase(indexedDB) {
  const db=await new Promise((resolve,reject)=>{
   const request=indexedDB.open('photos-swipe-userscript',2);
@@ -889,7 +898,7 @@ function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
 function mountPhotosSwipe(environment) {
  const {window,document,location}=environment;
  if(window.top!==window||location.origin!=='https://photos.google.com'||document.getElementById('photos-swipe-userscript-host'))return;
- const rawCall=environment.photosCall||createPhotosAPI(environment),owner=environment.crypto.randomUUID();
+ const rawCall=environment.photosCall||createPhotosAPI(environment),owner=createLeaseOwner(window,environment.crypto);
  const host=document.createElement('div');host.id='photos-swipe-userscript-host';
  host.style.cssText='position:fixed;inset:0;z-index:2147483647;pointer-events:none';
  const root=host.attachShadow({mode:'open'});

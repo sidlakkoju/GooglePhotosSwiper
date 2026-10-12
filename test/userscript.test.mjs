@@ -3515,3 +3515,38 @@ for(const foreignOwner of [false,true])test(`resume during an in-flight sync rel
   assert.doesNotMatch(mounted.nodes.get('status').textContent,/conflict|Unsaved/);
  }finally{hold=false;finished.resolve();await syncing;await mounted.nodes.get('close').onclick();}
 });
+
+test('reload reclaims an unexpired lease when the unload release never commits',async()=>{
+ const values=new Map(),sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)};
+ const mounted=await mountedReview([item('kept',{decision:'keep'}),item('remaining')],{sessionStorage,performance:{getEntriesByType:()=>[{type:'navigate'}]}});
+ const indexedDB=mounted.environment.window.indexedDB;
+ const database=await new Promise(resolve=>{const request=indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;
+ database.transaction=function(name,...args){if(name==='leases')throw Error('Page torn down before release');return transaction.call(this,name,...args);};
+ mounted.environment.window.listeners.pagehide();await mounted.settle();
+ database.transaction=transaction;
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const reloaded=bundleEnvironment();
+ Object.assign(reloaded.environment.window,{indexedDB,sessionStorage,performance:{getEntriesByType:()=>[{type:'reload'}]}});
+ const owner=values.get('photos-swipe-lease-owner');
+ vm.runInNewContext(source,reloaded.environment);
+ await reloaded.nodes.get('launcher').onclick();
+ assert.equal(values.get('photos-swipe-lease-owner'),owner);
+ assert.doesNotMatch(reloaded.nodes.get('status').textContent,/busy in another tab/);
+ assert.match(reloaded.nodes.get('stats').textContent,/1 to review/);
+ assert.ok(reloaded.nodes.get('media').querySelector('img').src.startsWith(item('remaining').thumbUrl));
+ const copied=bundleEnvironment();
+ Object.assign(copied.environment.window,{indexedDB,sessionStorage,performance:{getEntriesByType:()=>[{type:'navigate'}]}});
+ vm.runInNewContext(source,copied.environment);
+ await copied.nodes.get('launcher').onclick();
+ assert.notEqual(values.get('photos-swipe-lease-owner'),owner);
+ assert.match(copied.nodes.get('status').textContent,/busy in another tab/);
+ await copied.nodes.get('close').onclick();await reloaded.nodes.get('close').onclick();
+});
+
+test('lease owner falls back to independent identities when session storage is unavailable',async()=>{
+ const {createLeaseOwner}=await import('../lib/userscript-db.mjs');
+ for(const window of [{},{performance:{getEntriesByType:()=>[{type:'reload'}]},get sessionStorage(){throw Error('Storage denied');}}]){
+  assert.notEqual(createLeaseOwner(window,webcrypto),createLeaseOwner(window,webcrypto));
+ }
+});
