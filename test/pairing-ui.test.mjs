@@ -38,11 +38,12 @@ const continuousLibraryGrowthBytes=2*1024;
 const layoutAndTrashReviewGrowthBytes=20*1024;
 const prePairingCurrentBytes=layoutAndTrashReviewGrowthBytes+continuousLibraryGrowthBytes+keyboardIsolationGrowthBytes+performanceGrowthBytes+centeredShellGrowthBytes+mobileLayoutGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const recoveryGrowthBudgetBytes=4*1024;
+const leaseLifecycleGrowthBudgetBytes=2*1024;
 const pairingServerErrorGrowthBytes=256;
 const pairingLeaseFixGrowthBytes=2048;
-const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
+const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+leaseLifecycleGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
-test('pairing bundle stays within the 15 KB pairing and 4 KB recovery growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
+test('pairing bundle stays within the 15 KB pairing, 4 KB recovery and 2 KB lease lifecycle growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
 test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
  const boundary=Buffer.alloc(prePairingCurrentBytes+pairingGrowthBudgetBytes,32);
  assertPairingBundleBudget(boundary);
@@ -138,7 +139,7 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  for(const [settings,receivingPanel] of [[{},undefined],[{}, {hidden:true}],[{onboardingDismissed:true},undefined],[{url:'https://worker.example',token:'synthetic-token'},undefined]]){
   let automaticOpens=0;
   const nodes={},node=id=>nodes[id]||(nodes[id]={});
-  const state={receivingPanel,$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){automaticOpens++;},renewLease:async()=>true,message(){},idleMessage:()=>''};
+  const state={pageActive:true,document:{hidden:false},sessionGeneration:0,leaseGeneration:0,leaseRecoveryPending:true,receivingPanel,$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){automaticOpens++;},renewLease:async()=>true,message(){},idleMessage:()=>''};
   await vm.runInNewContext('(async()=>{'+opening+'})()',state);
   assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');assert.equal(automaticOpens,settings.token||settings.onboardingDismissed||receivingPanel?0:1);
  }

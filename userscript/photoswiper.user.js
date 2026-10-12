@@ -276,6 +276,8 @@ async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},tar
  return {scanned,added,warning,limited,exhausted:state.exhausted};
 }
 
+const LEASE_HEARTBEAT_MS=4000;
+const LEASE_EXPIRY_MS=12000;
 async function openReviewDatabase(indexedDB) {
  const db=await new Promise((resolve,reject)=>{
   const request=indexedDB.open('photos-swipe-userscript',2);
@@ -307,8 +309,10 @@ async function openReviewDatabase(indexedDB) {
    if((current?.revision||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
    return {...state,revision:state.revision+1};
   }),
-  lease:(account,owner,release=false)=>transaction('leases',account,()=>{
-   return {owner,expires:release?0:Date.now()+90000};
+  lease:(account,owner,release=false)=>transaction('leases',account,current=>{
+   if(release&&current?.owner!==owner)return current;
+   if(current?.owner!==owner&&current?.expires>Date.now())throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+   return {owner,expires:release?0:Date.now()+LEASE_EXPIRY_MS};
   })
  };
 }
@@ -875,7 +879,7 @@ function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
   }).finally(()=>{running=null;});
   return running;
  }
- return {enqueue(){pending=true;return flush();},flush,get pending(){return pending;}};
+ return {enqueue(){pending=true;return flush();},flush,get flushing(){return !!running;},get pending(){return pending;}};
 }
 
 function mountPhotosSwipe(environment) {
@@ -1146,7 +1150,7 @@ function mountPhotosSwipe(environment) {
  function unlockPage(){if(!pageLock)return;const saved=pageLock;pageLock=null;document.documentElement.style.cssText=saved.html;document.body.style.cssText=saved.body;if(saved.created)saved.meta.remove();else if(saved.content===null)saved.meta.removeAttribute('content');else saved.meta.setAttribute('content',saved.content);window.scrollTo(saved.x,saved.y);}
  const $=id=>root.getElementById(id);
  let resume={},resumeWrite=Promise.resolve(),videoSavedAt=0;
- let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
+ let dbPromise,db,state=emptyReview(),identity,busy=false,inspected=null,focused=null,shown=null,generation=0,leaseError=null,leaseRecoveryPending=false,lockedAccount=null,syncEnabled=false,syncSummary='Sync off \u00b7 saved locally';
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const pairingNotice=document.createElement('p');settingsPanel.append(pairingNotice);
  const pairingPromise=createPairingStore({GM:environment.GM,database,crypto:environment.crypto}).then(async store=>{
@@ -1192,6 +1196,7 @@ function mountPhotosSwipe(environment) {
   })();
   await activeOperation;activeOperation=null;
  };
+ let pageActive=true,suspendingPromise=null,resumeOpening=false;
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
@@ -1224,9 +1229,12 @@ function mountPhotosSwipe(environment) {
  function persistResume(){if(!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value=structuredClone(resume);resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
  function captureVideo(){const video=$('media').querySelector('video');if(video&&video.dataset.resumeReady!=='pending'&&shown&&Number.isFinite(video.currentTime)){resume={...resume,video:{key:shown,time:video.currentTime}};persistResume();}}
  async function call(operation,args={}) {
+  if(!pageActive||document.hidden)throw Error('Session changed. Close and reopen Photos Swipe.');
   if(leaseError)throw leaseError;
+  const token=leaseGeneration;
   const result=await rawCall(operation,{...args,...(identity?{account:identity.account}:{})});
   if(!result.ok)throw Error(result.error);
+  if(!pageActive||document.hidden||token!==leaseGeneration)throw Error('Session changed. Close and reopen Photos Swipe.');
   if(leaseError)throw leaseError;
   return result.data;
  }
@@ -1250,18 +1258,19 @@ function mountPhotosSwipe(environment) {
  async function assertSaveAccount(){
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
   await assertAccount();
+  try{await db.lease(identity.account,owner);}catch(error){lockedAccount=null;leaseError=error;startRenewal();message(error.message);throw error;}
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
  function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer)return;
-  leaseTimer=setInterval(()=>{refreshLease();},20000);
+  leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
   leaseTimer?.unref?.();
  }
  async function renewLease(){
   const token=leaseGeneration,account=identity?.account;
-  if(!account)return false;
+  if(!account||!pageActive||document.hidden)return false;
   try{
    await assertAccount();
    if(token!==leaseGeneration||account!==identity?.account)return false;
@@ -1270,19 +1279,21 @@ function mountPhotosSwipe(environment) {
    if(token!==leaseGeneration||account!==identity?.account)return false;
    lockedAccount=account;leaseError=null;startRenewal();return true;
   }catch(error){
-   if(token===leaseGeneration){leaseError=error;message(error.message);}
+   if(token===leaseGeneration){lockedAccount=null;leaseError=error;message(error.message);startRenewal();}
    return false;
   }finally{if(token===leaseGeneration)acquiringAccount=null;}
  }
  async function refreshLease(){
-  const token=leaseGeneration;
+  const token=leaseGeneration,recovering=leaseRecoveryPending||!!leaseError;
+  if(!pageActive||document.hidden||$('overlay').hidden||(recovering&&(busy||activeOperation)))return;
+  if(recovering)leaseRecoveryPending=true;
   if(!await renewLease()||token!==leaseGeneration)return;
+  if(recovering){if(closingPromise||$('overlay').hidden)return;await open();return;}
   writes.flush();refill();
-  if(++leaseTicks%3===0&&syncEnabled&&!busy&&!activeOperation&&!$('overlay').hidden)synchronize();
+  if(++leaseTicks%15===0&&syncEnabled&&!busy&&!activeOperation&&!$('overlay').hidden)synchronize();
  }
  async function recoverLease(){
   if(!identity)return true;
-  if(!leaseError&&lockedAccount){startRenewal();return true;}
   return renewLease();
  }
  async function withAccountLease(task) {
@@ -1555,8 +1566,10 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   try{await Promise.race([animation.finished,new Promise(resolve=>{timer=window.setTimeout(()=>{animation.finish();resolve();},350);})]);}catch{}finally{window.clearTimeout(timer);}
  }
  async function openSession() {
-  if(closingPromise)await closingPromise;
-  if(busy)return;
+  const requestedGeneration=leaseGeneration;
+  if(closingPromise){await closingPromise;if(requestedGeneration!==leaseGeneration)return;}
+  await suspendingPromise;
+  if(busy||!pageActive||document.hidden)return;
   await resumeWrite;preloader.clear();busy=true;controls();$('overlay').hidden=false;lockPage();$('launcher').hidden=true;buffer.clear();await syncRunning;
   const token=++leaseGeneration;
   try{
@@ -1576,6 +1589,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
    if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
    if(!await renewLease())return;
+   const sessionGeneration=leaseGeneration;
    if(!changed){
     await writes.flush();
     if(writes.pending){if(!writeConflict)message('Local changes are still pending. Close and reopen to retry saving.');return;}
@@ -1584,6 +1598,8 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    state=await db.read(identity.account);writeRevision=state.revision;persistedItems=state.items;
    resume=await db.resume(identity.account);$('filter').value=resume.filter||'all';$('sort').value=resume.sort||'original';reviewEvery.value=String(resume.reviewEvery||25);deleteMethod.value='trash';trashOptIn.checked=true;focused=resume.currentId||null;inspected=resume.inspected&&state.items.some(item=>item.mediaKey===focused)?focused:null;const missing=focused&&!state.items.some(item=>item.mediaKey===focused&&item.state==='active');if(missing){focused=null;inspected=null;}
    if(syncEnabled)await synchronize();
+   if(!pageActive||document.hidden||sessionGeneration!==leaseGeneration)return;
+   leaseRecoveryPending=false;
    message(missing?'Saved item is unavailable. Continuing with the next unreviewed item.':idleMessage());
   }catch(error){
    await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
@@ -1591,7 +1607,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  function open(){
   if(openingPromise)return openingPromise;
-  openingPromise=openSession().then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;});
+  openingPromise=openSession().then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageActive&&!document.hidden&&!$('overlay').hidden&&!closingPromise)open();}});
   return openingPromise;
  }
  async function closeSession(){
@@ -1658,15 +1674,23 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  const swipeFeedback=createSwipeFeedback({window,targets:[$('media'),$('swipe')],card:topCard,under:underCard,keep:stamps[0],remove:stamps[1],canSwipe:()=>!!current()&&!busy&&reviewPanel.hidden&&sheet.hidden&&!inspected&&!$('overlay').hidden&&Number($('zoom').value)<=1,onDecide:decide,playbackOnClick:true});
  $('overlay').addEventListener('dragstart',event=>event.preventDefault());
  $('media').addEventListener('dblclick',event=>{if(event.target.tagName!=='VIDEO')toggleEnlarge();});
+ function suspendPage(){
+  pageActive=false;leaseRecoveryPending=true;
+  clearInterval(leaseTimer);leaseTimer=null;
+  if(suspendingPromise)return suspendingPromise;
+  if(!writes.pending&&!writes.flushing)return releaseLease();
+  suspendingPromise=writes.flush().finally(()=>releaseLease()).finally(()=>{suspendingPromise=null;});
+  return suspendingPromise;
+ }
  function leavePage(){
-  releaseLease();
+  suspendPage();
   stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);
  }
  window.addEventListener('pagehide',leavePage);
  window.addEventListener('unload',leavePage);
  window.addEventListener('focus',()=>{if(identity&&!busy&&!$('overlay').hidden)synchronize();});
- document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){refreshLease();refreshStalePreviews();}});
- window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else{pageActive=true;if(openingPromise&&!$('overlay').hidden)resumeOpening=true;else if(leaseRecoveryPending&&!identity&&!$('overlay').hidden&&!closingPromise)open();if(identity&&!$('overlay').hidden){startRenewal();if(!busy&&!activeOperation){refreshLease();refreshStalePreviews();}}}});
+ window.addEventListener('pageshow',()=>{pageActive=true;if(!document.hidden&&!$('overlay').hidden){if(openingPromise)resumeOpening=true;return open();}});
  const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
  function editingFieldFocused(event){
   const editable=element=>['INPUT','SELECT','TEXTAREA'].includes(element?.tagName)||element?.isContentEditable;
