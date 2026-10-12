@@ -34,10 +34,11 @@ const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLeng
 const centeredShellGrowthBytes=12000;
 const prePairingCurrentBytes=performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const recoveryGrowthBudgetBytes=4*1024;
+const leaseLifecycleGrowthBudgetBytes=2*1024;
 const pairingServerErrorGrowthBytes=256;
-const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes;
+const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+leaseLifecycleGrowthBudgetBytes+pairingServerErrorGrowthBytes;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
-test('pairing bundle stays within the 15 KB pairing and 4 KB recovery growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
+test('pairing bundle stays within the 15 KB pairing, 4 KB recovery and 2 KB lease lifecycle growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
 test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
  const boundary=Buffer.alloc(prePairingCurrentBytes+pairingGrowthBudgetBytes,32);
  assertPairingBundleBudget(boundary);
