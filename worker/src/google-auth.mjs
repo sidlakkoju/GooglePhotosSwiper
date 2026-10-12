@@ -31,13 +31,13 @@ export async function googleAuthRequest(request,env){
   const device=await authenticate(request,env);if(request.headers.has('Authorization')&&!device)return json({error:'Unauthorized'},401);
   const mapping=device?await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(device.id).first():null;
   await db.prepare('DELETE FROM google_pending WHERE expires_at <= ?').bind(now).run();
-  const nonce=random();await db.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,space,name,platform,login_hint,source_scope) VALUES (?,?,?,?,?,?,?,?)').bind(await hash(value.state),nonce,now+300,device?(mapping?.space||'legacy'):null,value.name,value.platform,typeof value.loginHint==='string'&&value.loginHint.length<=254?value.loginHint:null,typeof value.sourceScope==='string'&&/^[A-Za-z0-9_-]{1,256}$/.test(value.sourceScope)?value.sourceScope:'default').run();
+  const nonce=random();await db.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,space,name,platform,login_hint,source_scope,source_device) VALUES (?,?,?,?,?,?,?,?,?)').bind(await hash(value.state),nonce,now+300,device?(mapping?.space||'legacy'):null,value.name,value.platform,typeof value.loginHint==='string'&&value.loginHint.length<=254?value.loginHint:null,typeof value.sourceScope==='string'&&/^[A-Za-z0-9_-]{1,256}$/.test(value.sourceScope)?value.sourceScope:'default',device?.id||null).run();
   return json({url:syncOrigin+'/auth/start?state='+value.state});
  }
  const state=url.searchParams.get('state');
  if(url.pathname==='/auth/start'&&request.method==='GET'){
   const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(await hash(state||''),now).first();if(!pending)return json({error:'Invalid state'},400);
-  const script=`google.accounts.id.initialize({client_id:${inlineJSON(googleClientId)},nonce:${inlineJSON(pending.nonce)},login_hint:${inlineJSON(pending.login_hint)},auto_select:false,callback:async result=>{const response=await fetch('/auth/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:${inlineJSON(state)},credential:result.credential})});document.getElementById('status').textContent=response.ok?'Signed in. Return to Photos Swipe.':'Sign-in failed. Please try again.';}});google.accounts.id.renderButton(document.getElementById('button'),{theme:'outline',size:'large'});`;
+  const script=`google.accounts.id.initialize({client_id:${inlineJSON(googleClientId)},nonce:${inlineJSON(pending.nonce)},login_hint:${inlineJSON(pending.login_hint)},auto_select:false,callback:async result=>{const response=await fetch('/auth/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:${inlineJSON(state)},credential:result.credential})});const value=await response.json();document.getElementById('status').textContent=response.ok?'Copy this sign-in code into Photos Swipe: '+value.code:'Sign-in failed. Please try again.';}});google.accounts.id.renderButton(document.getElementById('button'),{theme:'outline',size:'large'});`;
   return new Response(`<html><head><meta name="referrer" content="no-referrer"><title>Photos Swipe sign-in</title></head><body><h1>Sign in with Google</h1><div id="button"></div><p id="status"></p><script src="https://accounts.google.com/gsi/client"></script><script>${script}</script></body></html>`,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; script-src https://accounts.google.com 'sha256-"+btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(script)))))+"'; frame-src https://accounts.google.com; connect-src 'self' https://accounts.google.com; style-src https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'"}});
  }
  if(url.pathname==='/auth/complete'&&request.method==='POST'){
@@ -45,14 +45,27 @@ export async function googleAuthRequest(request,env){
   const value=await request.json(),digest=await hash(value.state||'');
   const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(digest,now).first();if(!pending)return json({error:'Invalid state'},400);
   const claims=await verifyGoogleToken(value.credential,pending.nonce,env.GOOGLE_FETCH||fetch);
-  const linked=pending.space?await db.prepare('SELECT sub FROM google_accounts WHERE space = ?').bind(pending.space).first():null;
+  const code=random();
   const accountSpace=crypto.randomUUID();
   const results=await db.batch([
-   db.prepare('UPDATE google_pending SET completed_at = ?, sub = ?, email = ? WHERE state_hash = ? AND completed_at IS NULL AND expires_at > ? RETURNING state_hash').bind(-1,claims.sub,claims.email||null,digest,now),
+   db.prepare('UPDATE google_pending SET completed_at = ?, sub = ?, email = ?, claim_hash = ? WHERE state_hash = ? AND completed_at IS NULL AND expires_at > ? RETURNING state_hash').bind(-1,claims.sub,claims.email||null,await hash(code),digest,now),
    db.prepare('INSERT OR IGNORE INTO google_accounts (sub,space,email) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM google_pending WHERE state_hash = ? AND sub = ?)').bind(claims.sub,accountSpace,claims.email||null,digest,claims.sub)
   ]);
   if(!results[0].results.length)return json({error:'State used'},400);
-  const account=await db.prepare('SELECT space FROM google_accounts WHERE sub = ?').bind(claims.sub).first();
+  await db.prepare('UPDATE google_pending SET completed_at = ? WHERE state_hash = ? AND completed_at = -1').bind(now,digest).run();
+  return json({code});
+ }
+ if(url.pathname==='/auth/claim'&&request.method==='POST'){
+  const value=await request.json(),digest=await hash(value.state||'');
+  if(typeof value.code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.code))throw Error('Invalid code');
+  const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND claim_hash = ? AND expires_at > ? AND claimed_at IS NULL AND completed_at >= 0').bind(digest,await hash(value.code),now).first();
+  if(!pending)throw Error('Invalid state');
+  const sourceDevice=pending.source_device?await authenticate(request,env):null;
+  if(pending.source_device&&sourceDevice?.id!==pending.source_device)return json({error:'Unauthorized'},401);
+  const linked=pending.space?await db.prepare('SELECT sub FROM google_accounts WHERE space = ?').bind(pending.space).first():null;
+  const account=await db.prepare('SELECT space FROM google_accounts WHERE sub = ?').bind(pending.sub).first();
+  const claimed=await db.prepare('UPDATE google_pending SET claimed_at = ? WHERE state_hash = ? AND expires_at > ? AND claimed_at IS NULL AND completed_at >= 0 RETURNING email').bind(now,digest,now).first();
+  if(!claimed)throw Error('Invalid state');
   if(pending.space&&!linked&&account.space!==pending.space){
    const source=pending.space==='legacy'?pending.source_scope:pending.space+':shared',target=account.space+':shared';
    const guardedSource="(SELECT ? WHERE EXISTS (SELECT 1 FROM google_space_links WHERE source = ? AND space = ?))";
@@ -66,17 +79,14 @@ export async function googleAuthRequest(request,env){
     db.prepare(`INSERT INTO device_spaces (device_id,space) SELECT d.id,? FROM devices d LEFT JOIN device_spaces s ON s.device_id = d.id WHERE COALESCE(s.space,'legacy') = ${guardedSource} ON CONFLICT(device_id) DO UPDATE SET space = excluded.space`).bind(account.space,pending.space,pending.space,account.space)
    ]);
   }
-  await db.prepare('UPDATE google_pending SET completed_at = ? WHERE state_hash = ? AND completed_at = -1').bind(now,digest).run();
-  return json({ok:true});
- }
- if(url.pathname==='/auth/claim'&&request.method==='POST'){
-  const value=await request.json(),digest=await hash(value.state||''),token=random(),id=crypto.randomUUID();
-  const results=await db.batch([
-   db.prepare('UPDATE google_pending SET claimed_at = ?, claim_device = ? WHERE state_hash = ? AND expires_at > ? AND claimed_at IS NULL AND completed_at >= 0 RETURNING email').bind(now,id,digest,now),
-   db.prepare('INSERT INTO devices (id,name,platform,token_hash,created_at,last_seen_at) SELECT ?,name,platform,?,?,? FROM google_pending WHERE state_hash = ? AND claim_device = ? AND NOT EXISTS (SELECT 1 FROM device_spaces WHERE device_id = ?)').bind(id,await hash(token),now,now,digest,id,id),
-   db.prepare('INSERT INTO device_spaces (device_id,space) SELECT ?,a.space FROM google_accounts a JOIN google_pending p ON p.sub = a.sub WHERE p.state_hash = ? AND p.claim_device = ?').bind(id,digest,id)
+  const mapping=sourceDevice?await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(sourceDevice.id).first():null;
+  const token=random(),id=sourceDevice&&mapping?.space===account.space?sourceDevice.id:crypto.randomUUID();
+  await db.batch([
+   db.prepare('UPDATE google_pending SET claim_device = ? WHERE state_hash = ?').bind(id,digest),
+   db.prepare('INSERT INTO devices (id,name,platform,token_hash,created_at,last_seen_at) SELECT ?,name,platform,?,?,? FROM google_pending WHERE state_hash = ? AND claim_device = ? ON CONFLICT(id) DO UPDATE SET token_hash = excluded.token_hash, last_seen_at = excluded.last_seen_at').bind(id,await hash(token),now,now,digest,id),
+   db.prepare('INSERT INTO device_spaces (device_id,space) SELECT ?,a.space FROM google_accounts a JOIN google_pending p ON p.sub = a.sub WHERE p.state_hash = ? AND p.claim_device = ? ON CONFLICT(device_id) DO UPDATE SET space = excluded.space').bind(id,digest,id)
   ]);
-  if(!results[0].results.length)throw Error('Invalid state');return json({token,deviceId:id,email:results[0].results[0].email});
+  return json({token,deviceId:id,email:claimed.email});
  }
  return json({error:'Not found'},404);
  }catch{return json({error:'Invalid or used sign-in state'},400);}

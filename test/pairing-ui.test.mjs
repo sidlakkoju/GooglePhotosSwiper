@@ -301,3 +301,22 @@ for(const outcome of ['success','failure'])test(`Close waits for settings pairin
   assert.equal(context.pairFeedback.textContent,'Offline');assert.deepEqual(syncTokens,['old-token']);
  }
 });
+
+test('Google sign-in waits for the browser code before privately claiming with the saved token',async()=>{
+ const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom(),requests=[],values=new Map();
+ let saved,opened;
+ const store={durable:true,settings:async()=>({token:'previous-token'}),saveSettings:async value=>saved=value};
+ const gm={setValue:async(key,value)=>values.set(key,value),getValue:async key=>values.get(key),deleteValue:async key=>values.delete(key),openInTab:url=>opened=url,xmlHttpRequest:options=>{requests.push(options);options.onload({status:200,responseText:JSON.stringify(options.url.endsWith('/session')?{url:'https://worker.example/auth/start'}:{token:'new-token',deviceId:'same-device'})});}};
+ const notice=elements.document.createElement('div'),button={};
+ const context={environment:{GM:gm,crypto},pairingPromise:Promise.resolve(store),googleSignIn:button,googleSettings:{},window:{navigator:{}},document:elements.document,pairingNotice:notice,identity:{account:'scope'},btoa,Uint8Array,syncClient:{configure(){}},onboarding:{},syncLocal:{},showSyncAccount(){},synchronize:async()=>{}};
+ const start=ui.indexOf(' const signInGoogle=async()=>{'),end=ui.indexOf(' const clearCredentials=',start);
+ vm.runInNewContext(ui.slice(start,end),context);
+ const pending=button.onclick();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(opened,'https://worker.example/auth/start');assert.equal(requests.length,1);
+ const input=notice.children[0],submit=notice.children[1];
+ input.remove=()=>{};submit.remove=()=>{};input.value='browser-only-code';submit.onclick();
+ await pending;
+ assert.equal(requests.length,2);assert.equal(requests[1].headers.Authorization,'Bearer previous-token');
+ assert.equal(JSON.parse(requests[1].data).code,'browser-only-code');assert.equal(saved.token,'new-token');
+});

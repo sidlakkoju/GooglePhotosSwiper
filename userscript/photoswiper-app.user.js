@@ -1301,18 +1301,19 @@ function mountPhotosSwipe(environment) {
    const session=await privateRequest('/auth/session',{state,name:window.navigator?.userAgent?.includes('iPhone')?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token);
    if(session.status!==200)throw Error('Could not start Google sign-in');
    gm.openInTab(session.value.url,{active:true,insert:true});
-   pairingNotice.textContent='Complete Google sign-in in the new tab, then return here.';
-   const deadline=Date.now()+300000;
-   while(Date.now()<deadline){
-    await new Promise(resolve=>environment.setTimeout(resolve,2000));
-    if(await gm.getValue('photos-swipe-google-state')!==state)throw Error('Sign-in cancelled');
-    const claim=await privateRequest('/auth/claim',{state});
-    if(claim.status!==200)continue;
-    await store.saveSettings({url:origin,...claim.value,onboardingDismissed:true});
-    await gm.deleteValue('photos-swipe-google-state');
-    syncClient.configure({url:origin,...claim.value});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(claim.value);await synchronize();return;
-   }
-   throw Error('Sign-in expired. Try again.');
+   pairingNotice.textContent='Complete Google sign-in in the new tab, then paste its sign-in code here.';
+   const code=await new Promise(resolve=>{
+    const input=document.createElement('input'),submit=document.createElement('button');
+    input.placeholder='Sign-in code';input.setAttribute('aria-label','Sign-in code');submit.textContent='Finish sign-in';
+    pairingNotice.append(input,submit);submit.onclick=()=>{const value=input.value.trim();if(value){input.remove();submit.remove();resolve(value);}};
+   });
+   if(await gm.getValue('photos-swipe-google-state')!==state)throw Error('Sign-in cancelled');
+   const claim=await privateRequest('/auth/claim',{state,code},previous.token);
+   if(claim.status!==200)throw Error('Invalid or expired sign-in code. Try again.');
+   await store.saveSettings({url:origin,...claim.value,onboardingDismissed:true});
+   await gm.deleteValue('photos-swipe-google-state');
+   syncClient.configure({url:origin,...claim.value});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(claim.value);await synchronize();return;
+
   }catch(error){pairingNotice.textContent=error.message;}finally{await gm.deleteValue('photos-swipe-google-state');googleSignIn.disabled=false;googleSettings.disabled=false;}
  };
  googleSignIn.onclick=signInGoogle;googleSettings.onclick=signInGoogle;

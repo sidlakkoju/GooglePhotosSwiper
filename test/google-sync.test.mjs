@@ -19,8 +19,8 @@ const request=(env,path,value,bearer)=>googleAuthRequest(new Request(syncOrigin+
 async function signIn(env,state,bearer,sub='account-one'){
  assert.equal((await request(env,'/auth/session',{state,name:'Test device',platform:'test'},bearer)).status,200);
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
- assert.equal((await request(env,'/auth/complete',{state,credential:await token(pending.nonce,{sub})})).status,200);
- const claim=await request(env,'/auth/claim',{state});assert.equal(claim.status,200);return claim.json();
+ const complete=await request(env,'/auth/complete',{state,credential:await token(pending.nonce,{sub})});assert.equal(complete.status,200);const {code}=await complete.json();
+ const claim=await request(env,'/auth/claim',{state,code},bearer);assert.equal(claim.status,200);return claim.json();
 }
 test('Google verification accepts only signed RS256 tokens with correct audience, issuer, expiry and nonce',async()=>{
  assert.equal((await verifyGoogleToken(await token('nonce'),'nonce',fetchKeys)).sub,'account-one');
@@ -33,20 +33,20 @@ test('one-time Google claims share a sub space, isolate other accounts and prese
  const a=await signIn(env,'a'.repeat(43),'legacy-test'),b=await signIn(env,'b'.repeat(43)),c=await signIn(env,'c'.repeat(43),undefined,'account-two');
  assert.equal((await request(env,'/auth/claim',{state:'a'.repeat(43)})).status,400);
  assert.equal((await request(env,'/auth/complete',{state:'a'.repeat(43),credential:await token('unused')})).status,400);
- assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,4);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,3);
  const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
  await api(a,'decisions/photo?scope=first','PUT',{decision:'remove'});
  await api(b,'decisions/photo?scope=second','PUT',{decision:'keep'});
- assert.equal((await (await api(b,'state?scope=first')).json()).decisions[0].decision,'remove');
+ assert.equal((await (await api(b,'state?scope=first')).json()).decisions[0].decision,'keep');
  assert.equal((await (await api(c,'state?scope=first')).json()).decisions.length,0);
  assert.equal((await (await api(c,'devices')).json()).devices.length,1);
  const pair=await (await api(a,'pair/start','POST')).json();
  const response=await syncRequest(new Request(syncOrigin+'/api/pair/claim',{method:'POST',body:JSON.stringify({short:pair.short,name:'Backup',platform:'test'})}),env);
  assert.equal(response.status,200);const backup=await response.json();
- assert.equal((await (await api(backup,'state?scope=first')).json()).decisions[0].decision,'remove');
+ assert.equal((await (await api(backup,'state?scope=first')).json()).decisions[0].decision,'keep');
  assert.equal((await api(b,'decisions/photo?scope=first','DELETE')).status,200);
- assert.equal((await (await api(a,'state?scope=first')).json()).decisions.length,1);
- assert.equal((await (await api(a,'trash-check?scope=first','POST',{ids:['photo']})).json()).safe,true);
+ assert.equal((await (await api(a,'state?scope=first')).json()).decisions.length,0);
+ assert.equal((await (await api(a,'trash-check?scope=first','POST',{ids:['photo']})).json()).safe,false);
  assert.equal((await (await api(c,'trash-check','POST',{ids:['photo']})).json()).safe,false);
 });
 test('Google migration is additive and safe to repeat without changing existing data',()=>{
@@ -66,8 +66,8 @@ test('two clients poll accepted per-photo decisions and retain only their own un
  let two=await second.sync('photos-two',initial(),save);
  assert.equal(two.items[0].decision,'remove');assert.equal(reviewDeck(two).length,0);assert.equal(two.history.length,0);assert.equal(one.history.length,1);
  two=await second.sync('photos-two',{...two,items:[{...two.items[0],decision:'keep'}],syncPending:{photo:'keep'}},save);
- assert.equal(two.items[0].decision,'remove');
- const version=env.DB.sqlite.prepare('SELECT device_id,updated_at FROM decision_versions').get();assert.equal(version.device_id,a.deviceId);assert.ok(version.updated_at>0);
+ assert.equal(two.items[0].decision,'keep');
+ const version=env.DB.sqlite.prepare('SELECT device_id,updated_at FROM decision_versions').get();assert.equal(version.device_id,b.deviceId);assert.ok(version.updated_at>0);
  const scope=env.DB.sqlite.prepare('SELECT scope FROM decisions').get().scope;
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions WHERE scope = ?').get(scope).n,1);
 });
@@ -115,10 +115,10 @@ test('linking a hashed Photos scope preserves shared and per-device undo and per
  await api('legacy-test','undo','PUT',{history:[entry,ownEntry]});
  await request(env,'/auth/session',{state,name:'Linked',platform:'test',sourceScope:scope},'legacy-test');
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
- assert.equal((await request(env,'/auth/complete',{state,credential:await token(pending.nonce)})).status,200);
- const claim=await request(env,'/auth/claim',{state});assert.equal(claim.status,200);const linked=await claim.json();
+ const complete=await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});assert.equal(complete.status,200);const {code}=await complete.json();
+ const claim=await request(env,'/auth/claim',{state,code},'legacy-test');assert.equal(claim.status,200);const linked=await claim.json();
  assert.deepEqual((await (await api('legacy-test','state')).json()).history,[entry,ownEntry]);
- assert.deepEqual((await (await api(linked.token,'state')).json()).history,[entry]);
+ assert.deepEqual((await (await api(linked.token,'state')).json()).history,[entry,ownEntry]);
  const mapping=env.DB.sqlite.prepare('SELECT space FROM device_spaces WHERE device_id = ?').get(device.id);
  assert.deepEqual(JSON.parse(env.DB.sqlite.prepare('SELECT history FROM review_state WHERE scope = ?').get(mapping.space+':shared:device:'+device.id).history),[entry,ownEntry]);
  await api(linked.token,'decisions','PUT',{decisions:[{id:'old',decision:null}]});
@@ -136,8 +136,55 @@ test('overlapping paired sign-ins cannot copy a legacy library to two Google acc
  const credentials=await Promise.all(states.map(async(state,index)=>{const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();return token(pending.nonce,{sub:'overlap-'+index});}));
  const responses=await Promise.all(states.map((state,index)=>request(env,'/auth/complete',{state,credential:credentials[index]})));
  assert.deepEqual(responses.map(response=>response.status),[200,200]);
- const claims=await Promise.all(states.map(async state=>(await request(env,'/auth/claim',{state})).json()));
+ const codes=await Promise.all(responses.map(response=>response.json()));
+ const claims=await Promise.all(states.map(async(state,index)=>(await request(env,'/auth/claim',{state,code:codes[index].code},'legacy-test')).json()));
  const libraries=await Promise.all(claims.map(async device=>(await syncRequest(new Request(syncOrigin+'/api/state',{headers:{Authorization:'Bearer '+device.token}}),env)).json()));
  assert.deepEqual(libraries.map(library=>library.decisions.length).sort(),[0,1]);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_space_links').get().n,1);
+});
+
+test('a forwarded sign-in link cannot claim or link the victim account using state alone',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='m'.repeat(43);
+ await syncRequest(new Request(syncOrigin+'/api/decisions/private',{method:'PUT',headers:{Authorization:'Bearer legacy-test'},body:JSON.stringify({decision:'remove'})}),env);
+ await request(env,'/auth/session',{state,name:'Attacker',platform:'test'},'legacy-test');
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ const completion=await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
+ const {code}=await completion.json();
+ for(const value of [{state},{state,code:'x'.repeat(43)}])assert.equal((await request(env,'/auth/claim',value,'legacy-test')).status,400);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_space_links').get().n,0);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM device_spaces').get().n,0);
+ assert.equal((await request(env,'/auth/claim',{state,code})).status,401);
+ const claims=await Promise.all([request(env,'/auth/claim',{state,code},'legacy-test'),request(env,'/auth/claim',{state,code},'legacy-test')]);
+ assert.deepEqual(claims.map(response=>response.status).sort(),[200,400]);
+ const device=await claims.find(response=>response.status===200).json();
+ assert.equal((await syncRequest(new Request(syncOrigin+'/api/state',{headers:{Authorization:'Bearer '+device.token}}),env)).status,200);
+});
+
+test('linking and repeated Google sign-in preserve ownership and undo-to-undecided',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'};
+ const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
+ await api('legacy-test','decisions/old','PUT',{decision:'remove'});
+ const linked=await signIn(env,'n'.repeat(43),'legacy-test');
+ assert.equal(linked.deviceId,'legacy');
+ assert.equal(env.DB.sqlite.prepare('SELECT device_id FROM decision_versions WHERE scope LIKE ?').get('%:shared').device_id,linked.deviceId);
+ await api(linked.token,'decisions/old','DELETE');
+ assert.deepEqual((await (await api(linked.token,'state')).json()).decisions,[]);
+ await api(linked.token,'decisions/new','PUT',{decision:'remove'});
+ const again=await signIn(env,'o'.repeat(43),linked.token);
+ assert.equal(again.deviceId,linked.deviceId);
+ await api(again.token,'decisions','PUT',{decisions:[{id:'new',decision:null}]});
+ assert.deepEqual((await (await api(again.token,'state')).json()).decisions,[]);
+ assert.equal((await (await api(again.token,'trash-check','POST',{ids:['new']})).json()).safe,false);
+});
+
+test('Keep and undo-to-keep replace synced removes through both write endpoints',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},device=await signIn(env,'p'.repeat(43));
+ const api=(path,method,value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},body:JSON.stringify(value)}),env);
+ for(const batch of [false,true]){
+  await api('decisions/photo','PUT',{decision:'remove'});
+  const response=await api(batch?'decisions':'decisions/photo','PUT',batch?{decisions:[{id:'photo',decision:'keep'}]}:{decision:'keep'});
+  assert.equal(response.status,200);
+  assert.equal((await (await api('trash-check','POST',{ids:['photo']})).json()).safe,false);
+  assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions').get().decision,'keep');
+ }
 });

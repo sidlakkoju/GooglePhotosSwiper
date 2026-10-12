@@ -139,7 +139,7 @@ test('first sync backfills decisions after unrelated saves and preserves pending
  state=markSyncChanges(state,{...state,cursor:'next',albumKey:'album'});
  assert.equal(state.syncDirty,false);
  state=await client.sync('default',state,async value=>value);
- assert.deepEqual(state.syncDecisions,{conflict:'remove',missing:'remove',edited:'remove'});
+ assert.deepEqual(state.syncDecisions,{conflict:'keep',missing:'remove',edited:'remove'});
  assert.equal(state.items.find(item=>item.mediaKey==='deleted').decision,null);
  assert.equal(state.items.find(item=>item.mediaKey==='edited').decision,'remove');
  assert.deepEqual(state.history,[remoteEntry]);
@@ -195,8 +195,8 @@ test('empty pending maps after offline cursor saves still backfill existing deci
  assert.equal(state.items[0].decision,'keep');
  offline=false;
  state=await client.sync('default',state,async value=>value);
- assert.equal(state.syncDecisions.item,'remove');
- assert.equal(state.items[0].decision,'remove');
+ assert.equal(state.syncDecisions.item,'keep');
+ assert.equal(state.items[0].decision,'keep');
 });
 
 test('ten decisions push as one atomic batch without a state pull',async()=>{
