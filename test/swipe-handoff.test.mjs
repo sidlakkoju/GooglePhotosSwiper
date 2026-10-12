@@ -126,7 +126,7 @@ function userscriptDecisionFixture({busy=false,inspection=false,fail=false,delay
  const decisions=[],writes=[];
  let finish,startTask;
  const waiting=new Promise(resolve=>{finish=resolve;}),taskReady=new Promise(resolve=>{startTask=resolve;});
- const context=vm.createContext({identity:{account:'synthetic'},reviewPanel:{hidden:true},sheet:{hidden:true},$:()=>({hidden:false}),leaseError:null,busy,inspected:inspection?'first':null,focused:null,previousKey:null,swipeAt:null,window:{performance:{mark(){},now:()=>0}},state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({})});
+ const context=vm.createContext({identity:{account:'synthetic'},reviewPanel:{hidden:true},sheet:{hidden:true},$:()=>({hidden:false}),leaseError:null,otherTab:false,busy,inspected:inspection?'first':null,focused:null,previousKey:null,swipeAt:null,window:{performance:{mark(){},now:()=>0}},state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({})});
  const queue=createWriteQueue({snapshot:()=>context.state,write:async next=>{if(delayTask)await taskReady;writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},committed(){}});
  context.apply=next=>{context.state=next;context.render();queue.enqueue();};
  const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function undo(',start);

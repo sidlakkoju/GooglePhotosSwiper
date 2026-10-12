@@ -986,6 +986,47 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
+test('opening with sync pauses if another tab takes ownership during sync',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ let finishTrash,trashStarted;
+ const started=new Promise(resolve=>{trashStarted=resolve;});
+ const pendingTrash=new Promise(resolve=>{finishTrash=resolve;});
+ const first=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],{confirm:()=>true,fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='XwAOJf'){trashStarted();await pendingTrash;}
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['a',null,null,'stable']],null])};
+ }});
+ const db=await openReviewDatabase(first.environment.window.indexedDB);
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;second.environment.AbortSignal=AbortSignal;
+ let syncCalls=0,finishSync,syncStarted;
+ const syncing=new Promise(resolve=>{syncStarted=resolve;});
+ const pendingSync=new Promise(resolve=>{finishSync=resolve;});
+ second.environment.window.fetch=async url=>{
+  assert.equal(new URL(url).origin,'https://sync.example');syncCalls++;syncStarted();await pendingSync;
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ first.nodes.get('trash-opt-in').checked=true;first.nodes.get('trash-opt-in').onchange();
+ const moving=first.click('move-trash');await started;
+ assert.equal(syncCalls,0);
+ finishTrash();await moving;await first.nodes.get('close').onclick();
+ const completed=await first.read();
+ assert.equal(completed.items[0].state,'in_trash');
+ assert.equal(first.nodes.get('status').textContent,'Verified 1 items in Trash.');
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const opening=second.nodes.get('launcher').onclick();await syncing;
+ await db.lease(account,(await db.readLease(account)).owner,true);
+ await db.lease(account,'other-tab');
+ assert.equal((await db.lease(account,'other-tab')).owner,'other-tab');
+ assert.deepEqual(await first.read(),completed);
+ finishSync();await opening;
+ assert.deepEqual(await first.read(),completed);
+ assert.equal(second.nodes.get('status').textContent,'Open in another tab');
+ assert.equal((await first.read()).items[0].state,'in_trash');
+ assert.equal((await db.lease(account,'other-tab')).owner,'other-tab');await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+});
+
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
  const stats=mounted.nodes.get('stats').textContent;
@@ -1339,6 +1380,65 @@ test('a clean tab pauses for another owner and Use here reloads saved decisions'
   await second.nodes.get('close').onclick();assert.equal((await db.readLease(account)).owner,acquired.owner);
   await first.nodes.get('close').onclick();
  }
+});
+
+test('a paused tab rejects swipes without hiding the current card',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,(await db.readLease(account)).owner,true);
+ await db.lease(account,'other-tab');
+ mounted.environment.document.listeners.visibilitychange();await mounted.settle();
+ const media=mounted.nodes.get('media'),card=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card');
+ media.listeners.pointerdown({isPrimary:true,button:0,target:{tagName:'IMG'},pointerId:1,clientX:0,clientY:0});
+ media.listeners.pointerup({pointerId:1,clientX:150,clientY:0});
+ assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+ assert.notEqual(card.style.visibility,'hidden');assert.match(mounted.nodes.get('caption').textContent,/^a ·/);
+ assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('pausing invalidates a renewal waiting for its account check',async()=>{
+ let finish,started,delay=false;
+ const checking=new Promise(resolve=>{started=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  const result=await webcrypto.subtle.digest(...args);
+  if(delay){delay=false;started();await new Promise(resolve=>{finish=resolve;});}
+  return result;
+ }}};
+ const mounted=await mountedReview([item('a')],{crypto});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ delay=true;mounted.environment.document.listeners.visibilitychange();await checking;
+ await db.lease(account,(await db.readLease(account)).owner,true);
+ await db.lease(account,'other-tab');
+ mounted.environment.document.listeners.visibilitychange();await mounted.settle();
+ finish();await mounted.settle();
+ assert.equal((await db.readLease(account)).owner,'other-tab');
+ assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+ mounted.nodes.get('keep').onclick();assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('focus pauses an in-flight sync before it can save a stale revision',async()=>{
+ let finish,started,delay=false;
+ const syncing=new Promise(resolve=>{started=resolve;});
+ const mounted=await mountedReview([item('a')],{fetch:async()=>{
+  if(delay){delay=false;started();await new Promise(resolve=>{finish=resolve;});}
+  return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
+ }},{url:'https://sync.example',token:'synthetic-token'});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ delay=true;const focusing=mounted.environment.window.listeners.focus();await syncing;
+ await db.lease(account,(await db.readLease(account)).owner,true);
+ await db.lease(account,'other-tab');await db.save(account,{...await db.read(account),cursor:'other-tab'});
+ const saved=await db.read(account);
+ await mounted.environment.window.listeners.focus();
+ assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+ finish();await focusing;
+ assert.deepEqual(await db.read(account),saved);assert.equal((await db.readLease(account)).owner,'other-tab');
+ assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+ await mounted.nodes.get('close').onclick();
 });
 
 test('revision conflicts stay visible and do not retry the stale snapshot',async()=>{
