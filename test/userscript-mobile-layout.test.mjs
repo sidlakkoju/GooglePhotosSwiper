@@ -17,6 +17,12 @@ test('userscript status keeps a bounded layout slot even when empty',()=>{
  assert.match(source,/\.counter\{[^}]*white-space:nowrap/);
 });
 
+test('settings Done uses a capsule while main header icons stay circular',()=>{
+ assert.match(source,/\.content > header button\{position:relative;width:36px;height:36px;min-height:36px;padding:8px;border-radius:50%;flex:none\}/);
+ assert.doesNotMatch(source,/\.content header button\{[^}]*width:36px/);
+ assert.match(source,/\.content \.settings-header button\{width:auto;min-width:44px;height:36px;min-height:36px;padding:0 14px;border-radius:18px\}/);
+});
+
 test('iPhone capsule stays centered without clipping and status updates do not add window scrolling',{skip:!chrome||probe.status!==0},async()=>{
  const dir=await mkdtemp(join(tmpdir(),'userscript-mobile-'));
  try{
@@ -113,9 +119,14 @@ test('settings header keeps Done visible and clickable while the sheet scrolls',
    overlayElement.hidden=false;
    gear.click();
    const rect=element=>element.getBoundingClientRect();
+   const doneStyle=getComputedStyle(sheetClose);
+   const label=document.createRange();label.selectNodeContents(sheetClose);
+   const textBounds=label.getBoundingClientRect(),doneBounds=rect(sheetClose);
+   const capsule=doneBounds.width>36&&doneBounds.height===36&&doneStyle.minWidth==='44px'&&doneStyle.borderRadius==='18px'&&doneStyle.paddingLeft==='14px'&&doneStyle.paddingRight==='14px'&&textBounds.left>=doneBounds.left+14&&textBounds.right<=doneBounds.right-14&&sheetClose.scrollWidth<=sheetClose.clientWidth;
+   const circularIcons=[gear,closeElement].every(button=>rect(button).width===36&&rect(button).height===36&&getComputedStyle(button).borderRadius==='50%');
    const initialTop=rect(sheetClose).top;
    const initialContentTop=rect(settingsPanel).top;
-   const results={headerContainsDone:sheetClose.parentElement===sheetHeader,headerContainsTitle:sheetTitle.parentElement===sheetHeader,sticky:getComputedStyle(sheetHeader).position==='sticky',snapshots:[]};
+   const results={capsule,circularIcons,headerContainsDone:sheetClose.parentElement===sheetHeader,headerContainsTitle:sheetTitle.parentElement===sheetHeader,sticky:getComputedStyle(sheetHeader).position==='sticky',snapshots:[]};
    for(const fraction of [0.5,1]){
     sheet.scrollTop=(sheet.scrollHeight-sheet.clientHeight)*fraction;
     const button=rect(sheetClose),header=rect(sheetHeader),bounds=rect(sheet);
@@ -126,14 +137,14 @@ test('settings header keeps Done visible and clickable while the sheet scrolls',
    results.focusReturned=root.activeElement===gear;
    document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script></body></html>`);
-  for(const [width,height] of [[1280,900],[393,852],[320,568]]){
+  for(const [width,height] of [[1280,800],[390,844],[393,852],[320,568]])for(const dark of [false,true]){
    const frame=join(dir,'frame.html');
    await writeFile(frame,`<!doctype html><iframe style="border:0;width:${width}px;height:${height}px" src="file://${page}"></iframe><script>document.querySelector('iframe').onload=event=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:event.target.contentDocument.querySelector('pre').textContent}));</script>`);
-   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files','--virtual-time-budget=1000','--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
+   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(dark?['--force-dark-mode']:[]),'--virtual-time-budget=1000','--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
    assert.equal(result.status,0,result.stderr);
    const values=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);
    const {snapshots,...checks}=values;
-   for(const snapshot of [checks,...snapshots])for(const [name,value] of Object.entries(snapshot))assert.equal(value,true,`${width}×${height}: ${name}`);
+   for(const snapshot of [checks,...snapshots])for(const [name,value] of Object.entries(snapshot))assert.equal(value,true,`${width}×${height}, dark=${dark}: ${name}`);
   }
  }finally{await rm(dir,{recursive:true,force:true});}
 });
