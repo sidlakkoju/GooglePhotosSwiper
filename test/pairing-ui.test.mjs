@@ -174,6 +174,21 @@ test('manual pairing code accepts only six ASCII digits on input',()=>{
  const elements=dom();
  const panel=receivePairingLink({...elements,manual:true,location:{hash:''},window:{navigator:{}}});
  const code=pairingField(panel,'pairing-short-code');
- assert.equal(code.inputmode,'numeric');assert.equal(code.pattern,'[0-9]{6}');assert.equal(code.maxlength,'6');assert.equal(code.autocomplete,'one-time-code');
+ assert.equal(code.inputmode,'numeric');assert.equal(code.pattern,'[0-9]{6}');assert.equal(code.maxlength,undefined);assert.equal(code.autocomplete,'one-time-code');
  for(const [value,expected] of [['12a 3-456','123456'],['123456789','123456'],['abc１２٣!',''],['000012','000012']]){code.value=value;code.oninput();assert.equal(code.value,expected);}
+});
+
+
+test('pasting a displayed pairing code preserves all six digits in the claim',async()=>{
+ for(const pasted of ['123 456','000 012','12a 3-456','123456789']){
+  const elements=dom();let body;
+  const panel=receivePairingLink({...elements,manual:true,location:{hash:''},window:{navigator:{}},fetch:async(url,options)=>{body=JSON.parse(options.body);return {ok:true,json:async()=>({token:'token'})};},saveSettings:async()=>{},onPaired:async()=>{}});
+  const code=pairingField(panel,'pairing-short-code');
+  const maximumLength=code.maxlength===undefined?Infinity:Number(code.maxlength);
+  code.value=pasted.slice(0,maximumLength);code.oninput();
+  const expected=pasted.replace(/[^0-9]/g,'').slice(0,6);
+  assert.equal(code.value,expected);
+  await pairingSubmit(panel).onclick();
+  assert.equal(body.short,expected);assert.equal(body.code,undefined);
+ }
 });
