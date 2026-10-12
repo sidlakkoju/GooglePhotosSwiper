@@ -1569,6 +1569,55 @@ test('a clean tab pauses for another owner and Use here reloads saved decisions'
  }
 });
 
+test('pausing dismisses settings and trash review so takeover and close remain reachable',async()=>{
+ for(const panel of ['settings','review']){
+  const mounted=await mountedReview([item('a',{decision:'remove'}),item('b')]);
+  mounted.nodes.get(panel).onclick();
+  const layer=mounted.nodes.get(panel==='settings'?'settings-sheet':'review-panel');
+  assert.equal(layer.hidden,false);
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await db.lease(account,'other-tab');
+  await mounted.environment.window.listeners.focus();
+  assert.equal(layer.hidden,true);assert.equal(mounted.nodes.get('close').disabled,undefined);
+  assert.equal(mounted.nodes.get('use-here').hidden,false);assert.equal(mounted.nodes.get('use-here').disabled,false);
+  await mounted.nodes.get('use-here').onclick();assert.equal(mounted.nodes.get('keep').disabled,false);
+  await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ }
+});
+
+test('a swipe queued during a clean lease read is saved on close',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,'other-tab');
+ const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const transaction=database.transaction;let finish,started,hold=true;
+ const reading=new Promise(resolve=>{started=resolve;});
+ database.transaction=function(name,...args){
+  const tx=transaction.call(this,name,...args);
+  if(name==='leases'&&hold){
+   hold=false;const objectStore=tx.objectStore;
+   tx.objectStore=()=>{
+    const store=objectStore();const get=store.get;
+    store.get=key=>{
+     const request=get(key);let handler;
+     Object.defineProperty(request,'onsuccess',{get:()=>()=>{started();finish=()=>handler();},set:value=>{handler=value;}});
+     return request;
+    };
+    return store;
+   };
+  }
+  return tx;
+ };
+ const focusing=mounted.environment.window.listeners.focus();await reading;
+ mounted.nodes.get('keep').onclick();finish();await focusing;
+ await mounted.nodes.get('close').onclick();
+ const saved=await db.read(account);
+ assert.equal(saved.items[0].decision,'keep');assert.equal(saved.history.at(-1).key,'a');
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/Open in another tab/);
+});
+
 test('a paused tab rejects swipes without hiding the current card',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
