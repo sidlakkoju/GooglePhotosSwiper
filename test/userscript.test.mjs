@@ -1400,6 +1400,40 @@ test('failed saves release the lease on close and retain pending decisions for r
  await mounted.nodes.get('launcher').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
  fault.failSave=false;await mounted.nodes.get('close').onclick();assert.equal((await db.read(account)).items[0].decision,'keep');await db.lease(account,'other-tab');
 });
+test('stale tabs do not publish decisions or undo history on the hidden sync timer or close',async()=>{
+ for(const trigger of ['timer','close']){
+  let scheduledSync;
+  const requests=[];
+  const mounted=await mountedReview([item('a'),item('b')],{
+   setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
+   clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
+   fetch:async(url,options)=>{
+    requests.push({url,options});
+    return {ok:true,json:async()=>new URL(url).pathname==='/api/progress'&&options.method==='PUT'?{items:JSON.parse(options.body).items}:{decisions:[],history:[],progress:{}}};
+   }
+  },{url:'https://sync.example',token:'synthetic-token'},{AbortSignal});
+  await mounted.click('keep');
+  assert.equal(typeof scheduledSync,'function');
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await db.lease(account,'other-tab');
+  const current=await db.read(account);
+  await db.save(account,{...current,items:current.items.map(row=>({...row,decision:'remove',revision:row.revision+1})),history:[{key:'a',decision:'remove',revision:2}]});
+  const saved=await db.read(account),lease=await db.readLease(account),before=requests.length;
+  if(trigger==='timer'){
+   mounted.environment.document.hidden=true;
+   mounted.environment.document.listeners.visibilitychange();
+   scheduledSync();
+   await waitForReview(()=>mounted.nodes.get('status').textContent==='Open in another tab');
+  }else await mounted.nodes.get('close').onclick();
+  assert.equal(requests.length,before);
+  assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+  assert.deepEqual(await db.read(account),saved);
+  assert.deepEqual(await db.readLease(account),lease);
+  await mounted.nodes.get('close').onclick();
+ }
+});
+
 test('a clean tab pauses for another owner and Use here reloads saved decisions',async()=>{
  for(const changed of [false,true]){
   const syncFetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
