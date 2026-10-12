@@ -10,11 +10,11 @@ function fixture(){
  const handlers={},buttons=[],classes=new Set();
  const video={tagName:'VIDEO',paused:true,muted:true,controls:false,plays:0,pauses:0,listeners:{},addEventListener(type,fn){this.listeners[type]=fn;},play(){this.plays++;this.paused=false;this.listeners.play?.();return Promise.resolve();},pause(){this.pauses++;this.paused=true;this.listeners.pause?.();}};
  const image={style:{}};
- const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,querySelector:tag=>tag==='video'?video:image,append:button=>buttons.push(button),addEventListener:(type,fn)=>handlers[type]=fn};
+ const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,setAttribute(key,value){this[key]=value;},querySelector:tag=>tag==='video'?video:image,append:button=>buttons.push(button),addEventListener:(type,fn)=>handlers[type]=fn};
  const card={style:{},classList:{contains:name=>classes.has(name),remove:name=>classes.delete(name),toggle(name,on){const value=on??!classes.has(name);if(value)classes.add(name);else classes.delete(name);return value;}}};
  const nodes={card,media:mediaElement,zoom:{value:'1'},enlarge:{}};
  const context=vm.createContext({mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector==='button'?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
- vm.runInContext(source.slice(source.indexOf(' function updateVideoControls()'),source.indexOf(' function render()')),context);
+ vm.runInContext(source.slice(source.indexOf(' function updateVideoControls()'),source.indexOf(' queue_detailsElement.addEventListener')),context);
  createSwipeFeedback({window:{},targets:[mediaElement],card,under:{style:{}},keep:{style:{}},remove:{style:{}},canSwipe:()=>false,onDecide(){},playbackOnClick:true});
  const click=target=>{target.onclick?.();handlers.click({target});};
  return {context,video,image,mediaElement,nodes,classes,buttons,click};

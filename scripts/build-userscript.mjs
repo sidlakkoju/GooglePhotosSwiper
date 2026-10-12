@@ -4,7 +4,7 @@ const metadata=`// ==UserScript==
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.25
+// @version 1.2.26
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -20,7 +20,7 @@ const metadata=`// ==UserScript==
 // ==/UserScript==
 `;
 const buildVersion=/^\/\/ @version (\S+)$/m.exec(metadata)[1];
-const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-settings','userscript-bridge','userscript-swipe','userscript-qr','userscript-pairing','userscript-preload','userscript-ui'];
+const modules=['userscript-api','userscript-core','userscript-db','userscript-sync','userscript-settings','userscript-bridge','userscript-swipe','userscript-qr','userscript-pairing','userscript-preload','userscript-performance','userscript-ui'];
 const sources=await Promise.all(modules.map(name=>readFile(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8')));
 const swipeSource=await readFile(new URL('../lib/swipe.mjs',import.meta.url),'utf8');
 sources.unshift(swipeSource);
@@ -39,7 +39,7 @@ const loaderURL='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loa
 const loaderMetadata=`// ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.25
+// @version 1.2.26
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content

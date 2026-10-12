@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {createWriteQueue} from '../lib/userscript-performance.mjs';
 import {readFile} from 'node:fs/promises';
 import {throwSwipe as throwPublicSwipe} from '../public/swipe.js';
 import {throwSwipe as throwUserscriptSwipe} from '../lib/swipe.mjs';
@@ -122,28 +123,29 @@ test('deck card reset cannot transition the next photo from the release offset',
 
 const userscriptSource=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
 function userscriptDecisionFixture({busy=false,inspection=false,fail=false,delayTask=false}={}){
- const decisions=[],writes=[],pendingDecisions=[];
+ const decisions=[],writes=[];
  let finish,startTask;
  const waiting=new Promise(resolve=>{finish=resolve;}),taskReady=new Promise(resolve=>{startTask=resolve;});
- let result;
- const context=vm.createContext({identity:{account:'synthetic'},$:()=>({hidden:false}),deferredReviewInputs:[],reviewingUndo:false,finishCardAnimation(){},busy,savingDecisions:false,inspected:inspection?'first':null,focused:null,pendingDecisions,state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({}),save:async next=>{writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},run:task=>{context.busy=true;result=(async()=>{try{if(delayTask)await taskReady;await task();}catch{}finally{pendingDecisions.length=0;context.savingDecisions=false;context.busy=false;context.render();}})();}});
- const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function applyUndo(',start);
+ const context=vm.createContext({identity:{account:'synthetic'},$:()=>({hidden:false}),leaseError:null,busy,inspected:inspection?'first':null,focused:null,previousKey:null,swipeAt:null,window:{performance:{mark(){},now:()=>0}},state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({})});
+ const queue=createWriteQueue({snapshot:()=>context.state,write:async next=>{if(delayTask)await taskReady;writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},committed(){}});
+ context.apply=next=>{context.state=next;context.render();queue.enqueue();};
+ const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function undo(',start);
  vm.runInContext(userscriptSource.slice(start,end),context);
- return {context,decisions,writes,finish,startTask,settle:()=>result};
+ return {context,decisions,writes,finish,startTask,settle:()=>queue.flush(),pending:()=>queue.pending};
 }
 for(const fail of [false,true])for(const delayTask of [false,true])test(`userscript advances before a ${delayTask?'delayed task and ':''}${fail?'failed':'successful'} save`,async()=>{
  const fixture=userscriptDecisionFixture({fail,delayTask}),{context,decisions,writes,finish,startTask}=fixture;
  let displayed='first';
- context.render=()=>{displayed=context.pendingDecisions.length?'next':fail?'first':'next';};
+ context.render=()=>{displayed=context.state.history.length?'next':'first';};
  context.decide('keep');
  assert.deepEqual(decisions,['keep']);
  assert.equal(displayed,'next');
- assert.deepEqual(writes,delayTask?[]:['save']);
+ assert.deepEqual(writes,[]);
  startTask();await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(writes,['save']);
  assert.equal(displayed,'next');
  finish();await fixture.settle();
- assert.equal(displayed,fail?'first':'next');
+ assert.equal(displayed,'next');assert.equal(fixture.pending(),fail);
 });
 test('userscript does not fly off a gesture rejected by busy state',()=>{
  const {context,decisions,writes}=userscriptDecisionFixture({busy:true});

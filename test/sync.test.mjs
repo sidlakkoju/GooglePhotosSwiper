@@ -199,6 +199,75 @@ test('empty pending maps after offline cursor saves still backfill existing deci
  assert.equal(state.items[0].decision,'keep');
 });
 
+test('ten decisions push as one atomic batch without a state pull',async()=>{
+ const e=env(),requests=[];
+ const client=createSyncClient({fetch:(url,options)=>{requests.push({url,options});return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const items=Array.from({length:10},(_,index)=>({mediaKey:`item-${index}`,decision:'keep'}));
+ const state={started:true,items,history:[],syncDecisions:{},syncPending:Object.fromEntries(items.map(item=>[item.mediaKey,item.decision]))};
+ const result=await client.sync('account',state,async value=>value,{pull:false});
+ assert.equal(requests.length,1);assert.equal(new URL(requests[0].url).pathname,'/api/decisions');
+ assert.equal(JSON.parse(requests[0].options.body).decisions.length,10);assert.deepEqual(result.syncPending,{});
+ assert.equal((await (await call(e,'state?scope=account')).json()).decisions.length,10);
+ const before=e.DB.sqlite.prepare('SELECT * FROM decisions').all();
+ assert.equal((await call(e,'decisions','PUT',{decisions:[{id:'valid',decision:'keep'},{id:'bad',decision:'trash'}]})).status,400);
+ assert.deepEqual(e.DB.sqlite.prepare('SELECT * FROM decisions').all(),before);
+ await call(e,'decisions?scope=account','PUT',{decisions:[{id:'item-0',decision:null}]});
+ assert.equal((await (await call(e,'state?scope=account')).json()).decisions.length,9);
+});
+
+test('concurrent sync merges remote decisions and undo history around a local swipe',async()=>{
+ const {mergeSyncResult}=await import('../lib/userscript-sync.mjs');
+ const snapshot={items:[{mediaKey:'local',decision:null,revision:0},{mediaKey:'remote',decision:null,revision:0}],history:[],syncDecisions:{},syncPending:{}};
+ const localEntry={key:'local',previous:null,decision:'keep',revision:1},remoteEntry={key:'remote',previous:null,decision:'remove',revision:4};
+ const current=markSyncChanges(snapshot,{...snapshot,items:[{...snapshot.items[0],decision:'keep',revision:1},snapshot.items[1]],history:[localEntry]});
+ const synced={...snapshot,items:[snapshot.items[0],{...snapshot.items[1],decision:'remove',revision:4}],history:[remoteEntry],syncDecisions:{remote:'remove'},syncDirty:false};
+ const merged=mergeSyncResult(current,snapshot,synced);
+ assert.deepEqual(merged.items.map(item=>item.decision),['keep','remove']);
+ assert.deepEqual(merged.history,[remoteEntry,localEntry]);assert.deepEqual(merged.syncPending,{local:'keep'});assert.equal(merged.syncDirty,true);
+ const e=env(),client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ await client.sync('default',merged,async value=>value,{pull:false});
+ assert.deepEqual((await (await call(e,'state')).json()).history,[remoteEntry,localEntry]);
+});
+test('large decision uploads fit count and byte limits and resume after partial failure',async()=>{
+ for(const long of [false,true]){
+  const e=env(),requests=[];let fail=true;
+  const client=createSyncClient({fetch:(url,options)=>{
+   if(new URL(url).pathname==='/api/decisions'){
+    requests.push(JSON.parse(options.body).decisions);
+    assert.ok(Buffer.byteLength(options.body)<=262144);assert.ok(requests.at(-1).length<=2000);
+    if(requests.length===2&&fail)return new Response('{}',{status:503});
+   }
+   return syncRequest(new Request(url,options),e);
+  }});
+  client.configure({url:'https://sync.example',token:'test-secret'});
+  const pending=Object.fromEntries(Array.from({length:2101},(_,index)=>[`${long?'x'.repeat(245):'item'}-${index}`,index===2100?null:'keep']));
+  let state={started:true,items:[],history:[],syncDecisions:{},syncPending:pending};
+  state=await client.sync('default',state,async value=>value,{pull:false});
+  assert.equal(Object.keys(state.syncPending).length,2101-requests[0].length);
+  fail=false;state=await client.sync('default',state,async value=>value,{pull:false});
+  assert.deepEqual(state.syncPending,{});assert.equal(e.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions').get().n,2100);
+  assert.equal(requests.at(-1).at(-1).decision,null);
+ }
+});
+
+test('partial batches retain history deletions until the undo upload succeeds',async()=>{
+ const e=env(),removed={key:'removed',previous:null,decision:'keep',revision:1},kept={key:'last',previous:null,decision:'remove',revision:1};
+ await call(e,'undo','PUT',{history:[removed]});
+ let batches=0,fail=true;
+ const client=createSyncClient({fetch:(url,options)=>{
+  if(new URL(url).pathname==='/api/decisions'&&++batches===2&&fail)return new Response('{}',{status:503});
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ let state={started:true,items:[],history:[kept],syncDecisions:{removed:'keep'},syncDirty:true,syncPending:{removed:null,...Object.fromEntries(Array.from({length:2000},(_,index)=>[`id-${index}`,'keep'])),last:'remove'}};
+ state=await client.sync('default',state,async value=>value);
+ assert.equal(Object.hasOwn(state.syncPending,'removed'),false);
+ fail=false;state=await client.sync('default',state,async value=>value);
+ assert.deepEqual(state.history,[kept]);assert.deepEqual((await (await call(e,'state')).json()).history,[kept]);
+});
+
 const claim=(e,value,ip='192.0.2.1')=>call(e,'pair/claim','POST',{name:'QA phone',platform:'test',...value},{Authorization:'','CF-Connecting-IP':ip});
 const start=async e=>{const response=await call(e,'pair/start','POST');assert.equal(response.status,200);return response.json();};
 const withToken=token=>({Authorization:`Bearer ${token}`});

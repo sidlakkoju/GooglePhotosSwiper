@@ -23,12 +23,13 @@ test('QR renderer includes a four-module white quiet zone',()=>{const elements=d
 const prePairingMainBytes=84973;
 const photoURLRefreshGrowthBytes=3194;
 const themeGrowthBytes=3078;
+const performanceGrowthBytes=76764-58137;
 const loaderPairingOnboardingGrowthBytes=701;
 const iosSwipeCancelGrowthBytes=200;
 const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
 const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
 const centeredShellGrowthBytes=12000;
-const prePairingCurrentBytes=centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
+const prePairingCurrentBytes=performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const pairingGrowthBudgetBytes=15*1024;
 function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
 test('pairing bundle stays within the 15 KB growth budget without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url)));});
@@ -123,11 +124,11 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  const card=context.card;
  assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
- const opening=ui.slice(ui.indexOf(' async function open()'),ui.indexOf(' function close()'));
- for(const settings of [{},{onboardingDismissed:true},{url:'https://worker.example',token:'private-token'}]){
-  const nodes={},node=id=>nodes[id]||(nodes[id]={focus(){}});
-  const state={resumeWrite:Promise.resolve(),resume:{},reviewEvery:{},deleteMethod:{},trashOptIn:{},focused:null,inspected:null,busy:false,preloader:{clear(){}},$:node,message(){},controls(){},render(){},refreshStalePreviews(){},rawCall:async()=>({ok:true,data:{account:'synthetic',label:'Synthetic'}}),identity:null,db:null,database:async()=>({read:async()=>({items:[],history:[]}),resume:async()=>({})}),state:null,stopMedia(){},pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,withAccountLease:async fn=>fn(),synchronize:async()=>{},idleMessage:()=>''};
-  vm.runInNewContext(opening+'\nglobalThis.openApp=open;',state);await state.openApp();
+ const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('  }catch(error)',ui.indexOf(' async function openSession()')));
+ for(const settings of [{},{onboardingDismissed:true},{url:'https://worker.example',token:'synthetic-token'}]){
+  const nodes={},node=id=>nodes[id]||(nodes[id]={});
+  const state={$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,message(){},idleMessage:()=>''};
+  await vm.runInNewContext('(async()=>{'+opening+'})()',state);
   assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');
  }
  let saved;
