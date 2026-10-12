@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {register} from 'node:module';
 
 register('./fixtures/worker-text-loader.mjs', import.meta.url);
-const {default: worker} = await import('../worker/src/index.mjs');
+const {default: worker,requiredLoaderVersion} = await import('../worker/src/index.mjs');
 const installURL = 'https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
 
 test('Worker publicly serves the exact built userscript with JavaScript and cache headers', async () => {
@@ -75,8 +75,10 @@ test('Worker publishes headerless app and matching live version with CORS and fr
  for(const path of ['/app.js','/version']){
   const response=await worker.fetch(new Request(new URL(path,installURL)));
   assert.equal(response.headers.get('Cache-Control'),'no-store');assert.equal(response.headers.get('Access-Control-Allow-Origin'),'*');assert.equal(response.headers.get('X-Photoswiper-Version'),version);
+  assert.equal(response.headers.get('X-Photoswiper-Required-Loader-Version'),requiredLoaderVersion);
+  assert.ok(response.headers.get('Access-Control-Expose-Headers').includes('X-Photoswiper-Required-Loader-Version'));
   if(path==='/app.js'){assert.equal(response.headers.get('Content-Type'),'text/javascript; charset=utf-8');assert.equal(await response.text(),bundle.split('// ==/UserScript==')[1].trimStart());}
-  else assert.deepEqual(await response.json(),{version});
+  else assert.deepEqual(await response.json(),{version,requiredLoaderVersion});
   const head=await worker.fetch(new Request(new URL(path,installURL),{method:'HEAD'}));assert.equal(head.body,null);assert.deepEqual([...head.headers],[...response.headers]);
   assert.equal((await worker.fetch(new Request(new URL(path,installURL),{method:'OPTIONS'}))).status,204);
   assert.equal((await worker.fetch(new Request(new URL(path,installURL),{method:'POST'}))).status,405);

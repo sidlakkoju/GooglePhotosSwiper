@@ -50,10 +50,11 @@ function compareVersions(left,right){
  }
  return 0;
 }
+const loaderAPIVersion='1.0.0';
 const appOrigin='https://photoswiper-sync.sidlakkoju.workers.dev';
 const appPolicies=new WeakMap();
 function showUpdateBanner(environment,version){
- try{if(compareVersions(version,environment.GM?.info?.script?.version||environment.GM_info?.script?.version)<=0)return false;}catch{return false;}
+ if(version!==undefined){try{if(compareVersions(version,loaderAPIVersion)<=0)return false;}catch{return false;}}
  const document=environment.document;
  if(document.getElementById('photoswiper-update'))return false;
  const banner=document.createElement('a');
@@ -71,7 +72,9 @@ function requestApp(environment,request){
   const loaded=response=>{
    const version=/^x-photoswiper-version:\s*(\S+)/im.exec(response.responseHeaders||'')?.[1];
    try{compareVersions(version,version);}catch{finish(null);return;}
-   finish(response.status===200&&response.responseText?.trim()&&version?{code:response.responseText,version}:null);
+   const requiredLoaderVersion=/^x-photoswiper-required-loader-version:\s*(\S+)/im.exec(response.responseHeaders||'')?.[1];
+   if(requiredLoaderVersion!==undefined){try{compareVersions(requiredLoaderVersion,requiredLoaderVersion);}catch{finish(null);return;}}
+   finish(response.status===200&&response.responseText?.trim()&&version?{code:response.responseText,version,...(requiredLoaderVersion===undefined?{}:{requiredLoaderVersion})}:null);
   };
   try{const result=request({method:'GET',url:appOrigin+'/app.js?t='+Date.now(),timeout:5000,onload:loaded,onerror:()=>finish(null),ontimeout:()=>finish(null),onabort:()=>finish(null)});result?.then?.(loaded,()=>finish(null));}catch{finish(null);}
  });
@@ -106,11 +109,11 @@ async function startAutoLoader(environment){
  let cached;
  try{cached=await get('photoswiper-app',null);}catch{}
  const latest=await requestApp(environment,gm?.xmlHttpRequest?.bind(gm)||environment.GM_xmlhttpRequest);
- if(latest){showUpdateBanner(environment,latest.version);try{await set('photoswiper-app',latest);}catch{}}
+ if(latest){if(latest.requiredLoaderVersion)showUpdateBanner(environment,latest.requiredLoaderVersion);try{await set('photoswiper-app',latest);}catch{}}
+ else showUpdateBanner(environment);
  const app=latest||cached;
- if(!app||typeof app.code!=='string'||typeof app.version!=='string')return false;
- try{compareVersions(app.version,app.version);}catch{return false;}
- return executeApp(environment,app);
+ if(!app||typeof app.code!=='string'||typeof app.version!=='string'){showUpdateBanner(environment);return false;}
+ try{compareVersions(app.version,app.version);const executed=executeApp(environment,app);if(!executed)showUpdateBanner(environment);return executed;}catch{showUpdateBanner(environment);return false;}
 }
 await startAutoLoader({document,window,location,GM_info:typeof GM_info==='undefined'?undefined:GM_info,crypto:window.crypto,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),fetch:fetch.bind(globalThis),unsafeWindow:typeof unsafeWindow==='undefined'?window:unsafeWindow,GM:typeof GM==='undefined'?undefined:GM,GM_getValue:typeof GM_getValue==='undefined'?undefined:GM_getValue,GM_setValue:typeof GM_setValue==='undefined'?undefined:GM_setValue,GM_deleteValue:typeof GM_deleteValue==='undefined'?undefined:GM_deleteValue,GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='undefined'?undefined:GM_xmlhttpRequest,GM_openInTab:typeof GM_openInTab==='undefined'?undefined:GM_openInTab});
 })();
