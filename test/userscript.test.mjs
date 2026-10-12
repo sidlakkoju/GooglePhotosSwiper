@@ -1850,7 +1850,7 @@ test('a decision arriving as the save operation finishes remains queued for its 
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','remove',null]);
 });
 
-test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=>{
+for(const dismissal of ['Escape','backdrop'])test(`pairing dialog blocks viewer shortcuts and ${dismissal} burns the code`,async()=>{
  const calls=[];
  const mounted=await mountedReview([item('photo')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({id:'pair-id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:Date.now()+60000})};}});
  mounted.environment.AbortSignal=AbortSignal;
@@ -1870,9 +1870,12 @@ test('pairing dialog blocks viewer shortcuts and Escape burns the code',async()=
   mounted.environment.window.listeners.keydown(event);
  }
  assert.deepEqual(await mounted.read(),before);assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('card').classList.contains('expanded'),false);
- mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
+ if(dismissal==='Escape')mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
+ else await nodes.get('overlay').listeners.click({target:nodes.get('overlay')});
  await new Promise(resolve=>setImmediate(resolve));assert.equal(pairingPanel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
  assert.equal(calls.at(-2).options.method,'DELETE');assert.equal(calls.at(-2).options.body,JSON.stringify({id:'pair-id'}));
+ await nodes.get('close').onclick();await nodes.get('launcher').onclick();assert.equal(pairingPanel.hidden,true);
+ await nodes.get('close').onclick();
 });
 test('userscript cancels the live snap-back before a filter renders another photo',async()=>{
  const mounted=await mountedReview([item('a'),item('b',{type:'video'})]);
@@ -2780,13 +2783,14 @@ test('receiver claim during session opening activates the saved pairing after le
 });
 
 
-test('Settings pairing retains the claimed token after an in-flight sync returns 401',async()=>{
- let release,started=false,claimed=false,rejectOld=false;
+for(const failSave of [false,true])test(`Settings pairing retains the claimed token after an in-flight 401${failSave?' and a failed save':''}`,async()=>{
+ let release,started=false,claimed=false,rejectOld=false,claims=0,stored,fail=failSave;
+ const GM={getValue:async()=>stored,setValue:async(key,value)=>{if(fail&&value.token==='claimed-token')throw Error('Synthetic pairing save failure');stored=value;},deleteValue:async()=>{stored=undefined;}};
  const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
-  if(url.endsWith('/api/pair/claim')){claimed=true;return {ok:true,json:async()=>({token:'claimed-token'})};}
+  if(url.endsWith('/api/pair/claim')){claims++;claimed=true;return {ok:true,json:async()=>({token:'claimed-token'})};}
   if(rejectOld&&options.headers.Authorization==='Bearer old-token'){started=true;return new Promise(resolve=>{release=()=>resolve({ok:false,status:401});});}
   return {ok:true,json:async()=>({decisions:[],history:[],progress:{},items:[{mediaKey:'a'}]})};
- }},{url:'https://worker.example',token:'old-token'});
+ }},{url:'https://worker.example',token:'old-token'},failSave?{GM}:{});
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(mounted.environment.window.indexedDB);
  rejectOld=true;await mounted.click('keep');let pairing;
@@ -2796,7 +2800,19 @@ test('Settings pairing retains the claimed token after an in-flight sync returns
   await waitForReview(()=>claimed);
   await new Promise(resolve=>setTimeout(resolve,10));
   release();await pairing;
-  assert.deepEqual(await db.settings(),{url:'https://worker.example',token:'claimed-token',onboardingDismissed:true});
+  if(failSave){
+   assert.equal(stored,undefined);
+   assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
+   assert.match(mounted.nodes.get('enter-pairing-code').childNodes.at(-1).textContent,/Device claimed.*retry saving/);
+   fail=false;await mounted.nodes.get('pair-submit').onclick();
+   assert.equal(stored.token,'claimed-token');
+   assert.deepEqual(await db.settings(),{onboardingDismissed:true});
+  }else assert.deepEqual(await db.settings(),{url:'https://worker.example',token:'claimed-token',onboardingDismissed:true});
+  assert.equal(claims,1);
+  mounted.nodes.get('settings').onclick();
+  mounted.nodes.get('settings-sheet').querySelector('header').childNodes.find(node=>node.textContent==='Done').onclick();
+  assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/unpaired/i);
   assert.equal(mounted.nodes.get('unpaired-banner').hidden,true);
   assert.match(mounted.nodes.get('enter-pairing-code').childNodes.at(-1).textContent,/Device paired/);
  }finally{release?.();await pairing;await mounted.nodes.get('close').onclick();}
