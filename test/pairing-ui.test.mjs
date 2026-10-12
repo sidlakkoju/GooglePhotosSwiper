@@ -44,9 +44,10 @@ const recoveryGrowthBudgetBytes=4*1024;
 const leaseLifecycleGrowthBudgetBytes=2*1024;
 const pairingServerErrorGrowthBytes=256;
 const pairingLeaseFixGrowthBytes=2048;
-const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+leaseLifecycleGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
-function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@(?:require|connect)\b/);}
-test('pairing bundle stays within the 15 KB pairing, 4 KB recovery and 2 KB lease lifecycle growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url)));});
+const googleSyncGrowthBudgetBytes=6*1024;
+const pairingGrowthBudgetBytes=googleSyncGrowthBudgetBytes+15*1024+recoveryGrowthBudgetBytes+leaseLifecycleGrowthBudgetBytes+pairingServerErrorGrowthBytes+pairingLeaseFixGrowthBytes;
+function assertPairingBundleBudget(source){assert.ok(source.length<=prePairingCurrentBytes+pairingGrowthBudgetBytes);assert.doesNotMatch(source.toString(),/@require\b/);for(const match of source.toString().matchAll(/@connect\s+(\S+)/g))assert.equal(match[1],'photoswiper-sync.sidlakkoju.workers.dev');}
+test('pairing and Google sync bundle stays within its growth budgets without runtime dependencies',async()=>{assertPairingBundleBudget(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url)));});
 test('pairing budget accepts its exact boundary and rejects one extra byte',()=>{
  const boundary=Buffer.alloc(prePairingCurrentBytes+pairingGrowthBudgetBytes,32);
  assertPairingBundleBudget(boundary);
@@ -130,13 +131,13 @@ test('hash changes in an already mounted Photos tab open consent for the latest 
  location.hash='#unrelated';listeners.hashchange();assert.equal(elements.parent.children[0].hidden,true);
 });
 
-test('unpaired onboarding opens the existing receiver and Continue locally dismisses it',async()=>{
+test('unpaired onboarding offers Google, opens the backup receiver on demand and supports Continue locally',async()=>{
  const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'),elements=dom();
  let received=false;
  const context={document:elements.document,divElement4:{insertBefore(){}},cardElement:{},receivePairing:manual=>received=manual};
  vm.runInNewContext(ui.slice(ui.indexOf(" const onboarding=document.createElement"),ui.indexOf(" for(const [id,title,type]"))+ '\nglobalThis.card=onboarding;globalThis.local=syncLocal;',context);
  const card=context.card;
- assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
+ assert.equal(card.children[0].textContent,'Sync across devices');assert.match(card.children[1].textContent,/Google account/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
  const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession(claim=false)')),ui.indexOf('   if(!await renewLease(true,claim))return;',ui.indexOf(' async function openSession(claim=false)')));
  for(const [settings,receivingPanel] of [[{},undefined],[{}, {hidden:true}],[{onboardingDismissed:true},undefined],[{url:'https://worker.example',token:'synthetic-token'},undefined]]){
@@ -144,7 +145,7 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
   const nodes={},node=id=>nodes[id]||(nodes[id]={});
   const state={pageActive:true,document:{hidden:false},sessionGeneration:0,leaseGeneration:0,leaseRecoveryPending:true,receivingPanel,$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){automaticOpens++;},renewLease:async()=>true,message(){},idleMessage:()=>''};
   await vm.runInNewContext('(async()=>{'+opening+'})()',state);
-  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');assert.equal(automaticOpens,settings.token||settings.onboardingDismissed||receivingPanel?0:1);
+  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');assert.equal(automaticOpens,0);
  }
  let saved;
  const dismissal={closeSettings(){},$:()=>context.local,run:fn=>fn(),pairingPromise:Promise.resolve({settings:async()=>({}),saveSettings:async value=>saved=value}),settingsPanel:{},onboarding:card,message(){},idleMessage:()=>''};

@@ -1,3 +1,4 @@
+import {googleAuthRequest} from './google-auth.mjs';
 import {pairPage} from './pair-page.mjs';
 import {syncRequest} from './sync.mjs';
 import loader from '../../userscript/photoswiper-loader.user.js';
@@ -7,6 +8,7 @@ import userscript from '../../userscript/photoswiper.user.js';
 
 export default {
   fetch(request, env) {
+    if (new URL(request.url).pathname.startsWith('/auth/')) return googleAuthRequest(request, env);
     if (new URL(request.url).pathname === '/pair') return pairPage(request);
     if (new URL(request.url).pathname.startsWith('/api/')) return syncRequest(request, env);
     const path=new URL(request.url).pathname;
