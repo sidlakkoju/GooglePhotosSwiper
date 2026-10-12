@@ -884,11 +884,14 @@ test('mounted album send creates a readable title and saves the verified album',
  assert.ok(requests.includes('E1Cajb'));
 });
 
-test('centered shell and grouped sheet fit desktop and phone viewports in Chrome',async t=>{
+test('centered shell and loading video cards fit desktop and phone viewports in Chrome',async t=>{
  const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
  if(!browser){t.skip('Chrome is unavailable');return;}
- const mounted=await mountedReview([item('a')]);
+ const mounted=await mountedReview([item('clip',{type:'video',name:'synthetic-very-long-filename-'.repeat(8)+'.mp4'}),item('next')],async()=>({ok:true,text:async()=>envelope('VrseUb',[['clip'],'https://lh3.googleusercontent.com/synthetic-video'])}));
  mounted.nodes.get('overlay').hidden=false;mounted.nodes.get('move-trash').hidden=false;
+ assert.equal(mounted.nodes.get('media')['aria-busy'],'true');
+ assert.equal(mounted.nodes.get('media').querySelector('video').hidden,true);
+ assert.equal(mounted.nodes.get('next-card').hidden,false);
  const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
  const parents=new Map();
  const recordParents=node=>{for(const child of node.childNodes||[]){parents.set(child,node);recordParents(child);}};recordParents(mounted.root);
@@ -896,20 +899,36 @@ test('centered shell and grouped sheet fit desktop and phone viewports in Chrome
   if(!node.tagName)return escape(node.textContent||'');
   const tag=node.tagName.toLowerCase();
   const attributes=['id','class','type','min','max','step','value'].filter(key=>typeof node[key]==='string'&&node[key]).map(key=>` ${key}="${escape(node[key])}"`).join('');
-  return `<${tag}${attributes}${node.hidden?' hidden':''}>${(node.textContent!==undefined?escape(node.textContent):'')+node.childNodes.filter(child=>parents.get(child)===node).map(serialize).join('')}</${tag}>`;
+  return `<${tag}${attributes}${node.style?.cssText?` style="${escape(node.style.cssText)}"`:''}${node.dataset?.videoControl?` data-video-control="${node.dataset.videoControl}"`:''}${node.hidden?' hidden':''}>${(node.textContent!==undefined?escape(node.textContent):'')+node.childNodes.filter(child=>parents.get(child)===node).map(serialize).join('')}</${tag}>`;
  };
  const markup=mounted.root.childNodes.map(serialize).join('');
  const directory=await mkdtemp(join(tmpdir(),'photos-layout-'));
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height,expanded] of [[1440,900,false],[400,713,true],[320,633,true],[390,844,false]]){
+  for(const [width,height,expanded] of [[1440,900,false],[400,713,true],[320,633,true],[390,844,false],[320,480,false]]){
    const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
    const content=root.querySelector('.content'),overlay=root.querySelector('.overlay'),sheet=root.getElementById('settings-sheet');
    const bounds=element=>element.getBoundingClientRect();
    const modal=bounds(content),backdrop=bounds(overlay);
+   const media=root.getElementById('media'),top=root.querySelector('.top-card'),caption=root.getElementById('caption'),poster=media.querySelector('img'),under=root.getElementById('next-card');
+   media.setAttribute('aria-busy','true');
+   poster.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="800"><rect width="200" height="800" fill="red"/></svg>');
+   under.querySelector('img').src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="200"><rect width="800" height="200" fill="lime"/></svg>');
+   root.getElementById('card').classList.toggle('expanded',expanded);
+   const videoChecks=[];
+   for(const background of ['rgb(255, 255, 255)','rgb(28, 28, 30)'])for(const loading of [true,false]){
+    host.style.setProperty('--ps-surface-solid',background);
+    media.setAttribute('aria-busy',String(loading));poster.hidden=!loading;media.querySelector('video').hidden=loading;
+    const box=bounds(media),front=bounds(top),image=bounds(poster),behind=bounds(under),filename=bounds(caption);
+    const playback=Array.from(media.querySelectorAll('[data-video-control]'));
+    const opaque=doc.defaultView.getComputedStyle(top).backgroundColor===background&&doc.defaultView.getComputedStyle(media).backgroundColor===background;
+    const covered=doc.defaultView.getComputedStyle(top).opacity==='1'&&doc.defaultView.getComputedStyle(top).visibility==='visible'&&front.left<=behind.left&&front.right>=behind.right&&front.top<=behind.top&&front.bottom>=behind.bottom&&doc.defaultView.getComputedStyle(top).zIndex>doc.defaultView.getComputedStyle(under).zIndex;
+    const clearOfControls=playback.every(button=>bounds(button).bottom<=filename.top&&bounds(button).left>=box.left&&bounds(button).right<=box.right);
+    videoChecks.push({loading,background,opaque,covered,clearOfControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
+   }
    sheet.hidden=false;
    const controls=['filter','sort','review-every','delete-method'].map(id=>root.getElementById(id));
    const sheetBounds=bounds(sheet);
@@ -922,7 +941,7 @@ test('centered shell and grouped sheet fit desktop and phone viewports in Chrome
     return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
    });
    const controlsFit=controls.every(control=>bounds(control).left>=sheetBounds.left&&bounds(control).right<=sheetBounds.right+1);
-   results.push({width,height,syncFields,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
+   results.push({width,height,syncFields,videoChecks,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -930,8 +949,9 @@ test('centered shell and grouped sheet fit desktop and phone viewports in Chrome
   const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
   if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
   assert.equal(result.status,0,result.stderr);
-  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,4,result.stdout);
+  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,5,result.stdout);
   for(const measurement of measurements){
+   for(const check of measurement.videoChecks)for(const key of ['opaque','covered','clearOfControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(540,measurement.width),JSON.stringify(measurement));
