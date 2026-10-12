@@ -313,7 +313,7 @@ function fakeIndexedDB(fault={}) {
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
     delete:key=>staged.delete(key),
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
@@ -2725,4 +2725,50 @@ test('Settings pairing sends six digits and preserves credentials on failure',as
  mounted.nodes.get('sync-url').value='invalid';await mounted.nodes.get('pair-submit').onclick();
  assert.match(feedback.textContent,/valid HTTPS Worker origin/);assert.equal(calls.length,1);assert.deepEqual(await db.settings(),saved);
  await mounted.nodes.get('close').onclick();
+});
+
+
+test('Settings pairing fills a blank Sync URL and keeps the claimed token on Save and sync',async()=>{
+ for(const previous of [{},{url:'https://worker.example',token:'old-token'}]){
+  const calls=[],mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
+   calls.push({url,options});
+   return {ok:true,json:async()=>url.endsWith('/api/pair/claim')?{token:'claimed-token'}:{decisions:[],history:[],progress:{}}};
+  }});
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+  const db=await openReviewDatabase(mounted.environment.window.indexedDB);await db.saveSettings(previous);
+  try{
+   mounted.nodes.get('sync-url').value='';mounted.nodes.get('pair-code').value='123456';
+   await mounted.nodes.get('pair-submit').onclick();
+   const origin=previous.url||'https://photoswiper-sync.sidlakkoju.workers.dev';
+   assert.equal(mounted.nodes.get('sync-url').value,origin);assert.equal(mounted.nodes.get('sync-token').value,'');
+   await mounted.click('sync-save');
+   assert.deepEqual(await db.settings(),{url:origin,token:'claimed-token',onboardingDismissed:true});
+   assert.ok(calls.some(({url,options})=>new URL(url).pathname==='/api/state'&&options.headers.Authorization==='Bearer claimed-token'));
+  }finally{await mounted.nodes.get('close').onclick();}
+ }
+});
+
+test('receiver claim during session opening activates the saved pairing after lease acquisition',async()=>{
+ const fault={},mounted=bundleEnvironment(fault),calls=[];
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);await db.saveSettings({});
+ mounted.environment.window.fetch=async(url,options)=>{
+  calls.push({url,options});
+  return {ok:true,json:async()=>url.endsWith('/api/pair/claim')?{token:'receiver-token'}:{decisions:[],history:[],progress:{}}};
+ };
+ let release;fault.leaseGate=new Promise(resolve=>{release=resolve;});
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ const opening=mounted.nodes.get('launcher').onclick();let claiming;
+ try{
+  await waitForReview(()=>fault.leaseWrites>0);
+  const receiver=mounted.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
+  mounted.nodes.get('pairing-short-code').value='123456';
+  claiming=receiver.childNodes.find(node=>node.className==='toolbar').childNodes[0].onclick();
+  await waitForReview(async()=>(await db.settings()).token==='receiver-token');
+  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
+  fault.leaseGate=null;release();await opening;await claiming;
+  assert.equal(mounted.nodes.get('pair-onboarding').hidden,true);
+  assert.equal(mounted.nodes.get('sync-url').value,'https://photoswiper-sync.sidlakkoju.workers.dev');
+  assert.ok(calls.some(({url,options})=>new URL(url).pathname==='/api/state'&&options.headers.Authorization==='Bearer receiver-token'));
+ }finally{fault.leaseGate=null;release();await opening;await claiming;await mounted.nodes.get('close').onclick();}
 });
