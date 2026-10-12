@@ -1311,6 +1311,36 @@ test('failed saves release the lease on close and retain pending decisions for r
  await mounted.nodes.get('launcher').onclick();assert.equal(mounted.nodes.get('overlay').hidden,false);assert.match(mounted.nodes.get('caption').textContent,/^b ·/);
  fault.failSave=false;await mounted.nodes.get('close').onclick();assert.equal((await db.read(account)).items[0].decision,'keep');await db.lease(account,'other-tab');
 });
+test('a clean tab pauses for another owner and Use here reloads saved decisions',async()=>{
+ for(const changed of [false,true]){
+  const syncFetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
+  const first=await mountedReview([item('a'),item('b')],{fetch:syncFetch},{url:'https://sync.example',token:'synthetic-token'});
+  const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;second.environment.window.fetch=syncFetch;
+  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+  first.environment.document.hidden=true;first.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+  await second.nodes.get('launcher').onclick();
+  if(changed){second.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));}
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(first.environment.window.indexedDB);
+  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  const lease=await db.readLease(account),saved=await db.read(account);
+  first.environment.document.hidden=false;first.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(first.nodes.get('status').textContent,'Open in another tab');
+  assert.equal(first.nodes.get('use-here').hidden,false);assert.equal(first.nodes.get('use-here').disabled,false);
+  assert.equal(first.nodes.get('keep').disabled,true);
+  first.nodes.get('keep').onclick();assert.match(first.nodes.get('caption').textContent,/^a ·/);
+  first.environment.window.dispatchEvent(new Event('focus'));await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal((await db.readLease(account)).owner,lease.owner);assert.deepEqual(await db.read(account),saved);
+  await db.lease(account,lease.owner,true);
+  await first.nodes.get('use-here').onclick();
+  assert.equal(first.nodes.get('use-here').hidden,true);assert.equal(first.nodes.get('keep').disabled,false);
+  assert.match(first.nodes.get('caption').textContent,changed?/^b ·/:/^a ·/);
+  assert.doesNotMatch(first.nodes.get('status').textContent,/conflict|Unsaved|another tab/);
+  const acquired=await db.readLease(account);assert.notEqual(acquired.owner,lease.owner);
+  await second.nodes.get('close').onclick();assert.equal((await db.readLease(account)).owner,acquired.owner);
+  await first.nodes.get('close').onclick();
+ }
+});
+
 test('revision conflicts stay visible and do not retry the stale snapshot',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
@@ -2925,7 +2955,7 @@ test('hidden and pagehide release ownership and resumed pages cannot steal a fre
   await db.lease(account,'live');
   if(lifecycle==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
   else await mounted.environment.window.listeners.pageshow({persisted:true});
-  assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+  assert.match(mounted.nodes.get('status').textContent,lifecycle==='hidden'?/^Open in another tab$/:/busy in another tab/);
   await mounted.click('keep');assert.equal((await db.read(account)).items[0].decision,null);
   await assert.rejects(db.lease(account,'third'),/busy in another tab/);
   await mounted.nodes.get('close').onclick();
