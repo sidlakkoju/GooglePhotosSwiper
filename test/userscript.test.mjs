@@ -3517,31 +3517,33 @@ for(const foreignOwner of [false,true])test(`resume during an in-flight sync rel
 });
 
 test('reload reclaims an unexpired lease when the unload release never commits',async()=>{
- const values=new Map(),sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)};
+ const values=new Map(),sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
  const mounted=await mountedReview([item('kept',{decision:'keep'}),item('remaining')],{sessionStorage,performance:{getEntriesByType:()=>[{type:'navigate'}]}});
  const indexedDB=mounted.environment.window.indexedDB;
  const database=await new Promise(resolve=>{const request=indexedDB.open();request.onsuccess=()=>resolve(request.result);});
  const transaction=database.transaction;
  database.transaction=function(name,...args){if(name==='leases')throw Error('Page torn down before release');return transaction.call(this,name,...args);};
- mounted.environment.window.listeners.pagehide();await mounted.settle();
+ mounted.environment.window.dispatchEvent(new Event('pagehide'));await mounted.settle();
  database.transaction=transaction;
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const reloaded=bundleEnvironment();
  Object.assign(reloaded.environment.window,{indexedDB,sessionStorage,performance:{getEntriesByType:()=>[{type:'reload'}]}});
- const owner=values.get('photos-swipe-lease-owner');
  vm.runInNewContext(source,reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
- assert.equal(values.get('photos-swipe-lease-owner'),owner);
+ assert.equal(values.get('photos-swipe-lease-owner'),undefined);
  assert.doesNotMatch(reloaded.nodes.get('status').textContent,/busy in another tab/);
  assert.match(reloaded.nodes.get('stats').textContent,/1 to review/);
  assert.ok(reloaded.nodes.get('media').querySelector('img').src.startsWith(item('remaining').thumbUrl));
- const copied=bundleEnvironment();
- Object.assign(copied.environment.window,{indexedDB,sessionStorage,performance:{getEntriesByType:()=>[{type:'navigate'}]}});
- vm.runInNewContext(source,copied.environment);
- await copied.nodes.get('launcher').onclick();
- assert.notEqual(values.get('photos-swipe-lease-owner'),owner);
- assert.match(copied.nodes.get('status').textContent,/busy in another tab/);
- await copied.nodes.get('close').onclick();await reloaded.nodes.get('close').onclick();
+ for(const navigation of ['back_forward','reload']){
+  const copiedValues=new Map(values),copiedStorage={getItem:key=>copiedValues.get(key)||null,setItem:(key,value)=>copiedValues.set(key,value),removeItem:key=>copiedValues.delete(key)};
+  const copied=bundleEnvironment();
+  Object.assign(copied.environment.window,{indexedDB,sessionStorage:copiedStorage,performance:{getEntriesByType:()=>[{type:navigation}]}});
+  vm.runInNewContext(source,copied.environment);
+  await copied.nodes.get('launcher').onclick();
+  assert.match(copied.nodes.get('status').textContent,/busy in another tab/);
+  await copied.nodes.get('close').onclick();
+ }
+ await reloaded.nodes.get('close').onclick();
 });
 
 test('lease owner falls back to independent identities when session storage is unavailable',async()=>{
@@ -3549,4 +3551,22 @@ test('lease owner falls back to independent identities when session storage is u
  for(const window of [{},{performance:{getEntriesByType:()=>[{type:'reload'}]},get sessionStorage(){throw Error('Storage denied');}}]){
   assert.notEqual(createLeaseOwner(window,webcrypto),createLeaseOwner(window,webcrypto));
  }
+});
+
+for(const navigation of ['back_forward','reload'])test(`duplicate tab with ${navigation} navigation cannot share or release the live lease`,async()=>{
+ const values=new Map(),sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+ const mounted=await mountedReview([item('remaining')],{sessionStorage,performance:{getEntriesByType:()=>[{type:navigation}]}});
+ const copiedValues=new Map(values),copiedStorage={getItem:key=>copiedValues.get(key)||null,setItem:(key,value)=>copiedValues.set(key,value),removeItem:key=>copiedValues.delete(key)};
+ const copied=bundleEnvironment(),indexedDB=mounted.environment.window.indexedDB;
+ Object.assign(copied.environment.window,{indexedDB,sessionStorage:copiedStorage,performance:{getEntriesByType:()=>[{type:navigation}]}});
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),copied.environment);
+ await copied.nodes.get('launcher').onclick();
+ assert.match(copied.nodes.get('status').textContent,/busy in another tab/);
+ copied.environment.window.dispatchEvent(new Event('pagehide'));await new Promise(resolve=>setTimeout(resolve,0));
+ const third=bundleEnvironment();third.environment.window.indexedDB=indexedDB;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),third.environment);
+ await third.nodes.get('launcher').onclick();
+ assert.match(third.nodes.get('status').textContent,/busy in another tab/);
+ assert.match(mounted.nodes.get('stats').textContent,/1 to review/);
+ await third.nodes.get('close').onclick();await copied.nodes.get('close').onclick();await mounted.nodes.get('close').onclick();
 });
