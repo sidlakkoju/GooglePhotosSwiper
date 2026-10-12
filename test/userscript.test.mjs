@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {webcrypto,generateKeyPairSync,sign} from 'node:crypto';
 import vm from 'node:vm';
 import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
-import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash} from '../lib/userscript-core.mjs';
+import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash,loadReviewPages} from '../lib/userscript-core.mjs';
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
@@ -2384,7 +2384,7 @@ test('Settings exposes Load more and continues the cursor after Refresh latest',
  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('\n');
  assert.doesNotMatch(styles,/[^{}]*#load[^{}]*\{[^}]*display:\s*none/);
  await mounted.click('refresh');await mounted.click('refresh');await mounted.click('load');
- assert.deepEqual(cursors,[null,null,'older-cursor']);
+ assert.deepEqual(cursors,[null,'older-cursor',null]);
  assert.deepEqual((await mounted.read()).items.map(row=>row.mediaKey),['latest-photo','older-photo']);
  assert.equal((await mounted.read()).exhausted,true);
 });
@@ -2510,4 +2510,50 @@ test('mounted settings close by Escape or Done blocks typing spillover before sh
   time++;press('ArrowRight');await mounted.settle();
   assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
  }
+});
+
+test('continuous deck prefetches at ten cards, preserves in-flight swipes and reaches the actual library end',async()=>{
+ const cursors=[];
+ let releasePage;
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');cursors.push(args[0]);
+  if(args[0]==='second')await new Promise(resolve=>{releasePage=resolve;});
+  const keys=args[0]===null?Array.from({length:50},(_,index)=>`first-${index}`):args[0]==='second'?['kept','queued',...Array.from({length:50},(_,index)=>`second-${index}`)]:['last'];
+  const next=args[0]===null?'second':args[0]==='second'?'third':null;
+  return {ok:true,text:async()=>envelope(entry[0],[keys.map(key=>[key,['https://lh3.googleusercontent.com/synthetic'],1720000000000,key+'-dedup',0,{}]),next])};
+ };
+ const mounted=await mountedReview([item('kept',{decision:'keep'}),item('queued',{decision:'remove'})],{fetch});
+ await mounted.click('refresh');
+ for(let index=0;index<39;index++)mounted.nodes.get('keep').onclick();
+ await mounted.settle();assert.deepEqual(cursors,[null]);
+ mounted.nodes.get('keep').onclick();
+ for(let count=0;count<100&&!releasePage;count++)await new Promise(resolve=>setTimeout(resolve,2));
+ assert.deepEqual(cursors,[null,'second']);
+ for(let index=0;index<10;index++)mounted.nodes.get('keep').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/Loading more/);
+ releasePage();
+ for(let count=0;count<100&&(await mounted.read()).items.length<102;count++)await new Promise(resolve=>setTimeout(resolve,2));
+ await mounted.settle();
+ assert.equal((await mounted.read()).items.filter(row=>row.mediaKey.startsWith('first-')&&row.decision==='keep').length,50);
+ assert.equal(reviewDeck(await mounted.read())[0].mediaKey,'second-0');
+ for(let index=0;index<40;index++)mounted.nodes.get('keep').onclick();
+ for(let count=0;count<100&&!(await mounted.read()).exhausted;count++)await new Promise(resolve=>setTimeout(resolve,2));
+ assert.deepEqual(cursors,[null,'second','third']);
+ assert.doesNotMatch(mounted.nodes.get('caption').textContent,/reviewed everything/);
+ for(let index=0;index<11;index++)mounted.nodes.get('keep').onclick();
+ await mounted.settle();
+ assert.equal(mounted.nodes.get('caption').textContent,'You’ve reviewed everything');
+ assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='queued').decision,'remove');
+});
+
+test('library loading crosses more than twelve fully reviewed pages without a manual continuation',async()=>{
+ const reviewed=item('reviewed',{decision:'keep'}),queued=item('queued',{decision:'remove'});
+ let state={...emptyReview(),items:[reviewed,queued]},calls=0;
+ const result=await loadReviewPages({read:async()=>state,save:async next=>state=next,call:async(operation,{cursor})=>{
+  assert.equal(cursor,calls?`page-${calls}`:null);calls++;
+  return calls<=14?{items:[reviewed,queued],nextPageId:`page-${calls}`}:{items:[item('fresh')],nextPageId:null};
+ }});
+ assert.equal(calls,15);assert.equal(result.exhausted,true);assert.deepEqual(reviewDeck(state).map(row=>row.mediaKey),['fresh']);
 });
