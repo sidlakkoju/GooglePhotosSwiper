@@ -3638,3 +3638,35 @@ test('failed Move to Trash leaves the session capsule intact',async()=>{
  const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
  await mounted.click('move-trash');assert.match(capsule['aria-label'],/^38.2 MB/);assert.equal((await mounted.read()).items[0].state,'active');await mounted.nodes.get('close').onclick();
 });
+
+for(const scenario of ['partial batch failure','Check deleted items'])test(`completed Move clears earlier session Trash after ${scenario}`,async()=>{
+ const trashed=new Set();let moveCalls=0,failSecondBatch=scenario==='partial batch failure';
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){
+   moveCalls++;
+   if(failSecondBatch&&moveCalls===2)return {ok:false,status:500};
+   for(const key of args[2])trashed.add(key);
+  }
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};
+ };
+ const count=scenario==='partial batch failure'?26:2;
+ const items=Array.from({length:count},(_,index)=>item(String(index),{decision:'remove',dedupKey:`stable-${index}`,size:1e6}));
+ const mounted=await mountedReview(items,{fetch,confirm:()=>true});
+ const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
+ if(scenario==='partial batch failure'){
+  await mounted.click('move-trash');
+  assert.equal((await mounted.read()).items.filter(item=>item.state==='in_trash').length,25);
+  assert.match(capsule['aria-label'],/^26.0 MB/);
+  failSecondBatch=false;
+ }else{
+  trashed.add('stable-0');await mounted.click('trash');
+  assert.equal((await mounted.read()).items[0].state,'in_trash');
+  assert.match(capsule['aria-label'],/^2.00 MB/);
+ }
+ await mounted.click('move-trash');
+ assert.ok((await mounted.read()).items.every(item=>item.state==='in_trash'));
+ assert.match(capsule['aria-label'],/^0.00 MB/);
+ await mounted.click('trash');assert.match(capsule['aria-label'],/^0.00 MB/);
+ await mounted.nodes.get('close').onclick();
+});
