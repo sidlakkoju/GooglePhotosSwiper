@@ -14,11 +14,15 @@ Use a separate Worker/token for each person. The bearer token grants access to e
 
 ## Device behavior
 
-The URL and token are saved per browser/device in the `settings` store of `photos-swipe-userscript` IndexedDB on the Google Photos origin. Clear both fields and save to turn sync off. Clearing site data also clears these settings and local state.
+The URL and token are saved per device in userscript manager storage when available, with IndexedDB as a fallback. Clear both fields and save to turn sync off. Deleting IndexedDB preserves pairing when userscript manager storage is available.
 
 Opening the overlay or saving review changes pulls remote decisions and sends pending local changes. Offline changes win for their item IDs on the next successful attempt; other remote decisions are merged. Sync failures leave local work intact and show a status message. Reopen the overlay or perform another action to retry. Concurrent edits of the same ID use the last successful write; undo history and progress use the last successful replacement. Avoid simultaneous review on multiple devices when preserving a single undo sequence matters.
 
-Imported metadata, preview URLs, Google authentication tokens, cookies, library pagination cursors, media bytes and album operation checkpoints stay local. Remote reviewed IDs are applied as their items are loaded on another device. Each device scans its own library pages; sync reports the shared reviewed count instead of sharing Google pagination tokens. Undo history is bounded to the latest 2,000 entries; undo requires the matching item to be loaded and eligible locally.
+Recovery checkpoints now sync batch IDs, media type, storage sizes, quota flags, item state, revisions, queue completion flags and cumulative lifetime freed bytes. Names, locations, preview URLs, Google authentication tokens, cookies, library pagination cursors, media bytes and album operation checkpoints stay local. Deploy the updated Worker before using the new checkpoint payload. No database migration is required.
+
+When a paired device opens an empty local account store, startup pulls `/api/state`, rebuilds the checkpoint and Undo history, then scans library pages for fresh previews before saving and rendering cards. Reviewed IDs are applied during this scan. Recovery uses at most 12 pages per attempt; additional previews can be loaded with Load more. Items without recovered previews remain in counts and history but are excluded from the review deck until sighted. Fetch or rebuild failures leave the local store intact, show a non-blocking sync error and allow manual loading and retry.
+
+Legacy checkpoints containing only `started` and `reviewed` can recover decisions and Undo revisions using a fresh library scan. They cannot recover Trash sizes or lifetime totals that were never sent to the Worker; those become recoverable after a successful sync from a device retaining that metadata. Undo history is bounded to the latest 2,000 entries; undo requires a matching eligible item revision. Lifetime freed is the cumulative recorded quota size of verified moves into Trash, rather than a measurement of permanent deletion or current account quota.
 
 Requests use page `fetch` with credentials omitted and no privileged userscript APIs. Browser policy or Google Photos CSP can block these requests; local review continues and sync status reports the failure. Automated checks use fake fetch and an in-memory D1 fake, never real Google Photos.
 
@@ -34,7 +38,7 @@ An optional `scope` query parameter isolates account records (default `default`)
 | `PUT /api/decisions/:id` | `{decision: "keep" or "remove"}` |
 | `DELETE /api/decisions/:id` | Remove the decision |
 | `GET /api/progress` | Stored progress or `{}` |
-| `PUT /api/progress` | `{started: boolean, reviewed: nonnegative integer}` |
+| `PUT /api/progress` | `{started: boolean, reviewed: nonnegative integer, items?: [...], lifetimeFreed?: nonnegative integer}` |
 | `PUT /api/undo` | `{history: [...]}` replaces history |
 | `POST /api/undo` | `{action: "push", entry}` or `{action: "pop"}`; returns remaining history |
 

@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage} from '../lib/userscript-core.mjs';
+import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage,reviewQueue,reviewTrashCandidates,sendReviewAlbum} from '../lib/userscript-core.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
-import {createSyncClient,markSyncChanges,validateSyncSettings} from '../lib/userscript-sync.mjs';
+import {createSyncClient,markSyncChanges,validateSyncSettings,reviewSyncProgress,rebuildSyncedReview} from '../lib/userscript-sync.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
- constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
+ constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql','0003_review_items.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
  prepare(sql){
   const statement=this.sqlite.prepare(sql);
   const bound=args=>({all:async()=>({results:statement.all(...args)}),first:async()=>statement.get(...args)||null,run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:Number(this.sqlite.prepare('SELECT changes() AS n').get().n)}})});
@@ -78,12 +78,12 @@ test('first sync retries a timed-out request and saves the successful response',
  const client=createSyncClient({status:value=>statuses.push(value),fetch:async(url,options)=>{
   signals.push(options.signal);
   if(++requests===1)throw new DOMException('signal timed out','TimeoutError');
-  return Response.json({decisions:[{id:'synthetic',decision:'keep'}],history:[],progress:{}});
+  return Response.json(options.method==='PUT'?{items:JSON.parse(options.body).items}:{decisions:[{id:'synthetic',decision:'keep'}],history:[],progress:{}});
  }});
  client.configure({url:'https://sync.example',token:'synthetic-token'});
  let saves=0;
  const result=await client.sync('qa',{items:[{mediaKey:'synthetic',decision:null}],history:[]},async value=>{saves++;return value;});
- assert.equal(requests,2);
+ assert.equal(requests,3);
  assert.equal(saves,1);
  assert.notEqual(signals[0],signals[1]);
  assert.equal(result.items[0].decision,'keep');
@@ -206,7 +206,7 @@ test('ten decisions push as one atomic batch without a state pull',async()=>{
  const items=Array.from({length:10},(_,index)=>({mediaKey:`item-${index}`,decision:'keep'}));
  const state={started:true,items,history:[],syncDecisions:{},syncPending:Object.fromEntries(items.map(item=>[item.mediaKey,item.decision]))};
  const result=await client.sync('account',state,async value=>value,{pull:false});
- assert.equal(requests.length,1);assert.equal(new URL(requests[0].url).pathname,'/api/decisions');
+ assert.equal(requests.length,2);assert.equal(new URL(requests[0].url).pathname,'/api/decisions');assert.equal(new URL(requests[1].url).pathname,'/api/progress');
  assert.equal(JSON.parse(requests[0].options.body).decisions.length,10);assert.deepEqual(result.syncPending,{});
  assert.equal((await (await call(e,'state?scope=account')).json()).decisions.length,10);
  const before=e.DB.sqlite.prepare('SELECT * FROM decisions').all();
@@ -475,4 +475,222 @@ test('device management rejects missing credentials without making requests',asy
   for(const action of [()=>client.devices(),()=>client.rename('caller','Browser'),()=>client.revoke('caller'),()=>client.revokeOthers()])await assert.rejects(action,/Configure sync to manage paired devices/);
  }
  assert.equal(requests,0);
+});
+
+
+test('progress checkpoints persist only recovery metadata and reject private or malformed fields',async()=>{
+ const e=env(),state={started:true,lifetimeFreed:224000,items:[{mediaKey:'QA-TRASH',type:'photo',size:112000,spaceTaken:112000,takesUpSpace:true,state:'in_trash',revision:2,queueSent:true,thumbUrl:'https://example.test/private',dedupKey:'private',name:'private',location:[1,2]}]};
+ const progress=reviewSyncProgress(state,{'QA-TRASH':'remove'});
+ assert.equal((await call(e,'progress','PUT',progress)).status,200);
+ assert.deepEqual((await (await call(e,'state')).json()).progress,progress);
+ for(const field of ['thumbUrl','dedupKey','name','location'])assert.equal(JSON.stringify(progress).includes(field),false);
+ for(const change of [{thumbUrl:'https://example.test/private'},{revision:-1},{size:-1},{state:'unknown'},{queueSent:'yes'},{mediaKey:'invalid/id'}]){
+  assert.equal((await call(e,'progress','PUT',{...progress,items:[{...progress.items[0],...change}]})).status,400);
+ }
+ for(const lifetimeFreed of [-1,'112000',null])assert.equal((await call(e,'progress','PUT',{...progress,lifetimeFreed})).status,400);
+});
+
+test('legacy state recovery restores reviewed IDs and Undo revisions before the first library card',async()=>{
+ const statuses=[],client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>new Response(JSON.stringify({decisions:[{id:'QA-KEEP',decision:'keep'}],history:[{key:'QA-KEEP',previous:null,decision:'keep',revision:3}],progress:{started:true,reviewed:1}}))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let rebuilt=false,saved=false;
+ const state=await client.sync('qa',{started:false,items:[],history:[],revision:0},async value=>{assert.equal(rebuilt,true);saved=true;return value;},async value=>{
+  const result=await rebuildSyncedReview(value,async()=>({items:[{mediaKey:'QA-KEEP',thumbUrl:'https://example.test/synthetic'},{mediaKey:'QA-FRESH',thumbUrl:'https://example.test/synthetic'}],nextPageId:null}));
+  rebuilt=true;return result;
+ });
+ assert.equal(saved,true);assert.equal(state.started,true);assert.equal(state.items[0].decision,'keep');assert.equal(canUndoReview(state,state.history[0]),true);
+ assert.deepEqual(state.items.filter(item=>!item.decision).map(item=>item.mediaKey),['QA-FRESH']);assert.match(statuses.at(-1),/^Synced/);
+});
+
+test('recovery scan failures save remote state and preserve unseen undo targets',async()=>{
+ const statuses=[],client=createSyncClient({status:value=>statuses.push(value),fetch:async()=>new Response(JSON.stringify({decisions:[{id:'QA-KEEP',decision:'keep'}],history:[],progress:{started:true,reviewed:1}}))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ const empty={started:false,items:[],history:[],revision:0,cursor:null};let saves=0;
+ const save=async value=>{saves++;return value;};
+ const restored=await client.sync('qa',empty,save,()=>{throw Error('Synthetic preview failure');});
+ assert.equal(saves,1);assert.equal(restored.started,true);assert.equal(restored.items[0].decision,'keep');
+ const loaded=mergeReviewPage(restored,{items:[{mediaKey:'QA-FRESH'}],nextPageId:null},null);
+ const retried=await client.sync('qa',loaded,save);assert.equal(retried.items.find(item=>item.mediaKey==='QA-KEEP').decision,'keep');
+});
+
+test('a partial device checkpoint preserves remote trash rows through a wiped-store restore',async()=>{
+ const e=env(),trash={mediaKey:'remote-trash',state:'in_trash',spaceTaken:112000,revision:2,queueSent:true};
+ await call(e,'decisions/remote-trash','PUT',{decision:'remove'});
+ await call(e,'progress','PUT',{started:true,reviewed:1,items:[trash],lifetimeFreed:112000});
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const local={started:true,items:[{mediaKey:'local',state:'active',revision:0}],history:[],syncDecisions:{},syncPending:{}};
+ const synced=await client.sync('default',local,async value=>value);
+ assert.ok(synced.syncCheckpoint);
+ const restored=await client.sync('default',{started:false,items:[],history:[]},async value=>value);
+ assert.deepEqual(restored.items.find(item=>item.mediaKey===trash.mediaKey),{...trash,name:trash.mediaKey,type:'photo',decision:'remove',needsPreview:true});
+ assert.equal(restored.lifetimeFreed,112000);
+ assert.equal((await call(e,'progress','PUT',{started:true,reviewed:0,items:[{...trash,state:'active',revision:3,queueSent:false}],lifetimeFreed:112000})).status,200);
+ const progress=await (await call(e,'progress')).json();
+ assert.equal(progress.items.length,2);
+ assert.equal(progress.items.find(item=>item.mediaKey===trash.mediaKey).state,'active');
+});
+
+for(const [name,count,keyLength] of [['row limit',2101,10],['byte limit',1200,256],['D1 storage limit',6500,256]])test(`large checkpoints batch within the ${name} and restore all rows`,async()=>{
+ const e=env(),writes=[],statuses=[];
+ e.DB.sqlite.exec("CREATE TRIGGER progress_size_limit BEFORE UPDATE ON review_state WHEN length(CAST(NEW.progress AS BLOB)) + length(CAST(NEW.history AS BLOB)) > 2000000 BEGIN SELECT RAISE(ABORT, 'D1 row too large'); END");
+ const client=createSyncClient({status:value=>statuses.push(value),fetch:async(url,options)=>{
+  if(new URL(url).pathname==='/api/progress')writes.push(options.body);
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const items=Array.from({length:count},(_,index)=>({mediaKey:String(index).padStart(keyLength,'x'),state:'in_trash',type:'photo',revision:1,spaceTaken:1000,queueSent:true}));
+ items[0]={...items[0],state:'active',queueSent:false};
+ const history=[{key:items[0].mediaKey,previous:null,decision:'remove',revision:1}];
+ const state={started:true,items,history,syncDirty:true,syncDecisions:{},syncPending:{[items[0].mediaKey]:'remove'},lifetimeFreed:count*1000};
+ const saved=await client.sync('default',state,async value=>value);
+ assert.notEqual(saved,state);assert.equal(saved.syncDirty,false);assert.deepEqual(saved.syncPending,{});
+ assert.match(statuses.at(-1),/^Synced/);assert.ok(writes.length>1);
+ for(const body of writes){assert.ok(new TextEncoder().encode(body).length<=262144);assert.ok(JSON.parse(body).items.length<=2000);}
+ assert.equal(saved.syncCheckpoint.items.length,count);
+ assert.ok(Buffer.byteLength(e.DB.sqlite.prepare('SELECT progress FROM review_state').get().progress)<2000000);
+ assert.equal(e.DB.sqlite.prepare('SELECT COUNT(*) AS count FROM review_items').get().count,count);
+ if(name==='D1 storage limit')assert.ok(Buffer.byteLength(JSON.stringify(saved.syncCheckpoint))>2000000);
+ const restored=await client.sync('default',{started:false,items:[],history:[]},async value=>value);
+ assert.equal(restored.items.length,count);assert.deepEqual(restored.history,history);
+ assert.equal(canUndoReview(restored,history[0]),true);
+ assert.equal(restored.lifetimeFreed,count*1000);
+ const writeCount=writes.length;
+ await client.sync('default',saved,async value=>value);
+ assert.equal(writes.length,writeCount);
+});
+
+for(const checkpoint of [false,true])test(`unsighted restored removes stay out of album and Trash actions with ${checkpoint?'item':'legacy'} progress`,async()=>{
+ const remote={decisions:[{id:'seen',decision:'remove'},{id:'unseen',decision:'remove'}],history:[],progress:{started:true,reviewed:2,...(checkpoint?{items:[{mediaKey:'seen',state:'active'},{mediaKey:'unseen',state:'active'}]}:{})}};
+ const client=createSyncClient({fetch:async()=>new Response(JSON.stringify(remote))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let state=await client.sync('default',{started:false,items:[],history:[]},async value=>value,value=>rebuildSyncedReview(value,async()=>({items:[{mediaKey:'seen',dedupKey:'seen-trash'},...Array.from({length:50},(_,index)=>({mediaKey:`fresh-${index}`}))],nextPageId:'older'})));
+ assert.equal(state.exhausted,false);
+ assert.equal(state.items.find(item=>item.mediaKey==='unseen').needsPreview,true);
+ assert.deepEqual(reviewQueue(state).map(item=>item.mediaKey),['seen']);
+ assert.deepEqual(reviewTrashCandidates(state).map(item=>item.dedupKey),['seen-trash']);
+ const added=[];
+ await sendReviewAlbum({read:async()=>state,save:async value=>{assert.ok(!value.job?.mediaKeys.includes('unseen'));state=value;return value;},title:'Review',call:async(action,args)=>{
+  if(action==='findAlbum')return {albumKey:'album'};
+  if(action==='albumMembers')return {keys:added,dedupKeys:[]};
+  if(action==='addToAlbum'){added.push(...args.mediaKeys);return {};}
+  throw Error(`Unexpected action ${action}`);
+ }});
+ assert.deepEqual(added,['seen']);
+ assert.equal(state.job,null);
+ state=mergeReviewPage(state,{items:[{mediaKey:'unseen',dedupKey:'unseen-trash'}],nextPageId:null},'older');
+ assert.deepEqual(reviewQueue(state).map(item=>item.mediaKey),['unseen']);
+ assert.deepEqual(reviewTrashCandidates(state).map(item=>item.dedupKey),['seen-trash','unseen-trash']);
+});
+
+test('item storage migration preserves legacy checkpoints and keeps metadata-only scopes unchanged',async()=>{
+ const db=new DatabaseSync(':memory:');
+ db.exec(readFileSync(new URL('../worker/migrations/0001_init.sql',import.meta.url),'utf8'));
+ const items=[{mediaKey:'old',state:'in_trash',revision:2,queueSent:true},{mediaKey:'other',state:'active'}];
+ db.prepare('INSERT INTO review_state VALUES (?, ?, ?)').run('legacy',JSON.stringify({started:true,reviewed:2,items,lifetimeFreed:100}),'[]');
+ db.prepare('INSERT INTO review_state VALUES (?, ?, ?)').run('metadata',JSON.stringify({started:true,reviewed:1}),'[]');
+ db.exec(readFileSync(new URL('../worker/migrations/0003_review_items.sql',import.meta.url),'utf8'));
+ assert.deepEqual(db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').all('legacy').map(row=>JSON.parse(row.data)),items);
+ assert.deepEqual(JSON.parse(db.prepare('SELECT progress FROM review_state WHERE scope = ?').get('legacy').progress),{started:true,reviewed:2,items:[],lifetimeFreed:100});
+ assert.deepEqual(JSON.parse(db.prepare('SELECT progress FROM review_state WHERE scope = ?').get('metadata').progress),{started:true,reviewed:1});
+ db.close();
+});
+
+ test('stale and equal checkpoint revisions cannot overwrite newer trash, while newer restores can',async()=>{
+ const e=env(),trash={mediaKey:'synthetic-trash',state:'in_trash',revision:4,spaceTaken:120,queueSent:true};
+ const put=items=>call(e,'progress','PUT',{started:true,reviewed:0,items,lifetimeFreed:120});
+ await put([trash]);
+ for(const revision of [0,3,4]){
+  assert.equal((await put([{...trash,state:'active',revision}])).status,200);
+  assert.deepEqual((await (await call(e,'state')).json()).progress.items,[trash]);
+ }
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const stale={started:true,history:[],items:[{...trash,state:'active',revision:1},{mediaKey:'synthetic-local',state:'active',revision:1}],syncDecisions:{},syncDirty:true};
+ const synced=await client.sync('default',stale,async value=>value);
+ assert.equal(synced.items[0].state,'in_trash');assert.equal(synced.items[0].revision,4);
+ const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
+ assert.equal(restored.items.find(item=>item.mediaKey===trash.mediaKey).state,'in_trash');
+ await put([{...trash,state:'active',revision:5}]);
+ assert.equal((await (await call(e,'state')).json()).progress.items[0].state,'active');
+ });
+
+ test('failed library scans retain trash totals, history and unseen undo eligibility after Load more',async()=>{
+ const entry={key:'synthetic-unseen',previous:null,decision:'keep',revision:3};
+ const remote={decisions:[{id:entry.key,decision:'keep'}],history:[entry],progress:{started:true,lifetimeFreed:120,items:[{mediaKey:'synthetic-trash',state:'in_trash',revision:4,spaceTaken:120},{mediaKey:entry.key,state:'active',revision:3}]}};
+ const client=createSyncClient({fetch:async()=>new Response(JSON.stringify(remote))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ let saved;
+ const restored=await client.sync('default',{started:false,items:[],history:[],cursor:null},async value=>{saved=value;return value;},value=>rebuildSyncedReview(value,async()=>{throw Error('Synthetic scan failure');}));
+ assert.equal(restored,saved);assert.deepEqual(restored.history,[entry]);assert.equal(restored.lifetimeFreed,120);
+ const loaded=mergeReviewPage(restored,{items:[{mediaKey:'synthetic-page'}],nextPageId:null},null);
+ const next=await client.sync('default',loaded,async value=>value);
+ assert.equal(next.items.find(item=>item.mediaKey==='synthetic-trash').spaceTaken,120);
+ assert.equal(canUndoReview(next,entry),true);
+ });
+
+ for(const failure of ['timeout',400,500])test(`checkpoint ${failure} preserves pulled decisions and retries the checkpoint`,async()=>{
+ const e=env(),entry={key:'synthetic-remote',previous:null,decision:'keep',revision:2};
+ await call(e,'decisions/synthetic-remote','PUT',{decision:'keep'});await call(e,'undo','PUT',{history:[entry]});
+ let reject=true,writes=0;
+ const client=createSyncClient({fetch:(url,options)=>{
+  if(new URL(url).pathname==='/api/progress'){writes++;if(reject){if(failure==='timeout')throw Error('Synthetic timeout');return new Response('{}',{status:failure});}}
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const state={started:true,items:[{mediaKey:entry.key,decision:null}],history:[],syncDecisions:{}};
+ const pulled=await client.sync('default',state,async value=>value);
+ assert.equal(pulled.items[0].decision,'keep');assert.deepEqual(pulled.history,[entry]);assert.equal(canUndoReview(pulled,entry),true);assert.equal(pulled.syncCheckpoint,undefined);
+ reject=false;const retried=await client.sync('default',pulled,async value=>value);
+ assert.equal(writes,2);assert.ok(retried.syncCheckpoint);
+ });
+
+ test('remote checkpoint revisions retain undo locks when unseen rows join a populated store',async()=>{
+ const entry={key:'synthetic-locked',previous:null,decision:'keep',revision:2};
+ const remote={decisions:[{id:entry.key,decision:'keep'}],history:[entry],progress:{started:true,items:[{mediaKey:entry.key,state:'active',revision:3,queueSent:true}]}};
+ const client=createSyncClient({fetch:async()=>new Response(JSON.stringify(remote))});
+ client.configure({url:'https://sync.example',token:'synthetic-token'});
+ const state=await client.sync('default',{started:true,items:[{mediaKey:'synthetic-loaded',state:'active'}],history:[],syncDecisions:{}},async value=>value);
+ assert.equal(state.items.find(item=>item.mediaKey===entry.key).revision,3);assert.equal(canUndoReview(state,entry),false);
+ });
+
+test('equal revision sync adopts the server trash row before review and checkpointing',async()=>{
+ const e=env(),trash={mediaKey:'synthetic-tie',state:'in_trash',revision:4,spaceTaken:120};
+ await call(e,'progress','PUT',{started:true,reviewed:0,items:[trash],lifetimeFreed:120});
+ const rejected=await (await call(e,'progress','PUT',{started:true,reviewed:0,items:[{...trash,state:'active',queueSent:false}],lifetimeFreed:120})).json();
+ assert.deepEqual(rejected.items,[trash]);
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const local={started:true,history:[],items:[{...trash,state:'active',decision:null,queueSent:false,name:'Synthetic photo'}],syncDecisions:{},syncDirty:true};
+ const synced=await client.sync('default',local,async value=>value);
+ assert.equal(synced.items[0].state,'in_trash');
+ assert.equal(synced.items[0].name,'Synthetic photo');
+ assert.equal(Object.hasOwn(synced.items[0],'queueSent'),false);
+ assert.deepEqual(synced.syncCheckpoint.items,[trash]);
+ assert.throws(()=>decideReview(synced,trash.mediaKey,'keep',null,4));
+ await client.sync('default',synced,async value=>value);
+ const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
+ assert.equal(restored.items[0].state,'in_trash');
+});
+
+test('progress PUT reconciles a server tie introduced after the client pull',async()=>{
+ const e=env(),trash={mediaKey:'synthetic-race',state:'in_trash',revision:4,queueSent:true};
+ let raced=false;
+ const client=createSyncClient({fetch:async(url,options)=>{
+  if(options.method==='PUT'&&new URL(url).pathname==='/api/progress'&&!raced){
+   raced=true;
+   await call(e,'progress','PUT',{started:true,reviewed:0,items:[trash],lifetimeFreed:0});
+  }
+  return syncRequest(new Request(url,options),e);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const local={started:true,history:[],items:[{mediaKey:trash.mediaKey,state:'active',revision:4,decision:null}],syncDecisions:{},syncDirty:true};
+ const synced=await client.sync('default',local,async value=>value);
+ assert.equal(raced,true);
+ assert.equal(synced.items[0].state,'in_trash');
+ assert.deepEqual(synced.syncCheckpoint.items,[trash]);
+ assert.deepEqual(synced.syncCheckpoint,(await (await call(e,'progress')).json()));
+ assert.throws(()=>decideReview(synced,trash.mediaKey,'keep',null,4));
+ const restored=await client.sync('default',{started:false,history:[],items:[]},async value=>value);
+ assert.equal(restored.items[0].state,'in_trash');
 });

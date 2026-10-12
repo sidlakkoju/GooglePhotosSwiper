@@ -83,7 +83,7 @@ test('loader watchdog falls back when the GM request never calls back',async()=>
 });
 
 test('verified loader pairing stays in its GM store and restores server state after claiming',async()=>{
- const modules=await Promise.all(['settings','pairing','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
+ const modules=await Promise.all(['core','settings','pairing','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
  const code=modules.map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n')+`
  window.completed=(async()=>{
   const store=await createPairingStore({GM,database:window.database,crypto:window.crypto});
