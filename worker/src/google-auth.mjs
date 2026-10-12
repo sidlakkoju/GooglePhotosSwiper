@@ -5,20 +5,23 @@ const random=()=>btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Arr
 const inlineJSON=value=>JSON.stringify(value).replaceAll('<','\\u003c');
 const decode=value=>Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0));
 const jwksCache=new WeakMap();
+class InvalidGoogleToken extends Error {}
 export async function verifyGoogleToken(token,nonce,fetchKeys=fetch){
- if(typeof token!=='string'||token.length>16384)throw Error('Invalid token');
- const parts=token.split('.');if(parts.length!==3)throw Error('Invalid token');
- const header=JSON.parse(new TextDecoder().decode(decode(parts[0]))),claims=JSON.parse(new TextDecoder().decode(decode(parts[1])));
- if(header.alg!=='RS256'||typeof header.kid!=='string'||claims.aud!==googleClientId||!['accounts.google.com','https://accounts.google.com'].includes(claims.iss)||!Number.isFinite(claims.exp)||claims.exp<=Date.now()/1000||claims.nonce!==nonce||typeof claims.sub!=='string'||!claims.sub||claims.sub.length>256)throw Error('Invalid token');
+ if(typeof token!=='string'||token.length>16384)throw new InvalidGoogleToken('Invalid token');
+ const parts=token.split('.');if(parts.length!==3)throw new InvalidGoogleToken('Invalid token');
+ let header,claims,signature;
+ try{header=JSON.parse(new TextDecoder().decode(decode(parts[0])));claims=JSON.parse(new TextDecoder().decode(decode(parts[1])));signature=decode(parts[2]);if(!header||!claims)throw Error();}catch{throw new InvalidGoogleToken('Invalid token');}
+ if(header.alg!=='RS256'||typeof header.kid!=='string'||claims.aud!==googleClientId||!['accounts.google.com','https://accounts.google.com'].includes(claims.iss)||!Number.isFinite(claims.exp)||claims.exp<=Date.now()/1000||claims.nonce!==nonce||typeof claims.sub!=='string'||!claims.sub||claims.sub.length>256)throw new InvalidGoogleToken('Invalid token');
  let cached=jwksCache.get(fetchKeys);
  if(!cached||cached.expires<Date.now()){
   const response=await fetchKeys('https://www.googleapis.com/oauth2/v3/certs');if(!response.ok)throw Error('Invalid keys');
-  cached={keys:(await response.json()).keys,expires:Date.now()+Math.min(3600,Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1]||300))*1000};jwksCache.set(fetchKeys,cached);
+  cached={keys:(await response.json()).keys,expires:Date.now()+Math.min(3600,Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1]||300))*1000};if(!Array.isArray(cached.keys))throw Error('Invalid keys');jwksCache.set(fetchKeys,cached);
  }
- const jwk=cached.keys.find(key=>key.kid===header.kid&&key.kty==='RSA');if(!jwk)throw Error('Invalid token');
- const key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
- if(!await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,decode(parts[2]),new TextEncoder().encode(parts.slice(0,2).join('.'))))throw Error('Invalid token');
- if(claims.exp<=Date.now()/1000)throw Error('Invalid token');
+ const jwk=cached.keys.find(key=>key.kid===header.kid&&key.kty==='RSA');if(!jwk)throw new InvalidGoogleToken('Invalid token');
+ let key;
+ try{key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);}catch(error){jwksCache.delete(fetchKeys);throw error;}
+ if(!await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,signature,new TextEncoder().encode(parts.slice(0,2).join('.'))))throw new InvalidGoogleToken('Invalid token');
+ if(claims.exp<=Date.now()/1000)throw new InvalidGoogleToken('Invalid token');
  return claims;
 }
 export async function googleAuthRequest(request,env){
@@ -47,7 +50,7 @@ export async function googleAuthRequest(request,env){
   const value=await request.json(),digest=await hash(value.state||'');
   const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(digest,now).first();if(!pending)return json({error:'Invalid state'},400);
   let claims;
-  try{claims=await verifyGoogleToken(value.credential,pending.nonce,env.GOOGLE_FETCH||fetch);}catch{await db.prepare('UPDATE google_pending SET completed_at = -2 WHERE state_hash = ? AND completed_at IS NULL').bind(digest).run();return json({error:'Google sign-in failed. Please try again.'},400);}
+  try{claims=await verifyGoogleToken(value.credential,pending.nonce,env.GOOGLE_FETCH||fetch);}catch(error){if(!(error instanceof InvalidGoogleToken))return json({error:'Google sign-in is temporarily unavailable. Please try again.'},503);await db.prepare('UPDATE google_pending SET completed_at = -2 WHERE state_hash = ? AND completed_at IS NULL').bind(digest).run();return json({error:'Google sign-in failed. Please try again.'},400);}
   const code=random();
   const accountSpace=crypto.randomUUID();
   const results=await db.batch([

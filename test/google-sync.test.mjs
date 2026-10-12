@@ -272,3 +272,26 @@ test('completed poll expires at five minutes and legacy claims consume the polli
  await env.DB.prepare('UPDATE google_pending SET expires_at = ? WHERE state_hash = ?').bind(Math.floor(Date.now()/1000),await hash(next)).run();
  assert.equal((await (await request(env,'/auth/poll',{state:next})).json()).status,'expired');assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,1);
 });
+
+for(const failure of ['network','http','json','keys','import'])test(`Google key service ${failure} failure leaves the session available for retry`,async()=>{
+ let unavailable=true;
+ const retryFetch=async()=>{
+  if(!unavailable)return fetchKeys('https://www.googleapis.com/oauth2/v3/certs');
+  if(failure==='network')throw Error('Network unavailable');
+  if(failure==='http')return new Response('',{status:503});
+  if(failure==='json')return new Response('invalid');
+  if(failure==='keys')return Response.json({});
+  return Response.json({keys:[{kid:'test',kty:'RSA'}]},{headers:{'Cache-Control':'max-age=0'}});
+ };
+ const env={DB:new D1(),GOOGLE_FETCH:retryFetch},state='u'.repeat(43);
+ assert.equal((await request(env,'/auth/session',{state,name:'Test',platform:'test'})).status,200);
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ const credential=await token(pending.nonce);
+ assert.equal((await request(env,'/auth/complete',{state,credential})).status,503);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'pending');
+ assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env)).status,200);
+ unavailable=false;
+ await new Promise(resolve=>setTimeout(resolve,2));
+ assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
+});

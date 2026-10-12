@@ -305,7 +305,7 @@ for(const outcome of ['success','failure'])test(`Close waits for settings pairin
 async function googleFixture(outcome='done',options={}){
  const elements=dom(),requests=[],values=new Map(),timers=new Map();let saved,opened,closed=0;
  const store={durable:true,settings:async()=>({token:'previous-token'}),saveSettings:async value=>{saved=value;}};
- const gm={setValue:async(key,value)=>values.set(key,value),getValue:async key=>values.get(key),deleteValue:async key=>{values.delete(key);if(options.cleanupFailure)throw Error('Storage unavailable');},openInTab:url=>{opened=url;},xmlHttpRequest:request=>{requests.push(request);if(options.slow&&request.url.endsWith('/poll'))return;request.onload({status:options.sessionFailure?500:200,responseText:JSON.stringify(request.url.endsWith('/session')?{url:'https://worker.example/auth/start'}:{status:outcome,token:'new-token',deviceId:'same-device'})});}};
+ const gm={setValue:async(key,value)=>values.set(key,value),getValue:async key=>values.get(key),deleteValue:async key=>{values.delete(key);if(options.cleanupFailure)throw Error('Storage unavailable');},openInTab:url=>{opened=url;},xmlHttpRequest:request=>{requests.push(request);if(options.slow&&request.url.endsWith('/poll'))return;if(request.url.endsWith('/poll')&&options.pollResponses?.length){options.pollResponses.shift()(request);return;}request.onload({status:options.sessionFailure?500:200,responseText:JSON.stringify(request.url.endsWith('/session')?{url:'https://worker.example/auth/start'}:{status:outcome,token:'new-token',deviceId:'same-device'})});}};
  const sheet=elements.document.createElement('section'),settingsPanel=elements.document.createElement('details'),notice=elements.document.createElement('p'),button={id:'google-sign-in'},settingsButton={id:'google-settings'};sheet.hidden=true;sheet.append(settingsPanel);settingsPanel.append(notice);
  const popup={location:{href:'about:blank'},close(){closed++;}};
  const context={sheet,settingsPanel,gear:elements.document.createElement('button'),sheetClose:elements.document.createElement('button'),environment:{GM:gm,crypto,setTimeout:(fn,delay)=>{timers.set(fn,delay);return fn;},clearTimeout:fn=>timers.delete(fn)},pairingPromise:Promise.resolve(store),googleSignIn:button,googleSettings:settingsButton,window:{navigator:{userAgent:options.ios?'iPhone':''},open:(url,target,features)=>{opened={url,target,features};return popup;}},document:elements.document,pairingNotice:notice,identity:{account:'scope'},btoa,Uint8Array,suppressViewerShortcuts(){},syncClient:{configure(value){context.configured=value;}},onboarding:{},syncLocal:{},showSyncAccount(){},synchronize:async()=>{}};
@@ -348,4 +348,19 @@ for(const ending of ['done','cancel','close'])test(`viewer control refresh prese
  await f.pending;
  assert.equal(f.button.disabled,false);assert.equal(f.settingsButton.disabled,false);assert.equal(f.closed,1);assert.equal(f.timers.size,0);
  assert.equal(f.saved?.token,ending==='done'?'new-token':undefined);
+});
+
+for(const failure of ['network','timeout','http','json'])test(`Google polling retries ${failure} failures until sign-in completes`,async()=>{
+ const response=request=>{if(failure==='network')request.onerror();else if(failure==='timeout')request.ontimeout();else request.onload({status:failure==='http'?503:200,responseText:failure==='json'?'invalid':JSON.stringify({error:'Unavailable'})});};
+ const f=await googleFixture('done',{pollResponses:[response,request=>request.onload({status:200,responseText:JSON.stringify({status:'pending'})})]});
+ for(let attempt=0;attempt<2;attempt++){await f.tick(2000);assert.equal(f.closed,0);assert.equal(f.saved,undefined);assert.equal(f.button.disabled,true);assert.equal(f.settingsButton.disabled,true);}
+ await f.tick(2000);await f.pending;assert.equal(f.saved.token,'new-token');assert.equal(f.closed,1);assert.equal(f.timers.size,0);
+});
+test('Google polling failures remain cancellable and respect the session deadline',async()=>{
+ for(const ending of ['cancel','deadline']){
+  const f=await googleFixture('done',{pollResponses:[request=>request.onerror()]});
+  await f.tick(2000);assert.equal(f.closed,0);
+  if(ending==='cancel')f.notice.children[0].onclick();else await f.tick(300000);
+  await f.pending;assert.equal(f.saved,undefined);assert.equal(f.closed,1);assert.equal(f.button.disabled,false);assert.equal(f.settingsButton.disabled,false);assert.equal(f.timers.size,0);
+ }
 });
