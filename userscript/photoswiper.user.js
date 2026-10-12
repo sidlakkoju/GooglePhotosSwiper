@@ -307,8 +307,7 @@ async function openReviewDatabase(indexedDB) {
    if((current?.revision||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
    return {...state,revision:state.revision+1};
   }),
-  lease:(account,owner,release=false)=>transaction('leases',account,current=>{
-   if(current?.owner!==owner&&current?.expires>Date.now())throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+  lease:(account,owner,release=false)=>transaction('leases',account,()=>{
    return {owner,expires:release?0:Date.now()+90000};
   })
  };

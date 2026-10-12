@@ -265,14 +265,18 @@ function fakeIndexedDB(fault={}) {
  };
  return {open(){const request={result:database};queueMicrotask(()=>{if(!initialized){initialized=true;request.onupgradeneeded();}request.onsuccess();});return request;}};
 }
-test('fake IndexedDB persists account-isolated progress and rejects stale revisions and foreign leases',async()=>{
+test('fake IndexedDB persists account-isolated progress and rejects stale revisions and takes over unexpired foreign leases',async()=>{
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),indexedDB=fakeIndexedDB();
  const first=await openReviewDatabase(indexedDB),initial=await first.read('account-a');
  const saved=await first.save('account-a',{...initial,cursor:'older',items:[item('a',{decision:'keep'})]});assert.equal(saved.revision,1);
  await first.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  const reopened=await openReviewDatabase(indexedDB);assert.deepEqual(await reopened.settings(),{url:'https://sync.example',token:'synthetic-token'});assert.deepEqual(await reopened.read('account-a'),saved);assert.deepEqual(await reopened.read('account-b'),emptyReview());
  await assert.rejects(first.save('account-a',initial),/another tab/);assert.deepEqual(await first.read('account-a'),saved);
- await first.lease('account-a','owner-a');await assert.rejects(reopened.lease('account-a','owner-b'),/busy/);
+ const previous=await first.lease('account-a','owner-a');assert.ok(previous.expires>Date.now());
+ const acquired=await reopened.lease('account-a','owner-b');assert.equal(acquired.owner,'owner-b');assert.ok(acquired.expires>Date.now());
+ const database=await new Promise(resolve=>{const request=indexedDB.open();request.onsuccess=()=>resolve(request.result);});
+ const stored=await new Promise(resolve=>{const tx=database.transaction('leases'),request=tx.objectStore().get('account-a');request.onsuccess=()=>{};tx.oncomplete=()=>resolve(request.result);});
+ assert.deepEqual(stored,acquired);
  await reopened.lease('account-b','owner-b');await first.lease('account-a','owner-a',true);await reopened.lease('account-a','owner-b');
 });
 test('item revisions prevent stale undo after another tab changes or sends the same decision',()=>{
@@ -870,7 +874,7 @@ test('centered shell and grouped sheet fit desktop and phone viewports in Chrome
  }finally{await rm(directory,{recursive:true,force:true});}
 });
 
-test('opening with sync respects an in-flight Trash lease and holds the lease until sync saves',async()=>{
+test('opening with sync takes over a foreign lease while sync saves',async()=>{
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  let finishTrash,trashStarted;
  const started=new Promise(resolve=>{trashStarted=resolve;});
@@ -893,22 +897,20 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
  first.nodes.get('trash-opt-in').checked=true;first.nodes.get('trash-opt-in').onchange();
  const moving=first.click('move-trash');await started;
- const before=await first.read();
- await second.nodes.get('launcher').onclick();
- assert.match(second.nodes.get('status').textContent,/busy in another tab/);
- assert.equal(syncCalls,0);assert.deepEqual(await first.read(),before);
+ assert.equal(syncCalls,0);
  finishTrash();await moving;await first.nodes.get('close').onclick();
  const completed=await first.read();
  assert.equal(completed.items[0].state,'in_trash');
  assert.equal(first.nodes.get('status').textContent,'Verified 1 items in Trash.');
- const opening=second.nodes.get('launcher').onclick();await syncing;
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
- await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);
+ await db.lease(account,'other-tab');
+ const opening=second.nodes.get('launcher').onclick();await syncing;
+ assert.equal((await db.lease(account,'other-tab')).owner,'other-tab');
  assert.deepEqual(await first.read(),completed);
  finishSync();await opening;
  assert.equal((await first.read()).revision,completed.revision+1);
  assert.equal((await first.read()).items[0].state,'in_trash');
- await assert.rejects(db.lease(account,'other-tab'),/busy in another tab/);await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
+ assert.equal((await db.lease(account,'other-tab')).owner,'other-tab');await second.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
 
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
@@ -1184,16 +1186,20 @@ test('Keep instead reports saved album job locks without changing the candidate'
  assert.equal((await mounted.read()).items[0].decision,'remove');
  await mounted.nodes.get('close').onclick();
 });
-test('expired leases block library writes before any RPC and visible pages renew ownership',async()=>{
+test('foreign unexpired leases allow library writes and visible pages renew ownership',async()=>{
  const mounted=await mountedReview([item('a')]);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
  await new Promise(resolve=>{const tx=database.transaction('leases');const request=tx.objectStore().get(account);request.onsuccess=()=>tx.objectStore().put({owner:'other-tab',expires:Date.now()+90000},account);tx.oncomplete=resolve;});
  await mounted.click('load');
- assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
  assert.equal((await mounted.read()).items.length,1);
+ const readLease=()=>new Promise(resolve=>{const tx=database.transaction('leases'),request=tx.objectStore().get(account);request.onsuccess=()=>{};tx.oncomplete=()=>resolve(request.result);});
+ const acquired=await readLease();assert.notEqual(acquired.owner,'other-tab');assert.ok(acquired.expires>Date.now());
  mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
- assert.match(mounted.nodes.get('status').textContent,/busy in another tab/);
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
+ assert.equal((await readLease()).owner,acquired.owner);
+ await mounted.nodes.get('close').onclick();
 });
 test('page lifecycle events cannot sync over an in-flight library snapshot',async()=>{
  let finish,started;const loading=new Promise(resolve=>{started=resolve;}),requests=[];
