@@ -223,9 +223,15 @@ test('rebuilt panel version follows a metadata version bump',async()=>{
   const title=headingIn(mounted.nodes.get('overlay'));
   assert.equal(title.tagName,'H1');
   assert.notEqual(title['aria-hidden'],'true');
+  const header=title.parentNode;
+  assert.equal(header.tagName,'HEADER');
+  assert.equal(header.childNodes[0],title);
+  assert.equal(header.childNodes[1],mounted.nodes.get('settings'));
+  assert.equal(header.childNodes.at(-1),mounted.nodes.get('close'));
   const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('\n');
   assert.match(styles,/\.version-label\{font:var\(--ps-t-caption\);color:var\(--ps-label2\)\}/);
-  assert.match(styles,/\.content h1\{flex-basis:100%;order:-1;font:var\(--ps-t-title\)\}/);
+  assert.match(styles,/\.content h1\{flex-basis:100%;font:var\(--ps-t-title\)\}/);
+  assert.doesNotMatch(styles,/\.content h1\{[^}]*\border\s*:/);
   assert.match(styles,/@media\(max-width:599px\)\{[^@]*\.content h1\{position:absolute;width:1px;height:1px;overflow:hidden\}/);
  }finally{await rm(directory,{recursive:true,force:true});}
 });
