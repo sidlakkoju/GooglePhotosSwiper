@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.45
+// @version 1.2.46
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -309,9 +309,13 @@ async function openReviewDatabase(indexedDB) {
    if((current?.revision||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
    return {...state,revision:state.revision+1};
   }),
-  lease:(account,owner,release=false)=>transaction('leases',account,current=>{
+  readLease:account=>transaction('leases',account),
+  lease:(account,owner,release=false,takeover=true,claim=false)=>transaction('leases',account,current=>{
    if(release&&current?.owner!==owner)return current;
-   if(current?.owner!==owner&&current?.expires>Date.now())throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+   if(!release&&!claim&&current?.owner!==owner&&current?.expires>Date.now()){
+    if(!takeover)return current;
+    throw Error('Photos Swipe is busy in another tab. Try again when it finishes.');
+   }
    return {owner,expires:release?0:Date.now()+LEASE_EXPIRY_MS};
   })
  };
@@ -1197,18 +1201,25 @@ function mountPhotosSwipe(environment) {
   await activeOperation;activeOperation=null;
  };
  let pageActive=true,suspendingPromise=null,resumeOpening=false;
- let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
+ let sessionClosing=false;
+ let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false;
+ const useHere=document.createElement('button');useHere.setAttribute('id','use-here');useHere.textContent='Use here';useHere.hidden=true;$('status').append(useHere);useHere.onclick=()=>open(true);
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
  let writes=createWrites(),persistedItems=null;
  const synchronize=(pull=true)=>{
-  if(!identity||!syncEnabled||leaseError||writeConflict||!lockedAccount)return Promise.resolve();
+  if(!identity||!syncEnabled||otherTab||leaseError||writeConflict||leaseRecoveryPending||!lockedAccount)return Promise.resolve();
   if(syncRunning)return syncRunning.then(()=>synchronize(pull));
-  const account=identity.account;let version;
+  const account=identity.account,token=leaseGeneration;let version;
   syncRunning=(async()=>{
-   await writes.flush();if(writes.pending)return;version=state;
+   await writes.flush();if(writes.pending)return;
+   if(!await renewLease())return;
+   if(token!==leaseGeneration||otherTab||leaseError||writeConflict||lockedAccount!==account||identity?.account!==account)return;
+   version=state;
    const next=await syncClient.sync(account,version,async value=>value,{pull,rebuild:next=>rebuildSyncedReview(next,call)});
-   if(identity?.account===account&&next!==version){
+   if(token!==leaseGeneration||leaseRecoveryPending)return;
+   await refreshLease();
+   if(token===leaseGeneration&&!otherTab&&!leaseError&&identity?.account===account&&next!==version){
     state={...mergeSyncResult(state,version,next),revision:writeRevision};
     await writes.enqueue();render();
    }
@@ -1216,7 +1227,7 @@ function mountPhotosSwipe(environment) {
   return syncRunning;
  };
  function scheduleSync(){
-  if(!syncEnabled)return;
+  if(!syncEnabled||sessionClosing||otherTab)return;
   window.clearTimeout(syncTimer);
   if(++decisionCount>=10&&!busy&&!activeOperation){decisionCount=0;synchronize(false);}
   else syncTimer=window.setTimeout(()=>{decisionCount=0;if(!busy&&!activeOperation)synchronize(false);},2000);
@@ -1225,8 +1236,8 @@ function mountPhotosSwipe(environment) {
  function apply(next,removedKey){state=markSyncChanges(state,next);if(removedKey&&deckCache){deckCache=deckCache.filter(item=>item.mediaKey!==removedKey);deckItems=state.items;}render();writes.enqueue();scheduleSync();}
  const readyMessage=()=>gear.classList.contains('gear-error')?syncSummary:'';
  const idleMessage=()=>state.job?'A saved album operation is ready to retry.':readyMessage();
- const message=value=>{$('status').textContent=value;reviewStatus.textContent=reviewPanel.hidden?'':value;reviewStatus.hidden=!reviewStatus.textContent;};
- function persistResume(){if(!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value=structuredClone(resume);resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
+ const message=value=>{$('status').textContent=otherTab?'Open in another tab':value;reviewStatus.textContent=reviewPanel.hidden?'':value;reviewStatus.hidden=!reviewStatus.textContent;if(otherTab){useHere.hidden=false;$('status').append(useHere);}else useHere.hidden=true;};
+ function persistResume(){if(otherTab||!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value=structuredClone(resume);resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
  function captureVideo(){const video=$('media').querySelector('video');if(video&&video.dataset.resumeReady!=='pending'&&shown&&Number.isFinite(video.currentTime)){resume={...resume,video:{key:shown,time:video.currentTime}};persistResume();}}
  async function call(operation,args={}) {
   if(!pageActive||document.hidden)throw Error('Session changed. Close and reopen Photos Swipe.');
@@ -1262,21 +1273,28 @@ function mountPhotosSwipe(environment) {
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
-  if(leaseTimer)return;
+  if(leaseTimer||sessionClosing||!pageActive||document.hidden||$('overlay').hidden)return;
   leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
   leaseTimer?.unref?.();
  }
- async function renewLease(){
+ function pauseForOtherTab(){
+  if(!sheet.hidden)closeSettings();reviewPanel.hidden=true;previewKey=null;resumeReviewPlayback=false;renderTrashReview();$('close').focus();
+  leaseGeneration++;cancelLibraryFill();window.clearTimeout(syncTimer);syncTimer=null;libraryFailure=null;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;clearInterval(leaseTimer);leaseTimer=null;message(leaseError.message);controls();
+ }
+ async function renewLease(takeover=false,claim=false){
   const token=leaseGeneration,account=identity?.account;
-  if(!account||!pageActive||document.hidden)return false;
+  if(!account||otherTab||!pageActive||document.hidden)return false;
   try{
    await assertAccount();
-   if(token!==leaseGeneration||account!==identity?.account)return false;
+   if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
    acquiringAccount=account;
-   await db.lease(account,owner);
-   if(token!==leaseGeneration||account!==identity?.account)return false;
+   let lease=await db.lease(account,owner,false,takeover||!!leaseError||activeOperation||writes.pending||state.items!==persistedItems,claim);
+   if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
+   if(lease.owner!==owner&&(activeOperation||writes.pending||state.items!==persistedItems))lease=await db.lease(account,owner,false,true);
+   if(token!==leaseGeneration||otherTab||account!==identity?.account)return false;
+   if(lease.owner!==owner){pauseForOtherTab();return false;}
    lockedAccount=account;leaseError=null;startRenewal();return true;
   }catch(error){
    if(token===leaseGeneration){lockedAccount=null;leaseError=error;message(error.message);startRenewal();}
@@ -1285,20 +1303,22 @@ function mountPhotosSwipe(environment) {
  }
  async function refreshLease(){
   await suspendingPromise;
+  if(otherTab||sessionClosing||!pageActive||document.hidden||$('overlay').hidden)return;
   const token=leaseGeneration,recovering=leaseRecoveryPending||!!leaseError;
-  if(!pageActive||document.hidden||$('overlay').hidden||(recovering&&(busy||activeOperation)))return;
+  const account=identity?.account;
+  if(!account)return;
   if(recovering)leaseRecoveryPending=true;
   if(!await renewLease()||token!==leaseGeneration)return;
-  if(recovering){if(closingPromise||$('overlay').hidden)return;await open();return;}
-  writes.flush();refill();
-  if(++leaseTicks%15===0&&syncEnabled&&!busy&&!activeOperation&&!$('overlay').hidden)synchronize();
+  if(recovering){if(busy||activeOperation||syncRunning||closingPromise||$('overlay').hidden)return;await open();return;}
+  if(!busy&&!activeOperation&&!syncRunning){writes.flush();refill();}
+  if(++leaseTicks%15===0&&syncEnabled&&!busy&&!activeOperation&&!syncRunning&&!$('overlay').hidden)synchronize();
  }
  async function recoverLease(){
   if(!identity)return true;
   return renewLease();
  }
  async function withAccountLease(task) {
-  if(!await renewLease())throw leaseError||Error('Session changed. Close and reopen Photos Swipe.');
+  if(!await renewLease(true))throw leaseError||Error('Session changed. Close and reopen Photos Swipe.');
   await writes.flush();if(writes.pending)throw Error('Save pending local changes before this operation.');
   await task();scheduleSync();
  }
@@ -1377,11 +1397,16 @@ function mountPhotosSwipe(environment) {
   videoRPC=call('video',{mediaKey:item.mediaKey}).then(result=>{const url=mediaURL(result.url,true);if(identity?.account===account){videoURLs.set(item.mediaKey,{url,fetchedAt:Date.now()});if(videoURLs.size>32)videoURLs.delete(videoURLs.keys().next().value);}return url;}).finally(()=>{videoRPC=null;});
   return videoRPC;
  }
- let libraryLoading=null,libraryFailure=null;
+ let libraryLoading=null,libraryFailure=null,cancelLibraryLoading=null;
+ function cancelLibraryFill(){cancelLibraryLoading?.();cancelLibraryLoading=null;libraryLoading=null;}
  function fillLibrary(){
-  if(libraryLoading||libraryFailure||closingPromise||busy||leaseError||leaseRecoveryPending||!pageActive||document.hidden||!lockedAccount||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
+  if(libraryLoading||libraryFailure||sessionClosing||closingPromise||busy||leaseError||leaseRecoveryPending||!pageActive||document.hidden||!lockedAccount||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
   const token=leaseGeneration;
-  libraryLoading=load().catch(error=>{if(token!==leaseGeneration||!pageActive||document.hidden)return;libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{libraryLoading=null;render();});
+  let cancel;
+  const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
+  cancelLibraryLoading=cancel;
+  const loading=load(false,cancelled).catch(error=>{if(token!==leaseGeneration||sessionClosing||!pageActive||document.hidden)return;libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{if(libraryLoading!==loading)return;libraryLoading=null;cancelLibraryLoading=null;render();});
+  libraryLoading=loading;
  }
  function refill(){
   if(idlePending||!window.Image||$('overlay').hidden)return;
@@ -1567,13 +1592,14 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   let timer;
   try{await Promise.race([animation.finished,new Promise(resolve=>{timer=window.setTimeout(()=>{animation.finish();resolve();},350);})]);}catch{}finally{window.clearTimeout(timer);}
  }
- async function openSession() {
+ async function openSession(claim=false) {
   const requestedGeneration=leaseGeneration;
   if(closingPromise){await closingPromise;if(requestedGeneration!==leaseGeneration)return;}
   await suspendingPromise;
   if(busy||!pageActive||document.hidden)return;
-  await resumeWrite;preloader.clear();busy=true;controls();$('overlay').hidden=false;lockPage();$('launcher').hidden=true;buffer.clear();await syncRunning;
   const token=++leaseGeneration;
+  cancelLibraryFill();window.clearTimeout(syncTimer);syncTimer=null;clearInterval(leaseTimer);leaseTimer=null;libraryFailure=null;otherTab=false;useHere.hidden=true;
+  await resumeWrite;preloader.clear();busy=true;controls();$('overlay').hidden=false;lockPage();$('launcher').hidden=true;buffer.clear();await syncRunning;
   try{
    const result=await rawCall('identity');
    if(token!==leaseGeneration)return;
@@ -1590,7 +1616,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
    if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
-   if(!await renewLease())return;
+   if(!await renewLease(true,claim))return;
    const sessionGeneration=leaseGeneration;
    if(!changed){
     await writes.flush();
@@ -1607,12 +1633,13 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
   }finally{busy=false;render();controls();}
  }
- function open(){
+ function open(claim=false){
   if(openingPromise)return openingPromise;
-  openingPromise=openSession().then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageActive&&!document.hidden&&!$('overlay').hidden&&!closingPromise)open();}});
+  openingPromise=openSession(claim).then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageActive&&!document.hidden&&!$('overlay').hidden&&!closingPromise)open();}});
   return openingPromise;
  }
  async function closeSession(){
+  sessionClosing=true;cancelLibraryFill();clearInterval(leaseTimer);leaseTimer=null;window.clearTimeout(syncTimer);syncTimer=null;
   captureVideo();persistResume();if(!sheet.hidden)suppressViewerShortcuts();sheet.hidden=true;resumeReviewPlayback=false;
   preloader.clear();finishCardAnimation();clearCardAnimation();await openingPromise;await activeOperation;await libraryLoading;await writes.flush();
   leaseGeneration++;clearInterval(leaseTimer);leaseTimer=null;
@@ -1621,7 +1648,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   await openingPromise;await activeOperation;
   $('overlay').hidden=true;unlockPage();reviewPanel.hidden=true;previewKey=null;renderTrashReview();$('launcher').hidden=false;stopMedia();dropWarmVideo();buffer.clear();
   try{
-   if(await recoverLease()){
+   if(!otherTab&&await recoverLease()){
     await writes.flush();
     await synchronize(false);
    }
@@ -1632,23 +1659,27 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  function close(){
   if(closingPromise)return closingPromise;
-  closingPromise=closeSession().finally(()=>{closingPromise=null;});
+  closingPromise=closeSession().finally(()=>{sessionClosing=false;closingPromise=null;});
   return closingPromise;
  }
  function decide(decision){
-  if(busy||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;
+  if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
   try{
   swipeFeedback.dismiss(decision);window.performance?.mark('swipe');swipeAt=window.performance?.now()??null;const previous=item.decision,next=decideReview(state,item.mediaKey,decision,previous,item.revision||0);inspected=null;focused=null;previousKey=item.mediaKey;apply({...next,history:[...(state.history||[]),{key:item.mediaKey,previous,decision,revision:(item.revision||0)+1}]},item.mediaKey);message([decision==='remove'?'Added to the local removal queue.':`Kept ${item.name}.`,readyMessage()].filter(Boolean).join(' '));
   }catch(error){message(error.message);}
  }
- async function undo(){if(busy||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
- async function load(refresh=false) {
+ async function undo(){if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
+ async function load(refresh=false,cancelled=null) {
+  const token=leaseGeneration;
+  const assertLoadSession=()=>{if(token!==leaseGeneration||(cancelled&&sessionClosing))throw Error('Library loading session changed.');};
+  const loadCall=async(operation,args)=>{assertLoadSession();const request=call(operation,args);const result=await (cancelled?Promise.race([request,cancelled]):request);assertLoadSession();return result;};
   buffer.clear();previousKey=null;
   libraryFailure=null;
-  const savePage=async(next,page,cursor,refresh)=>{await syncRunning;await assertSaveAccount();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
-  const result=await loadReviewPages({read:async()=>state,save:savePage,call,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
+  const result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  assertLoadSession();
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
 
@@ -1662,7 +1693,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;(receivingPanel.querySelector('#pairing-short-code')||receivingPanel.querySelector('input')).focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:async()=>{await openingPromise;await open();},onClose:suppressViewerShortcuts,manual,url:$('sync-url').value.trim()||undefined});};
  const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=onboardPair.onclick;receivePairing(false);
  window.addEventListener('hashchange',()=>receivePairing(false));
- $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
+ $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=$('sort').onchange=()=>{inspected=null;focused=null;buffer.clear();render();};
  $('zoom').oninput=()=>{swipeFeedback.reset();mediaElement.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'';const image=$('media').querySelector('img');if(image){$('card').classList.toggle('zoomed',Number($('zoom').value)>1);image.style.maxWidth='none';image.style.maxHeight='none';image.style.width=`${Number($('zoom').value)*100}%`;image.style.touchAction=Number($('zoom').value)>1?'pan-x pan-y pinch-zoom':'';}};
@@ -1673,7 +1704,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  for(const target of [launcherElement,overlayElement])for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','touchstart','touchmove','touchend','touchcancel','wheel','mousedown','mouseup'])target.addEventListener(type,event=>event.stopPropagation());
  for(const type of ['keydown','keyup','keypress'])overlayElement.addEventListener(type,event=>event.stopPropagation());
  launcherElement.addEventListener('click',event=>event.stopPropagation());
- const swipeFeedback=createSwipeFeedback({window,targets:[$('media'),$('swipe')],card:topCard,under:underCard,keep:stamps[0],remove:stamps[1],canSwipe:()=>!!current()&&!busy&&reviewPanel.hidden&&sheet.hidden&&!inspected&&!$('overlay').hidden&&Number($('zoom').value)<=1,onDecide:decide,playbackOnClick:true});
+ const swipeFeedback=createSwipeFeedback({window,targets:[$('media'),$('swipe')],card:topCard,under:underCard,keep:stamps[0],remove:stamps[1],canSwipe:()=>!!current()&&!busy&&!otherTab&&!leaseError&&reviewPanel.hidden&&sheet.hidden&&!inspected&&!$('overlay').hidden&&Number($('zoom').value)<=1,onDecide:decide,playbackOnClick:true});
  $('overlay').addEventListener('dragstart',event=>event.preventDefault());
  $('media').addEventListener('dblclick',event=>{if(event.target.tagName!=='VIDEO')toggleEnlarge();});
  function suspendPage(){
@@ -1685,7 +1716,9 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   return suspendingPromise;
  }
  async function resumeLease(){
-  await suspendingPromise;await activeOperation;await libraryLoading;
+  await suspendingPromise;await activeOperation;await syncRunning;
+  if(!leaseRecoveryPending)await refreshLease();
+  await libraryLoading;
   if(!pageActive||document.hidden||!identity||$('overlay').hidden||closingPromise)return;
   startRenewal();await refreshLease();refreshStalePreviews();
  }
@@ -1695,7 +1728,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  window.addEventListener('pagehide',leavePage);
  window.addEventListener('unload',leavePage);
- window.addEventListener('focus',()=>{if(identity&&!busy&&!$('overlay').hidden)synchronize();});
+ window.addEventListener('focus',async()=>{if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){await refreshLease();if(!otherTab)await synchronize();}});
  document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else{pageActive=true;if(openingPromise&&!$('overlay').hidden)resumeOpening=true;else if(leaseRecoveryPending&&!identity&&!$('overlay').hidden&&!closingPromise)open();if(identity&&!$('overlay').hidden)resumeLease();}});
  window.addEventListener('pageshow',()=>{pageActive=true;if(!document.hidden&&!$('overlay').hidden){if(openingPromise)resumeOpening=true;return open();}});
  const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
@@ -1735,7 +1768,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.45":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.46":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
