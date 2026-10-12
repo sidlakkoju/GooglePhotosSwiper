@@ -904,7 +904,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height,expanded] of [[1440,900,false],[400,713,true],[320,633,true],[390,844,false],[320,480,false]]){
+  for(const [width,height,expanded] of [[1280,800,false],[1440,900,false],[400,713,true],[320,633,true],[390,844,false],[320,480,false]]){
    const frame=document.createElement('iframe');frame.style.cssText='position:fixed;inset:0';frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
@@ -925,8 +925,9 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     const opaque=doc.defaultView.getComputedStyle(top).backgroundColor===background&&doc.defaultView.getComputedStyle(media).backgroundColor===background;
     const covered=doc.defaultView.getComputedStyle(top).opacity==='1'&&doc.defaultView.getComputedStyle(top).visibility==='visible'&&front.left<=behind.left&&front.right>=behind.right&&front.top<=behind.top&&front.bottom>=behind.bottom&&doc.defaultView.getComputedStyle(top).zIndex>doc.defaultView.getComputedStyle(under).zIndex;
     const captionVisible=caption.parentElement===content&&filename.height>=caption.scrollHeight&&filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
+    const mediaAboveControls=playback.filter(button=>!button.hidden).every(button=>bounds(loading?poster:media.querySelector('video')).bottom<=bounds(button).top);
     const clearOfControls=playback.every(button=>bounds(button).bottom<=filename.top&&bounds(button).left>=box.left&&bounds(button).right<=box.right);
-    videoChecks.push({loading,background,opaque,covered,captionVisible,clearOfControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
+    videoChecks.push({loading,background,opaque,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
    }
    sheet.hidden=false;
    const controls=['filter','sort'].map(id=>root.getElementById(id));
@@ -953,9 +954,9 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   const result=spawnSync(browser,['--headless','--no-sandbox','--disable-gpu','--disable-background-networking','--window-size=1600,1200',`--user-data-dir=${join(directory,'profile')}`,'--dump-dom',`file://${path}`],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
   if(result.status!==0&&/Operation not permitted|operation not permitted/.test(result.stderr)){t.skip('Sandbox prevents Chrome from opening sockets');return;}
   assert.equal(result.status,0,result.stderr);
-  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,5,result.stdout);
+  const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,6,result.stdout);
   for(const measurement of measurements){
-   for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
+   for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder','pairingAboveSettings','pairingVisible'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(440,measurement.width),JSON.stringify(measurement));
