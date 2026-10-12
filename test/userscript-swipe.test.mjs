@@ -2,15 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSwipeFeedback} from '../lib/userscript-swipe.mjs';
 function setup(reduced=false,width=300){
- const handlers={},windowHandlers={},card={style:{},getBoundingClientRect:()=>({width})},under={style:{}},keep={style:{}},remove={style:{}},decisions=[],frames=new Map();
+ const handlers={},windowHandlers={},listenerOptions={},card={style:{},getBoundingClientRect:()=>({width}),querySelector:()=>null},under={style:{}},keep={style:{}},remove={style:{}},decisions=[],frames=new Map();
  let nextFrame=0,allowed=true;
- const target={addEventListener:(name,handler)=>{handlers[name]=handler;},setPointerCapture(){},hasPointerCapture:()=>true,releasePointerCapture(){}};
+ const target={addEventListener:(name,handler,options)=>{handlers[name]=handler;listenerOptions[name]=options;},setPointerCapture(){},hasPointerCapture:()=>true,releasePointerCapture(){},querySelector:sel=>sel==='video'?null:null};
  const window={addEventListener:(name,handler,capture)=>{assert.equal(capture,true);windowHandlers[name]=handler;},matchMedia:()=>({matches:reduced}),requestAnimationFrame:fn=>{frames.set(++nextFrame,fn);return nextFrame;},cancelAnimationFrame:id=>frames.delete(id)};
  const feedback=createSwipeFeedback({window,targets:[target],card,under,keep,remove,canSwipe:()=>allowed,onDecide:value=>decisions.push(value)});
- const send=(type,x,y=0,id=1,timeStamp=undefined,eventTarget={tagName:'IMG'})=>handlers[type]?.({pointerId:id,clientX:x,clientY:y,button:0,isPrimary:true,timeStamp,target:eventTarget});
+ const send=(type,x,y=0,id=1,timeStamp=undefined,eventTarget={tagName:'IMG'})=>handlers[type]?.({pointerId:id,clientX:x,clientY:y,button:0,isPrimary:true,timeStamp,target:eventTarget,pointerType:'touch',preventDefault(){}});
  const paint=()=>{for(const [id,fn] of frames){frames.delete(id);fn();}};
- const sendWindow=(type,x,y=0,id=1,timeStamp=undefined)=>windowHandlers[type]?.({pointerId:id,clientX:x,clientY:y,timeStamp});
- return {send,sendWindow,paint,card,under,keep,remove,decisions,frames,feedback,block:()=>{allowed=false;}};
+ const sendWindow=(type,x,y=0,id=1,timeStamp=undefined)=>windowHandlers[type]?.({pointerId:id,clientX:x,clientY:y,timeStamp,preventDefault(){}});
+ const touchmove=(cancelable=true)=>{let prevented=false;handlers.touchmove?.({cancelable,preventDefault:()=>{prevented=true;}});return prevented;};
+ return {send,sendWindow,paint,touchmove,listenerOptions,card,under,keep,remove,decisions,frames,feedback,block:()=>{allowed=false;}};
 }
 for(const direction of [-1,1])test(`drag feedback follows direction ${direction} and saturates at the commit threshold`,()=>{
  const s=setup();s.send('pointerdown',0);s.send('pointermove',direction*49.5,5);
@@ -58,6 +59,42 @@ test('a short fast fling commits, but a held short drag does not',()=>{
 for(const end of ['pointercancel'])test(`${end} cancels a committable drag and queued paint`,()=>{
  const s=setup();s.send('pointerdown',0);s.send('pointermove',200);s.send(end,200);s.paint();
  assert.deepEqual(s.decisions,[]);assert.equal(s.card.style.transform,'');assert.equal(s.keep.style.opacity,'0');
+});
+for(const direction of [-1,1])test(`pointercancel after a locked ${direction>0?'right':'left'} swipe past threshold springs back and never commits`,()=>{
+ const s=setup();const animations=[];
+ s.card.animate=(frames,options)=>{animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}};};
+ s.send('pointerdown',0);s.send('pointermove',direction*200);s.paint();
+ const mid=s.card.style.transform;assert.match(mid,/translate3d/);
+ s.send('pointercancel',direction*200);
+ assert.deepEqual(s.decisions,[]);
+ assert.equal(s.card.style.transform,'');
+ assert.equal(animations.length,1);
+ assert.equal(animations[0].options.duration,180);
+ assert.equal(animations[0].frames[0].transform,mid);
+ assert.equal(animations[0].frames[1].transform,'none');
+});
+test('pointercancel after a locked short drag springs back and never commits',()=>{
+ const s=setup();const animations=[];
+ s.card.animate=(frames,options)=>{animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}};};
+ s.send('pointerdown',0);s.send('pointermove',40);s.paint();
+ const mid=s.card.style.transform;assert.match(mid,/translate3d/);
+ s.send('pointercancel',40);
+ assert.deepEqual(s.decisions,[]);assert.equal(animations.length,1);assert.equal(animations[0].options.duration,180);assert.equal(animations[0].frames[0].transform,mid);
+});
+test('touchmove after horizontal lock is non-passive and preventDefaulted',()=>{
+ const s=setup();
+ assert.deepEqual(s.listenerOptions.touchmove,{passive:false});
+ assert.equal(s.touchmove(),false);
+ s.send('pointerdown',0);s.send('pointermove',5);assert.equal(s.touchmove(),false);
+ s.send('pointermove',40);assert.equal(s.touchmove(),true);
+ assert.equal(s.touchmove(false),false);
+});
+test('swipe CSS uses touch-action none on card, media, and swipe strip',async()=>{
+ const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8'));
+ assert.match(source,/\.card\{touch-action:none/);
+ assert.match(source,/\.media\{touch-action:none/);
+ assert.match(source,/\.swipe\{[^}]*touch-action:none/);
+ assert.doesNotMatch(source,/overflow-x:hidden/);
 });
 test('video taps toggle playback and video drags decide without toggling',()=>{
  const s=setup();let plays=0,pauses=0;

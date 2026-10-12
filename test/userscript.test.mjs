@@ -177,8 +177,8 @@ test('userscript installed without UTF-8 decoding preserves Unicode UI labels',a
  const mounted=bundleEnvironment();
  vm.runInNewContext(bytes.toString('latin1'),mounted.environment);
  await mounted.nodes.get('launcher').onclick();
- assert.equal(mounted.nodes.get('remove').textContent,'\u00d7 Queue');
- assert.equal(mounted.nodes.get('keep').textContent,'\u2713 Keep');
+ assert.equal(mounted.nodes.get('remove').textContent,'\u2715');
+ assert.equal(mounted.nodes.get('keep').textContent,'\u2665');
  assert.match(mounted.nodes.get('stats').textContent,/ to review \u00b7 /);
 });
 test('unreadable legacy albums retain their target with title-sensitive lookup and resume safely',async()=>{
@@ -421,10 +421,10 @@ test('mounted undo survives a fresh script instance with the same IndexedDB',asy
  assert.deepEqual((await first.read()).items.map(row=>row.decision),['keep',null]);
  assert.match(second.nodes.get('caption').textContent,/^b · /);
 });
-test('mounted Trash is opt-in, confirms the exact count and verifies synthetic Trash',async()=>{
+test('mounted Trash requires confirmation, confirms the exact count and verifies synthetic Trash',async()=>{
  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})]);const requests=[],prompts=[];
  mounted.environment.window.fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];requests.push(entry[0]);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['a',null,null,'stable']],null])};};
- assert.equal(mounted.nodes.get('move-trash').hidden,true);await mounted.click('move-trash');assert.equal(requests.length,0);
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);assert.equal(requests.length,0);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return false;};await mounted.click('move-trash');assert.equal(requests.length,0);assert.match(prompts[0],/exactly 1 items/);
  mounted.environment.window.confirm=()=>true;
@@ -442,7 +442,7 @@ test('Trash completion status resets on reload and cached-page restore while est
   return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[['previous'],...candidates.map(row=>[row.mediaKey,null,null,row.dedupKey])],null])};
  };
  const mounted=await mountedReview([item('previous',{decision:'remove',state:'in_trash',spaceTaken:55000}),...candidates],{fetch,confirm:()=>true});
- const ready='Ready. Decisions are saved locally on this browser.';
+ const ready='';
  assert.match(mounted.nodes.get('stats').textContent,/In Trash: 55 KB \(running total\)$/);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  await mounted.click('move-trash');
@@ -487,7 +487,7 @@ test('sent candidates remain listed for Trash after the removal queue clears and
  const enable=target=>{target.nodes.get('trash-opt-in').checked=true;target.nodes.get('trash-opt-in').onchange();};
  const listed=target=>target.nodes.get('trash-candidates-list').childNodes.map(button=>button.childNodes[1].textContent);
  assert.equal(mounted.nodes.get('queue-title').textContent,'Removal queue (0)');
- assert.equal(mounted.nodes.get('trash-candidates').hidden,true);
+ assert.equal(mounted.nodes.get('trash-candidates').hidden,false);
  enable(mounted);
  assert.equal(mounted.nodes.get('trash-candidates').hidden,false);
  assert.equal(mounted.nodes.get('move-trash').textContent,'Move 5 items to Trash');
@@ -692,8 +692,8 @@ test('overlay isolates pointer touch wheel and all key events while preserving n
  }
  const drag=swipeEvent();overlay.listeners.dragstart(drag);assert.equal(drag.prevented,true);
  const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
- assert.match(source,/\.card\{touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
- assert.match(source,/\.media\{touch-action:pan-y;[^}]*overflow:auto/);
+ assert.match(source,/\.card\{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none/);
+ assert.match(source,/\.media\{touch-action:none;[^}]*overflow:auto/);
  assert.match(source,/\.card\.expanded \.media\{touch-action:pan-x pan-y pinch-zoom;/);
  assert.match(source,/\.media img\{pointer-events:none;/);assert.match(source,/overscroll-behavior:contain/);
 });
@@ -710,15 +710,15 @@ test('mounted album completion and footer point to the panel Trash controls',asy
  const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch,confirm:()=>true});
  await mounted.click('send');
  assert.equal((await mounted.read()).items[0].queueSent,true);
- assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
- const content=mounted.nodes.get('overlay').childNodes[0],toolbar=content.childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash'))),footer=toolbar.childNodes.find(node=>node.childNodes[0]?.textContent==='Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
- assert.equal(footer.childNodes[0].textContent,'Swipes never delete media. Send candidates to a review album, or explicitly enable Move to Trash.');
- assert.ok(content.childNodes.indexOf(mounted.nodes.get('status'))<content.childNodes.indexOf(toolbar));
+ assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Choose Trash in Settings to use this panel, or open the review album to move items manually in Google Photos.');
+ const content=mounted.nodes.get('overlay').childNodes[0],toolbar=mounted.nodes.get('review-panel').childNodes.find(node=>node.childNodes.includes(mounted.nodes.get('move-trash'))),footer=toolbar.childNodes.find(node=>node.textContent==='Review marked items before moving them to Google Photos Trash.');
+ assert.equal(footer.textContent,'Review marked items before moving them to Google Photos Trash.');
+ assert.ok(mounted.nodes.get('review-panel').childNodes.includes(toolbar));
  assert.ok(toolbar.childNodes.includes(footer));
  assert.equal(footer.class,'album-explanation');
- assert.ok(content.childNodes.indexOf(mounted.nodes.get('trash-candidates'))<content.childNodes.indexOf(toolbar));
+ assert.ok(mounted.nodes.get('review-panel').childNodes.indexOf(mounted.nodes.get('trash-candidates'))<mounted.nodes.get('review-panel').childNodes.indexOf(toolbar));
  assert.ok(toolbar.childNodes.some(node=>node.childNodes.includes(mounted.nodes.get('trash-opt-in'))));
- assert.equal(mounted.nodes.get('move-trash').hidden,true);
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);
  assert.ok(!requests.includes('XwAOJf'));
 });
 test('card stack clips outgoing cards without a later overflow override',async()=>{
@@ -769,7 +769,7 @@ test('mounted album send creates a readable title and saves the verified album',
  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable'})],fetch);
  mounted.environment.window.confirm=()=>true;
  await mounted.click('send');
- assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Select Enable Move to Trash below to use this panel, or open the review album to move items manually in Google Photos.');
+ assert.equal(mounted.nodes.get('status').textContent,'Every candidate was verified in the review album. Choose Trash in Settings to use this panel, or open the review album to move items manually in Google Photos.');
  assert.deepEqual(titles,['Photos Swipe · Review']);
  assert.equal((await mounted.read()).albumKey,'album');
  assert.equal((await mounted.read()).job,null);
@@ -777,56 +777,45 @@ test('mounted album send creates a readable title and saves the verified album',
  assert.ok(requests.includes('E1Cajb'));
 });
 
-test('phone layout stacks sync fields and keeps library controls and Trash text clear in Chrome',async t=>{
+test('centered shell and grouped sheet fit desktop and phone viewports in Chrome',async t=>{
  const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
  if(!browser){t.skip('Chrome is unavailable');return;}
  const mounted=await mountedReview([item('a')]);
  mounted.nodes.get('overlay').hidden=false;mounted.nodes.get('move-trash').hidden=false;
  const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+ const parents=new Map();
+ const recordParents=node=>{for(const child of node.childNodes||[]){parents.set(child,node);recordParents(child);}};recordParents(mounted.root);
  const serialize=node=>{
   if(!node.tagName)return escape(node.textContent||'');
   const tag=node.tagName.toLowerCase();
   const attributes=['id','class','type','min','max','step','value'].filter(key=>typeof node[key]==='string'&&node[key]).map(key=>` ${key}="${escape(node[key])}"`).join('');
-  return `<${tag}${attributes}${node.hidden?' hidden':''}>${escape(node.textContent||'')}${node.childNodes.map(serialize).join('')}</${tag}>`;
+  return `<${tag}${attributes}${node.hidden?' hidden':''}>${(node.textContent!==undefined?escape(node.textContent):'')+node.childNodes.filter(child=>parents.get(child)===node).map(serialize).join('')}</${tag}>`;
  };
  const markup=mounted.root.childNodes.map(serialize).join('');
  const directory=await mkdtemp(join(tmpdir(),'photos-layout-'));
  try{
   const html=`<!doctype html><body><script>
   const results=[];
-  for(const [width,height,expanded] of [[400,713,false],[400,633,true],[320,633,true],[390,844,false]]){
+  for(const [width,height,expanded] of [[1440,900,false],[400,713,true],[320,633,true],[390,844,false]]){
    const frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height=height+'px';document.body.append(frame);
    const doc=frame.contentDocument,host=doc.createElement('div');host.style.cssText='position:fixed;inset:0';doc.body.append(host);
    const root=host.attachShadow({mode:'open'});root.innerHTML=${JSON.stringify(markup)};
-   root.getElementById('move-trash').hidden=!expanded;root.getElementById('album').hidden=!expanded;
-   const footer=root.querySelector('.album-controls'),overlay=root.querySelector('.overlay'),label=root.querySelector('.trash-toggle');
+   const content=root.querySelector('.content'),overlay=root.querySelector('.overlay'),sheet=root.getElementById('settings-sheet');
    const bounds=element=>element.getBoundingClientRect();
-   const controls=['load','refresh','filter','sort'].map(id=>root.getElementById(id)).filter(Boolean);
-   const clear=()=>controls.every(control=>bounds(control).bottom<=bounds(footer).top);
-   const initialClear=clear();overlay.scrollTop=overlay.scrollHeight;
-   const range=doc.createRange();range.selectNodeContents(label);
-   const textFits=range.getBoundingClientRect().right<=bounds(label).right+1;
-   const zoom=root.querySelector('.zoom-control'),slider=root.getElementById('zoom');
-   const zoomFits=bounds(slider).right<=bounds(zoom).right+1&&bounds(slider).top>=bounds(zoom).top&&bounds(slider).bottom<=bounds(zoom).bottom;
-   const toggleVisible=bounds(label).top>=bounds(overlay).top&&bounds(label).bottom<=bounds(overlay).bottom;
-   const explanation=root.querySelector('.album-explanation'),check=root.getElementById('trash');
-   const inside=(element,container)=>bounds(element).left>=bounds(container).left&&bounds(element).right<=bounds(container).right+1&&bounds(element).top>=bounds(container).top&&bounds(element).bottom<=bounds(container).bottom;
-   const textInside=element=>{range.selectNodeContents(element);return Array.from(range.getClientRects()).every(rect=>rect.left>=bounds(element).left&&rect.right<=bounds(element).right+1);};
-   const explanationVisible=inside(explanation,footer)&&inside(explanation,overlay)&&textInside(explanation);
-   const explanationClear=Array.from(footer.querySelectorAll('button,a,label')).filter(element=>!element.hidden).every(element=>bounds(element).bottom<=bounds(explanation).top||bounds(element).top>=bounds(explanation).bottom);
-   const checkFits=inside(check,footer)&&textInside(check);
+   const modal=bounds(content),backdrop=bounds(overlay);
+   sheet.hidden=false;
+   const controls=['filter','sort','review-every','delete-method'].map(id=>root.getElementById(id));
+   const sheetBounds=bounds(sheet);
    const settings=root.getElementById('sync-settings');settings.open=true;
-   const settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
+   const range=doc.createRange(),settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
    const buttons=Array.from(settings.querySelectorAll('button')).filter(button=>button.getClientRects().length);
    const syncFields=['sync-url','sync-token'].map(id=>{
     const input=root.getElementById(id),field=input.parentElement;
     range.selectNodeContents(field.firstChild);const text=range.getBoundingClientRect(),box=bounds(input),fieldBox=bounds(field);
     return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
    });
-   const local=bounds(root.getElementById('sync-local'));
-   const localOwnRow=Array.from(settings.children).filter(element=>element!==root.getElementById('sync-local')&&element.getClientRects().length).every(element=>bounds(element).bottom<=local.top||bounds(element).top>=local.bottom);
-   const toggleHeight=bounds(label).height;overlay.scrollTop=overlay.scrollHeight;
-   results.push({width,height,syncFields,localOwnRow,initialClear,toggleVisible,toggleHeight,bottomClear:clear(),textFits,zoomFits,explanationVisible,explanationClear,checkFits,filterTop:bounds(root.getElementById('filter')).top,sortTop:bounds(root.getElementById('sort')).top});
+   const controlsFit=controls.every(control=>bounds(control).left>=sheetBounds.left&&bounds(control).right<=sheetBounds.right+1);
+   results.push({width,height,syncFields,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -836,12 +825,9 @@ test('phone layout stacks sync fields and keeps library controls and Trash text 
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,4,result.stdout);
   for(const measurement of measurements){
-   assert.equal(measurement.localOwnRow,true,JSON.stringify(measurement));
    for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
-   assert.equal(measurement.initialClear,true,JSON.stringify(measurement));assert.equal(measurement.toggleVisible,true,JSON.stringify(measurement));assert.ok(measurement.toggleHeight>=44,JSON.stringify(measurement));assert.equal(measurement.bottomClear,true,JSON.stringify(measurement));
-   assert.equal(measurement.textFits,true,JSON.stringify(measurement));assert.equal(measurement.zoomFits,true,JSON.stringify(measurement));
-   for(const key of ['explanationVisible','explanationClear','checkFits'])assert.equal(measurement[key],true,JSON.stringify(measurement));
-   assert.equal(measurement.filterTop,measurement.sortTop,JSON.stringify(measurement));
+   for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder'])assert.equal(measurement[key],true,JSON.stringify(measurement));
+   assert.equal(measurement.modalWidth,Math.min(540,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
 });
@@ -1004,7 +990,7 @@ test('pairing settings failure after sign-in preserves the loaded review session
  assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);
  assert.match(mounted.nodes.get('caption').textContent,/^synthetic-photo · /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
- assert.equal(mounted.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ assert.equal(mounted.nodes.get('status').textContent,'');
  assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>node.textContent==='Pairing storage unavailable: Synthetic pairing read failure'));
  assert.deepEqual(await db.read(account),saved);
  await mounted.nodes.get('keep').onclick();
@@ -1014,18 +1000,19 @@ test('pairing settings failure after sign-in preserves the loaded review session
  assert.equal(mounted.nodes.get('status').textContent,'Kept synthetic-photo.');
 });
 
-test('first-use sync setup is above the card and local dismissal survives reopening',async()=>{
+test('sync setup lives in the gear sheet and local dismissal survives reopening',async()=>{
  const mounted=await mountedReview([item('a')]);
  const content=mounted.nodes.get('overlay').childNodes[0],settings=mounted.nodes.get('sync-settings');
- assert.ok(content.childNodes.indexOf(settings)<content.childNodes.indexOf(mounted.nodes.get('card')));
- assert.ok(content.childNodes.indexOf(mounted.nodes.get('sync-status'))<content.childNodes.indexOf(mounted.nodes.get('card')));
+ assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
+ mounted.nodes.get('settings').onclick();assert.equal(mounted.nodes.get('settings-sheet').hidden,false);
  assert.equal(settings.open,true);
+ assert.equal(mounted.nodes.get('pair-onboarding').hidden,false);
  assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
- await mounted.click('sync-local');assert.equal(settings.open,false);
+ await mounted.click('sync-local');assert.equal(mounted.nodes.get('settings-sheet').hidden,true);assert.equal(mounted.nodes.get('pair-onboarding').hidden,true);
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
- await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('sync-settings').open,false);
- assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('settings-sheet').hidden,true);assert.equal(reopened.nodes.get('pair-onboarding').hidden,true);
+ assert.equal(reopened.nodes.get('status').textContent,'');
 });
 
 test('sync setup actions preserve the saved album retry status and job',async()=>{
@@ -1047,12 +1034,12 @@ test('sync setup actions preserve the saved album retry status and job',async()=
   assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
   assert.equal(mounted.nodes.get('send').textContent,'Retry saved album operation');
   assert.deepEqual((await mounted.read()).job,job);
-  assert.equal(mounted.nodes.get('sync-settings').open,false);
+  assert.equal(mounted.nodes.get('sync-settings').open,true);
   if(action==='sync-save')assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
  }
 });
 
-test('main and visible sync status report successful sync, failures and disabling sync',async()=>{
+test('sync success stays quiet and errors show a toast and gear dot',async()=>{
  const mounted=await mountedReview([item('a')]);
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
@@ -1067,15 +1054,15 @@ test('main and visible sync status report successful sync, failures and disablin
  const db=await openReviewDatabase(reopened.environment.window.indexedDB);
  await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  vm.runInNewContext(source,reopened.environment);await reopened.nodes.get('launcher').onclick();
- assert.equal(requests,1);assert.match(reopened.nodes.get('status').textContent,/sync enabled.*Synced/);
+ assert.equal(requests,1);assert.equal(reopened.nodes.get('status').textContent,'');assert.equal(reopened.nodes.get('settings').classList.contains('gear-error'),false);
  assert.match(reopened.nodes.get('sync-status').textContent,/^Synced/);
- assert.equal(reopened.nodes.get('sync-settings').open,false);
+ assert.equal(reopened.nodes.get('settings-sheet').hidden,true);
  fail=true;await reopened.nodes.get('launcher').onclick();
- assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);
+ assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);assert.equal(reopened.nodes.get('settings').classList.contains('gear-error'),true);
  reopened.nodes.get('sync-url').value='';reopened.nodes.get('sync-token').value='';
  reopened.nodes.get('sync-save').onclick();
  for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
- assert.equal(reopened.nodes.get('status').textContent,'Ready. Decisions are saved locally on this browser.');
+ assert.equal(reopened.nodes.get('status').textContent,'');
  assert.equal(reopened.nodes.get('sync-status').textContent,'Sync off · saved locally');
 });
 
@@ -1682,7 +1669,7 @@ test('paired devices render names safely and inline rename and confirmed revoke 
  assert.ok(requests.some(([path,method])=>path==='/api/devices/qa'&&method==='PATCH'));
 });
 
-test('paired notice stays visible with settings closed and opens the device list',async()=>{
+test('paired notice lives in Sync and opens the device list',async()=>{
  const requests=[];
  const mounted=await mountedReview([], {fetch:async url=>{
   const path=new URL(url).pathname;requests.push(path);
@@ -1692,8 +1679,8 @@ test('paired notice stays visible with settings closed and opens the device list
  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
  await mounted.click('sync-save');
  const notice=mounted.nodes.get('paired-notice'),settings=mounted.nodes.get('sync-settings');
- assert.equal(settings.open,false);assert.equal(notice.hidden,false);
- assert.ok(mounted.nodes.get('overlay').childNodes[0].childNodes.includes(notice));
+ assert.equal(settings.open,true);assert.equal(notice.hidden,false);
+ assert.ok(settings.childNodes.includes(notice));
  await mounted.click('paired-notice');
  assert.equal(settings.open,true);assert.equal(mounted.nodes.get('paired-devices').open,true);
  assert.ok(requests.includes('/api/devices'));
@@ -1819,8 +1806,161 @@ test('loader panel displays the selected signed release version instead of the b
  const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  for(const version of ['1.2.99','1.2.8']){
   const mounted=bundleEnvironment();
-  const document={documentElement:{dataset:{}},querySelector:()=>null,createElement:()=>({remove(){}}),head:{appendChild:script=>vm.runInNewContext(script.textContent,mounted.environment)}};
-  assert.equal(injectRelease({document},{version,code}),true);
+  const GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
+  assert.equal(injectRelease({...mounted.environment,GM},{version,code}),true);
   assert.equal(mounted.nodes.get('running-version').textContent,'v'+version);
  }
+});
+
+test('resume record survives reload independently of decisions and is account scoped',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const indexedDB=fakeIndexedDB(),db=await openReviewDatabase(indexedDB);
+ const saved=await db.save('synthetic-account',{...emptyReview(),items:[item('synthetic-video',{type:'video'}),item('synthetic-marked',{decision:'remove'})],history:[{key:'synthetic-marked',decision:'remove',previous:null,revision:1}]});
+ const resume={currentId:'synthetic-video',video:{key:'synthetic-video',time:37.25},filter:'video',sort:'largest',reviewEvery:25,deleteMethod:'trash'};
+ await db.saveResume('synthetic-account',resume);
+ const reopened=await openReviewDatabase(indexedDB);
+ assert.deepEqual(await reopened.resume('synthetic-account'),resume);
+ assert.deepEqual(await reopened.resume('different-synthetic-account'),{});
+ assert.deepEqual(await reopened.read('synthetic-account'),saved);
+});
+
+test('mounted shell restores exact card and Escape closes settings and enlarged view before shell',async()=>{
+ const mounted=await mountedReview([item('synthetic-first'),item('synthetic-second')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ mounted.nodes.get('close').onclick();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ await db.saveResume(account,{currentId:'synthetic-second',reviewEvery:7});
+ await mounted.nodes.get('launcher').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/synthetic-second/);
+ assert.equal(mounted.nodes.get('review-every').value,'7');
+ const escape=()=>mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
+ mounted.nodes.get('settings').onclick();
+ assert.equal(mounted.nodes.get('settings-sheet').hidden,false);
+ escape();assert.equal(mounted.nodes.get('settings-sheet').hidden,true);assert.equal(mounted.nodes.get('overlay').hidden,false);
+ mounted.nodes.get('enlarge').onclick();escape();assert.equal(mounted.nodes.get('card').classList.contains('expanded'),false);assert.equal(mounted.nodes.get('overlay').hidden,false);
+ escape();assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ await db.saveResume(account,{currentId:'synthetic-missing'});
+ await mounted.nodes.get('launcher').onclick();
+ assert.match(mounted.nodes.get('caption').textContent,/synthetic-first/);
+ assert.match(mounted.nodes.get('status').textContent,/Saved item is unavailable/);
+});
+
+test('video resume is throttled, flushed on close and seeks after metadata on reload',async()=>{
+ const fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])});
+ const mounted=await mountedReview([item('synthetic-video',{type:'video'})],{fetch});
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const video=mounted.nodes.get('media').querySelector('video');video.duration=120;video.listeners.loadedmetadata();
+ video.currentTime=12.5;video.listeners.timeupdate();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ assert.equal((await db.resume(account)).video.time,12.5);
+ video.currentTime=13;video.listeners.timeupdate();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).video.time,12.5);
+ video.currentTime=37.25;mounted.nodes.get('close').onclick();
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).video.time,37.25);
+ const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.window.fetch=fetch;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ await reopened.nodes.get('launcher').onclick();await new Promise(resolve=>setTimeout(resolve,20));
+ const restored=reopened.nodes.get('media').querySelector('video');restored.duration=120;restored.listeners.loadedmetadata();
+ assert.equal(restored.currentTime,37.25);
+ assert.equal((await db.read(account)).items[0].decision,null);
+});
+
+test('Tab traps focus in the shell and settings while backdrop click closes the window',async()=>{
+ const mounted=await mountedReview([item('synthetic-card')]);
+ const overlay=mounted.nodes.get('overlay'),sheet=mounted.nodes.get('settings-sheet');
+ const controls=['settings','review','close','remove','undo','keep','enlarge'].map(id=>mounted.nodes.get(id));
+ for(const control of controls)control.getClientRects=()=>[{}];
+ overlay.querySelectorAll=()=>controls;
+ const tab=shiftKey=>mounted.environment.window.listeners.keydown({key:'Tab',shiftKey,preventDefault(){},stopImmediatePropagation(){}});
+ controls.at(-1).focus();tab(false);assert.equal(mounted.root.activeElement,controls[0]);
+ controls[0].focus();tab(true);assert.equal(mounted.root.activeElement,controls.at(-1));
+ mounted.nodes.get('settings').onclick();const done=sheet.childNodes[0];done.getClientRects=()=>[{}];sheet.querySelectorAll=()=>[done];
+ done.focus();tab(false);assert.equal(mounted.root.activeElement,done);
+ overlay.listeners.click({target:mounted.nodes.get('card')});assert.equal(overlay.hidden,false);
+ overlay.listeners.click({target:overlay});assert.equal(overlay.hidden,true);assert.equal(sheet.hidden,true);
+});
+
+test('Settings exposes Load more and continues the cursor after Refresh latest',async()=>{
+ const cursors=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');cursors.push(args[0]);
+  const key=args[0]?'older-photo':'latest-photo';
+  return {ok:true,text:async()=>envelope(entry[0],[[[key,['https://lh3.googleusercontent.com/fake'],1720000000000,key+'-stable',0,{}]],args[0]?null:'older-cursor'])};
+ };
+ const mounted=await mountedReview([],{fetch});
+ mounted.nodes.get('settings').onclick();
+ const load=mounted.nodes.get('load');
+ assert.equal(load.hidden,false);
+ assert.ok(mounted.nodes.get('settings-sheet').childNodes.some(group=>group.childNodes.includes(load)));
+ const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('\n');
+ assert.doesNotMatch(styles,/[^{}]*#load[^{}]*\{[^}]*display:\s*none/);
+ await mounted.click('refresh');await mounted.click('refresh');await mounted.click('load');
+ assert.deepEqual(cursors,[null,null,'older-cursor']);
+ assert.deepEqual((await mounted.read()).items.map(row=>row.mediaKey),['latest-photo','older-photo']);
+ assert.equal((await mounted.read()).exhausted,true);
+});
+
+test('Trash mode remains usable for a second batch after a verified move',async()=>{
+ const trashed=new Set(),batches=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){batches.push(args[2]);for(const key of args[2])trashed.add(key);}
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};
+ };
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a'}),item('b',{dedupKey:'stable-b'})],{fetch,confirm:()=>true});
+ await mounted.click('move-trash');
+ assert.equal(mounted.nodes.get('delete-method').value,'trash');
+ assert.equal(mounted.nodes.get('trash-opt-in').checked,true);
+ await mounted.click('remove');
+ assert.equal(mounted.nodes.get('move-trash').hidden,false);
+ assert.equal(mounted.nodes.get('move-trash').textContent,'Move 1 items to Trash');
+ await mounted.click('move-trash');
+ assert.deepEqual(batches,[['stable-a'],['stable-b']]);
+ assert.ok((await mounted.read()).items.every(row=>row.state==='in_trash'));
+});
+
+test('reload during an uncommitted swipe resumes the item awaiting persistence',async()=>{
+ const fault={},mounted=await mountedReview([item('a'),item('b')],{},fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await db.resume(account)).currentId,'a');
+ let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
+ try{
+  mounted.nodes.get('keep').onclick();
+  assert.match(mounted.nodes.get('caption').textContent,/^b · /);
+  mounted.nodes.get('close').onclick();
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal((await db.read(account)).items[0].decision,null);
+  assert.equal((await db.resume(account)).currentId,'a');
+  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
+  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+  await reopened.nodes.get('launcher').onclick();
+  assert.match(reopened.nodes.get('caption').textContent,/^a · /);
+ }finally{fault.saveGate=null;release();await mounted.settle();}
+});
+
+test('failed sync remains visible alongside keep, queue and undo confirmations',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')],{fetch:async()=>new Response('{}',{status:503})});
+ mounted.environment.AbortSignal=AbortSignal;
+ mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
+ await mounted.click('sync-save');
+ for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Decision undone for b\./]]){
+  await mounted.click(action);
+  assert.match(mounted.nodes.get('status').textContent,confirmation);
+  assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
+  assert.equal(mounted.nodes.get('settings').classList.contains('gear-error'),true);
+ }
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
 });
