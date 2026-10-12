@@ -73,13 +73,15 @@ test('buffer and display share an exact synthetic preview URL and reuse without 
  const previewSource=context.previewSource;
  const photo={mediaKey:'synthetic',thumbUrl:'https://lh3.googleusercontent.com/synthetic-photo=w512-h512-k-no?authuser=0'};
  let assignments=0,source;
- const image={complete:true,naturalWidth:360,get src(){return source;},set src(value){assignments++;source=value;queueMicrotask(()=>this.onload());},decode:async()=>{}};
+ const listeners=new Map();
+ const image={addEventListener(type,listener){listeners.set(type,listener);},complete:true,naturalWidth:360,get src(){return source;},set src(value){assignments++;source=value;queueMicrotask(()=>{listeners.get('load')?.();this.onload();});},decode:async()=>{}};
  context.window.Image=function(){return image;};
  runInNewContext(ui.slice(ui.indexOf(' const buffer=createPreloadBuffer('),ui.indexOf(' const videoURLs='))+'\n globalThis.testBuffer=buffer;',context);
  const buffer=context.testBuffer;
  buffer.update([photo]);await tick();
  const displayURL=previewSource(photo.thumbUrl),cached=buffer.take(photo.mediaKey);
  assert.equal(cached.src,displayURL);
+ assert.equal(context.queueThumbnailSource(photo),displayURL);
  assert.equal(displayURL,'https://lh3.googleusercontent.com/synthetic-photo=w360-h481-k-no?authuser=2');
  assert.equal(reusablePreview(cached,displayURL),image);
  assert.equal(assignments,1);
