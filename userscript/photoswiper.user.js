@@ -710,7 +710,7 @@ function renderPairingQR(document,value) {
 }
 
 const pairingServerError='Pairing is unavailable on the sync server (server misconfigured)';
-function createPairingModal({document,parent,fetch,settings,setTimeout,clearTimeout,now=Date.now,renderQR=renderPairingQR}) {
+function createPairingModal({document,parent,fetch,settings,setTimeout,clearTimeout,now=Date.now,onClose=()=>{},renderQR=renderPairingQR}) {
  const modal=document.createElement('section');modal.hidden=true;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','Pair another device');modal.style.cssText='position:fixed;inset:0;overflow:auto;background:#f4f7f1;padding:24px;z-index:1;pointer-events:auto';
  const status=document.createElement('p'),qr=document.createElement('div'),short=document.createElement('p'),countdown=document.createElement('p'),cancel=document.createElement('button'),renew=document.createElement('button'),devices=document.createElement('button');
  status.setAttribute('role','status');cancel.textContent='Cancel';renew.textContent='New code';devices.textContent='View devices';modal.append(status,qr,short,countdown,cancel,renew,devices);parent.append(modal);
@@ -754,13 +754,13 @@ function createPairingModal({document,parent,fetch,settings,setTimeout,clearTime
  const close=async()=>{
   const version=++generation;reset();const id=current?.id;
   if(id)try{const result=await finish(id);if(version!==generation)return;if(result?.claimed){showClaim(result);return;}}catch(error){if(version===generation){status.textContent=error.message;renew.hidden=false;}return;}
-  if(version===generation){current=null;modal.hidden=true;}
+  if(version===generation){current=null;modal.hidden=true;onClose();}
  };
  cancel.onclick=close;renew.onclick=start;modal.addEventListener('keydown',event=>{if(event.key==='Escape')close();});
  devices.onclick=async()=>{try{const result=await request('devices');status.textContent='Devices';qr.replaceChildren();for(const device of result.devices.filter(device=>!device.revoked_at)){const row=document.createElement('p');row.textContent=device.name+' ('+device.platform+')';qr.append(row);}}catch(error){status.textContent=error.message;}};
  return {open,close,modal};
 }
-function receivePairingLink({document,parent,location,window,fetch,saveSettings,onPaired,manual=false,url='https://photoswiper-sync.sidlakkoju.workers.dev'}) {
+function receivePairingLink({document,parent,location,window,fetch,saveSettings,onPaired,onClose=()=>{},manual=false,url='https://photoswiper-sync.sidlakkoju.workers.dev'}) {
  const match=location.hash?.match(/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/);if(!match&&!manual)return;
  if(match)window.history.replaceState(null,'',location.pathname+location.search);
  const panel=document.createElement('section'),name=document.createElement('input'),button=document.createElement('button'),status=document.createElement('p'),shortCode=document.createElement('input'),origin=document.createElement('input'),cancel=document.createElement('button');
@@ -774,8 +774,8 @@ function receivePairingLink({document,parent,location,window,fetch,saveSettings,
   const advanced=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Advanced';advanced.open=false;advanced.append(summary);origin.type='url';origin.value=url;field(origin,'pairing-server','Sync server',advanced);panel.append(advanced);
  }
  const actions=document.createElement('div');actions.className='toolbar';button.textContent='Pair this device';cancel.textContent='Cancel';actions.append(button,cancel);status.setAttribute('role','status');panel.append(actions,status);
- cancel.onclick=()=>{panel.hidden=true;};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);name.focus();
- button.onclick=async()=>{button.disabled=true;try{const worker=new URL(match?.[2]?decodeURIComponent(match[2]):manual?origin.value:url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error(response.status>=500?pairingServerError:'Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
+ cancel.onclick=()=>{panel.hidden=true;onClose();};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);name.focus();
+ button.onclick=async()=>{button.disabled=true;try{const worker=new URL(match?.[2]?decodeURIComponent(match[2]):manual?origin.value:url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error(response.status>=500?pairingServerError:'Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;onClose();await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
  return panel;
 }
 
@@ -1077,7 +1077,9 @@ function mountPhotosSwipe(environment) {
  for(const [id,title,type] of [['sync-url','Sync URL','url'],['sync-token','Sync token','password']]){const label=document.createElement('label'),input=document.createElement('input');label.textContent=title+' ';input.setAttribute('id',id);input.type=type;input.autocomplete='off';label.append(input);settingsPanel.append(label);}
  const syncSave=document.createElement('button');syncSave.setAttribute('id','sync-save');syncSave.textContent='Save and sync';settingsPanel.append(syncSave);
  const pairAnother=document.createElement('button');pairAnother.textContent='Pair a device';pairAnother.setAttribute('id','pair-another');settingsPanel.append(pairAnother);
- const pairingModal=createPairingModal({document,parent:root,fetch:environment.syncFetch||environment.fetch,settings:async()=>(await pairingPromise).settings(),setTimeout:environment.setTimeout,clearTimeout:environment.clearTimeout});pairAnother.onclick=pairingModal.open;
+ let viewerShortcutsBlockedUntil=0;
+ const suppressViewerShortcuts=()=>{viewerShortcutsBlockedUntil=Date.now()+500;};
+ const pairingModal=createPairingModal({document,parent:root,fetch:environment.syncFetch||environment.fetch,settings:async()=>(await pairingPromise).settings(),onClose:suppressViewerShortcuts,setTimeout:environment.setTimeout,clearTimeout:environment.clearTimeout});pairAnother.onclick=pairingModal.open;
  const syncStatus=document.createElement('p');syncStatus.setAttribute('id','sync-status');syncStatus.setAttribute('role','status');divElement4.insertBefore(settingsPanel,cardElement);divElement4.insertBefore(syncStatus,cardElement);
  const unpairedBanner=document.createElement('div');unpairedBanner.setAttribute('id','unpaired-banner');unpairedBanner.setAttribute('role','alert');unpairedBanner.hidden=true;
  const unpairedText=document.createElement('span');unpairedText.textContent='This device was unpaired.';
@@ -1110,7 +1112,7 @@ function mountPhotosSwipe(environment) {
  group('History',historyPanel);
  const deleteMethod=document.createElement('select');deleteMethod.setAttribute('id','delete-method');deleteMethod.setAttribute('aria-label','Delete method');for(const [value,label] of [['trash','Trash'],['album','Review album']]){const option=document.createElement('option');option.value=value;option.textContent=label;deleteMethod.append(option);}group('Delete method',deleteMethod);const lifetime=document.createElement('p');lifetime.setAttribute('id','lifetime-freed');group('Lifetime freed',lifetime);statsElement.hidden=true;sheet.append(statsElement);group('Refresh',refreshElement,loadElement);
  const reviewPanel=document.createElement('section');reviewPanel.setAttribute('class','review-panel');reviewPanel.setAttribute('id','review-panel');reviewPanel.hidden=true;reviewPanel.append(queue_detailsElement,trashCandidates,divElement36);divElement4.append(reviewPanel);queue_detailsElement.open=true;trashLabel.hidden=true;trashOptIn.checked=true;pElement40.textContent='Review marked items before moving them to Google Photos Trash.';
- const openSettings=()=>{sheet.hidden=false;settingsPanel.open=true;gear.setAttribute('aria-expanded','true');sheetClose.focus();};const closeSettings=()=>{sheet.hidden=true;gear.setAttribute('aria-expanded','false');gear.focus();};gear.onclick=openSettings;sheetClose.onclick=closeSettings;
+ const openSettings=()=>{sheet.hidden=false;settingsPanel.open=true;gear.setAttribute('aria-expanded','true');sheetClose.focus();};const closeSettings=()=>{suppressViewerShortcuts();sheet.hidden=true;gear.setAttribute('aria-expanded','false');gear.focus();};gear.onclick=openSettings;sheetClose.onclick=closeSettings;
  const openReview=()=>{reviewPanel.hidden=false;queue_detailsElement.open=true;moveTrash.focus();};reviewButton.onclick=()=>{reviewPanel.hidden=!reviewPanel.hidden;if(!reviewPanel.hidden)openReview();};
  overlayElement.addEventListener('click',event=>{if(event.target===overlayElement)close();});
  document.documentElement.append(host);
@@ -1518,7 +1520,7 @@ function mountPhotosSwipe(environment) {
   return openingPromise;
  }
  async function closeSession(){
-  captureVideo();persistResume();sheet.hidden=true;
+  captureVideo();persistResume();if(!sheet.hidden)suppressViewerShortcuts();sheet.hidden=true;
   preloader.clear();finishCardAnimation();clearCardAnimation();await openingPromise;await activeOperation;await writes.flush();
   leaseGeneration++;clearInterval(leaseTimer);leaseTimer=null;
   $('overlay').hidden=true;$('launcher').hidden=false;$('launcher').focus();
@@ -1562,7 +1564,7 @@ function mountPhotosSwipe(environment) {
  $('sync-save').onclick=()=>run(async()=>{const previous=await (await pairingPromise).settings();const url=$('sync-url').value.trim();const normalized=url?new URL(url).origin:'';const settings={...previous,...validateSyncSettings(url,$('sync-token').value||(normalized===previous.url?previous.token||'':''))};if(settings.token)delete settings.unpaired;await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});$('sync-token').value='';if(settings.token)unpairedBanner.hidden=true;syncEnabled=!!(settings.url&&settings.token);onboarding.hidden=true;syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=true;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
  let receivingPanel;
- const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;receivingPanel.querySelector('input').focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:open,manual,url:$('sync-url').value.trim()||undefined});};
+ const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;receivingPanel.querySelector('input').focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:open,onClose:suppressViewerShortcuts,manual,url:$('sync-url').value.trim()||undefined});};
  const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=onboardPair.onclick;receivePairing(false);
  window.addEventListener('hashchange',()=>receivePairing(false));
  $('launcher').onclick=open;$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
@@ -1587,10 +1589,16 @@ function mountPhotosSwipe(environment) {
  document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();buffer.clear();if(warmedVideo){warmedVideo.removeAttribute('src');warmedVideo.load();warmedVideo=null;warmedKey=null;}}else if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){refreshLease();refreshStalePreviews();}});
  window.addEventListener('pageshow',event=>{if(event.persisted&&!$('overlay').hidden)return open();});
  const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
+ function editingFieldFocused(event){
+  const editable=element=>['INPUT','SELECT','TEXTAREA'].includes(element?.tagName)||element?.isContentEditable;
+  const focused=[document.activeElement,root.activeElement];
+  for(let index=0;index<focused.length;index++){const nested=focused[index]?.shadowRoot?.activeElement;if(nested)focused.push(nested);}
+  return [...focused,event.target,...(event.composedPath?.()||[])].some(editable);
+ }
  function handleViewerSpace(event){
   if(activePairingDialog()||!sheet.hidden)return false;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
-  if(['INPUT','SELECT','TEXTAREA'].includes(root.activeElement?.tagName)||root.activeElement?.isContentEditable)return false;
+  if(Date.now()<viewerShortcutsBlockedUntil||editingFieldFocused(event))return false;
   const video=$('media').querySelector('video');
   event.preventDefault();event.stopImmediatePropagation();
   if(video&&event.type==='keydown'&&!event.repeat){if(video.paused)video.play().catch(()=>{});else video.pause();}
@@ -1609,7 +1617,7 @@ function mountPhotosSwipe(environment) {
    const index=focusable.indexOf(root.activeElement),next=event.shiftKey?(index<=0?focusable.length-1:index-1):(index+1)%focusable.length;
    event.preventDefault();event.stopImmediatePropagation();focusable[next]?.focus();return;
   }
-  if(['INPUT','SELECT','TEXTAREA'].includes(root.activeElement?.tagName)||root.activeElement?.isContentEditable)return;
+  if(Date.now()<viewerShortcutsBlockedUntil||editingFieldFocused(event))return;
   const actions={ArrowLeft:()=>decide('remove'),ArrowRight:()=>decide('keep'),z:undo,Z:undo,f:toggleEnlarge,F:toggleEnlarge,Escape:close};
   if(actions[event.key]){event.preventDefault();event.stopImmediatePropagation();if(!event.repeat||!['ArrowLeft','ArrowRight','z','Z'].includes(event.key))actions[event.key]();}
  },true);

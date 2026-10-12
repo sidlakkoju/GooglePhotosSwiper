@@ -2443,3 +2443,20 @@ test('URL refresh during a decision save advances resume only after the snapshot
   }finally{fault.saveGate=null;release();await mounted.nodes.get('close').onclick();}
  }
 });
+
+test('mounted settings close by Escape or Done blocks typing spillover before shortcuts resume',async()=>{
+ for(const method of ['escape','done']){
+  let time=10000;
+  class ReviewDate extends Date {static now(){return time;}}
+  const mounted=await mountedReview([item('keyboard-first'),item('keyboard-second')],{},undefined,{Date:ReviewDate});
+  const press=key=>mounted.environment.window.listeners.keydown({key,preventDefault(){},stopImmediatePropagation(){}});
+  mounted.nodes.get('settings').onclick();mounted.nodes.get('pair-code').focus();
+  press('ArrowLeft');press('ArrowRight');
+  if(method==='escape')press('Escape');else mounted.nodes.get('settings-sheet').childNodes[0].onclick();
+  assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
+  press('ArrowLeft');time+=499;press('ArrowRight');await mounted.settle();
+  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null]);
+  time++;press('ArrowRight');await mounted.settle();
+  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep',null]);
+ }
+});

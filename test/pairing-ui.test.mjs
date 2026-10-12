@@ -32,7 +32,8 @@ const iosSwipeCancelGrowthBytes=200;
 const isolationModules=await Promise.all(['settings','bridge'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
 const isolationBytes=isolationModules.reduce((size,module)=>size+Buffer.byteLength(module.replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`)),1024);
 const centeredShellGrowthBytes=12000;
-const prePairingCurrentBytes=performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
+const keyboardIsolationGrowthBytes=1024;
+const prePairingCurrentBytes=keyboardIsolationGrowthBytes+performanceGrowthBytes+centeredShellGrowthBytes+prePairingMainBytes+photoURLRefreshGrowthBytes+themeGrowthBytes+loaderPairingOnboardingGrowthBytes+iosSwipeCancelGrowthBytes+isolationBytes;
 const recoveryGrowthBudgetBytes=4*1024;
 const pairingServerErrorGrowthBytes=256;
 const pairingGrowthBudgetBytes=15*1024+recoveryGrowthBudgetBytes+pairingServerErrorGrowthBytes;
@@ -96,7 +97,7 @@ test('pairing dialog traps Tab in both directions and blocks background activati
 test('repeated receiver activation reuses one panel and focuses it',()=>{
  let panels=0,focuses=0;
  const panel={hidden:false,querySelector:()=>({focus:()=>focuses++})};
- const context={receivePairingLink:()=>{panels++;return panel;},document:{},root:{},location:{},window:{},environment:{},database:async()=>{},open(){},$:()=>({value:''})};
+ const context={suppressViewerShortcuts(){},receivePairingLink:()=>{panels++;return panel;},document:{},root:{},location:{},window:{},environment:{},database:async()=>{},open(){},$:()=>({value:''})};
  vm.createContext(context);vm.runInContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(' const pairThis='))+'\nglobalThis.receive=receivePairing;',context);
  context.receive(true);context.receive(true);assert.equal(panels,1);assert.equal(focuses,1);panel.hidden=true;context.receive(true);assert.equal(panels,1);assert.equal(panel.hidden,false);
 });
@@ -111,7 +112,7 @@ test('busy viewer controls leave pairing Cancel enabled',()=>{
 test('hash changes in an already mounted Photos tab open consent for the latest code',async()=>{
  const elements=dom(),listeners={},calls=[],location={hash:'',pathname:'/',search:''};let saved;
  elements.document.createElement=((create)=>tag=>{const node=create(tag);node.remove=()=>{elements.parent.children=elements.parent.children.filter(child=>child!==node);};return node;})(elements.document.createElement);
- const context={receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div'),onboardPair:{onclick(){}}};
+ const context={suppressViewerShortcuts(){},receivePairingLink,document:elements.document,root:elements.parent,location,window:{navigator:{},history:{replaceState(){location.hash='';}},addEventListener:(type,handler)=>listeners[type]=handler},environment:{fetch:async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({token:'synthetic-token'})};}},pairingPromise:Promise.resolve({saveSettings:async value=>saved=value}),open(){},$:()=>({value:''}),settingsPanel:elements.document.createElement('div'),onboardPair:{onclick(){}}};
  vm.runInNewContext(ui.slice(ui.indexOf(' let receivingPanel;'),ui.indexOf(" $('launcher').onclick=open;")),context);
  assert.equal(elements.parent.children.length,0);
  for(const code of ['abcdefghijklmnopqrstuv','zyxwvutsrqponmlkjihgfe']){
@@ -214,4 +215,22 @@ test('pairing code creation reports server misconfiguration for server failures'
  await pairing.open();
  assert.equal(pairing.modal.children[0].textContent,'Pairing is unavailable on the sync server (server misconfigured)');
  assert.equal(pairing.modal.children[1].children.length,0);
+});
+
+test('pairing cancellation notifies shortcut suppression only after the dialog closes',async()=>{
+ const elements=dom();let closes=0,finish;
+ const modal=createPairingModal({...elements,settings:async()=>({url:'https://worker.example',token:'synthetic-token'}),fetch:async(url,options)=>options.method==='DELETE'?new Promise(resolve=>finish=()=>resolve({ok:true,json:async()=>({})})):{ok:true,json:async()=>url.includes('status')?{claimed:false}:{id:'id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:Date.now()+60000}},setTimeout:()=>0,clearTimeout(){},renderQR:document=>document.createElement('canvas'),onClose:()=>closes++});
+ await modal.open();const closing=modal.close();assert.equal(modal.modal.hidden,false);assert.equal(closes,0);
+ finish();await closing;assert.equal(modal.modal.hidden,true);assert.equal(closes,1);
+});
+
+test('receiver cancellation, Escape and successful pairing notify shortcut suppression',async()=>{
+ for(const action of ['cancel','escape','paired']){
+  const elements=dom();let closes=0;
+  const panel=receivePairingLink({...elements,location:{hash:''},window:{navigator:{}},manual:true,fetch:async()=>({ok:true,json:async()=>({token:'synthetic-token'})}),saveSettings:async()=>{},onPaired:async()=>assert.equal(closes,1),onClose:()=>closes++});
+  if(action==='cancel')descendants(panel).find(node=>node.textContent==='Cancel').onclick();
+  else if(action==='escape')panel.onkeydown({key:'Escape'});
+  else {pairingField(panel,'pairing-short-code').value='123456';await pairingSubmit(panel).onclick();}
+  assert.equal(panel.hidden,true);assert.equal(closes,1);
+ }
 });
