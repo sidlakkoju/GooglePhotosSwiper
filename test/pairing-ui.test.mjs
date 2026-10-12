@@ -135,11 +135,12 @@ test('unpaired onboarding opens the existing receiver and Continue locally dismi
  assert.equal(card.children[0].textContent,'Pair this device');assert.match(card.children[1].textContent,/paired device.*6-digit code/);
  card.children[2].onclick();assert.equal(received,true);assert.equal(context.local.textContent,'Continue locally');
  const opening=ui.slice(ui.indexOf('   let settings={};',ui.indexOf(' async function openSession()')),ui.indexOf('   if(!await renewLease())return;',ui.indexOf(' async function openSession()')));
- for(const settings of [{},{onboardingDismissed:true},{url:'https://worker.example',token:'synthetic-token'}]){
+ for(const [settings,receivingPanel] of [[{},undefined],[{}, {hidden:true}],[{onboardingDismissed:true},undefined],[{url:'https://worker.example',token:'synthetic-token'},undefined]]){
+  let automaticOpens=0;
   const nodes={},node=id=>nodes[id]||(nodes[id]={});
-  const state={$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){},renewLease:async()=>true,message(){},idleMessage:()=>''};
+  const state={receivingPanel,$:node,pairingPromise:Promise.resolve({settings:async()=>settings}),pairingNotice:{},unpairedBanner:{},syncClient:{configure(){}},settingsPanel:{},onboarding:card,syncLocal:context.local,synchronize:async()=>{},missing:false,receivePairing(){automaticOpens++;},renewLease:async()=>true,message(){},idleMessage:()=>''};
   await vm.runInNewContext('(async()=>{'+opening+'})()',state);
-  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');
+  assert.equal(card.hidden,!!(settings.token||settings.onboardingDismissed));assert.equal(node('sync-token').value,'');assert.equal(automaticOpens,settings.token||settings.onboardingDismissed||receivingPanel?0:1);
  }
  let saved;
  const dismissal={closeSettings(){},$:()=>context.local,run:fn=>fn(),pairingPromise:Promise.resolve({settings:async()=>({}),saveSettings:async value=>saved=value}),settingsPanel:{},onboarding:card,message(){},idleMessage:()=>''};

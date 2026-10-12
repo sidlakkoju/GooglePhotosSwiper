@@ -491,6 +491,7 @@ function decisionBatches(pending) {
 async function createPairingStore({GM,database,crypto}) {
  const durable=!!GM&&['getValue','setValue','deleteValue'].every(name=>typeof GM[name]==='function');
  const key='photos-swipe-pairing';
+ const dismissalKey='photos-swipe-onboarding-dismissed';
  const complete=value=>typeof value?.url==='string'&&!!value.url&&typeof value?.token==='string'&&!!value.token;
  const select=value=>Object.fromEntries(['url','token','deviceId','deviceName'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
  async function settings() {
@@ -503,13 +504,15 @@ async function createPairingStore({GM,database,crypto}) {
    await GM.setValue(key,value);
   }
   if(complete(value)&&(legacy.token||legacy.url||legacy.deviceId||legacy.deviceName)){await db.deleteSettings();if(legacy.onboardingDismissed)await db.saveSettings({onboardingDismissed:true});}
-  return {...(!complete(value)?select({...legacy,token:undefined}):{}),...select(value),onboardingDismissed:legacy.onboardingDismissed,unpaired:legacy.unpaired};
+  return {...(!complete(value)?select({...legacy,token:undefined}):{}),...select(value),onboardingDismissed:await GM.getValue(dismissalKey),unpaired:legacy.unpaired};
  }
  async function saveSettings(value) {
   const db=await database();
   if(!durable)return db.saveSettings(value);
   if(value.url&&value.token)await GM.setValue(key,{...select(value),deviceId:value.deviceId||crypto.randomUUID()});
   else await GM.deleteValue(key);
+  if(value.onboardingDismissed)await GM.setValue(dismissalKey,true);
+  else await GM.deleteValue(dismissalKey);
   await db.saveSettings({...(!(value.url&&value.token)?select({...value,token:undefined}):{}),...(value.onboardingDismissed?{onboardingDismissed:true}:{}),...(value.unpaired?{unpaired:true}:{})});
  }
  return {durable,settings,saveSettings};
@@ -1568,7 +1571,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    $('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
-   if(!syncEnabled)receivePairing(true);
+   if(!syncEnabled&&!settings.onboardingDismissed&&!receivingPanel)receivePairing(true);
    if(!await renewLease())return;
    if(!changed){
     await writes.flush();

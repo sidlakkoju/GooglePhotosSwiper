@@ -1109,7 +1109,7 @@ test('pairing settings failure after sign-in preserves the loaded review session
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  const saved=await db.save(account,{...emptyReview(),items:[item('synthetic-photo')]});
  let reads=0;
- mounted.environment.GM={getValue:async()=>{if(++reads>1)throw Error('Synthetic pairing read failure');},setValue:async()=>{},deleteValue:async()=>{}};
+ mounted.environment.GM={getValue:async key=>{if(key==='photos-swipe-pairing'&&++reads>1)throw Error('Synthetic pairing read failure');},setValue:async()=>{},deleteValue:async()=>{}};
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(reads,2);
  assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);
@@ -1530,7 +1530,7 @@ test('GM pairing migrates once, removes page credentials and survives page stora
  await store.saveSettings({url:'https://sync.example',token:'replacement-token',deviceName:'New phone',onboardingDismissed:true,items:['excluded']});
  const replacement=await store.settings();assert.equal(replacement.token,'replacement-token');assert.ok(replacement.deviceId);assert.equal(writes.at(-1).items,undefined);assert.equal(writes.at(-1).onboardingDismissed,undefined);assert.deepEqual(await db.settings(),{onboardingDismissed:true});
  await store.saveSettings({...replacement,token:'',unpaired:true,onboardingDismissed:true});
- assert.equal(values.size,0);assert.equal((await store.settings()).token,undefined);assert.equal((await store.settings()).unpaired,true);assert.deepEqual(await db.settings(),{url:replacement.url,deviceId:replacement.deviceId,deviceName:replacement.deviceName,onboardingDismissed:true,unpaired:true});
+ assert.equal(values.has('photos-swipe-pairing'),false);assert.equal((await store.settings()).token,undefined);assert.equal((await store.settings()).unpaired,true);assert.deepEqual(await db.settings(),{url:replacement.url,deviceId:replacement.deviceId,deviceName:replacement.deviceName,onboardingDismissed:true,unpaired:true});
  assert.equal((await store.settings()).url,replacement.url);assert.equal((await store.settings()).deviceId,replacement.deviceId);assert.equal((await store.settings()).deviceName,replacement.deviceName);
  await store.saveSettings({...await store.settings(),onboardingDismissed:true});assert.equal((await store.settings()).url,replacement.url);
  await store.saveSettings({url:'https://sync.example',token:'synthetic-repaired-token',onboardingDismissed:true});
@@ -1558,7 +1558,7 @@ test('privileged bundle keeps sync fetch and saved credentials away from the pag
  mounted.environment.unsafeWindow=pageWindow;
  mounted.environment.AbortSignal=AbortSignal;
  let pairing={url:'https://sync.example',token:'synthetic-private-token',deviceId:'device'};
- mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ mounted.environment.GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
  let calls=0;
  mounted.environment.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer synthetic-private-token');return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
@@ -1593,7 +1593,7 @@ test('sync saves reuse tokens for equivalent origins and retain typed tokens aft
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const mounted=bundleEnvironment();mounted.environment.AbortSignal=AbortSignal;
  let pairing={url:'https://sync.example',token:'saved-token',deviceId:'device'},fail=false,requests=0;
- mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{if(fail)throw Error('Pairing write failed');pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ mounted.environment.GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(fail)throw Error('Pairing write failed');if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
  mounted.environment.fetch=async()=>{requests++;return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
  const save=async()=>{mounted.nodes.get('sync-save').onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(!mounted.nodes.get('keep').disabled)return;}throw Error('UI stayed busy');};
@@ -1632,7 +1632,7 @@ test('bundle bridges hidden page data with or without unsafeWindow and migrates 
   if(hasUnsafeWindow)mounted.environment.unsafeWindow=bridge.contentWindow;
   else mounted.environment.window=bridge.contentWindow;
   let pairing;
-  mounted.environment.GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+  mounted.environment.GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
   mounted.environment.AbortSignal=AbortSignal;mounted.environment.fetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
   vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
   assert.equal(mounted.nodes.get('account').textContent,tokens.oPEP7c);assert.equal(pairing.token,'legacy-private-token');assert.deepEqual(await db.settings(),{});
@@ -2187,7 +2187,7 @@ test('durable unpair preserves settings on reopen and saving a new token clears 
  const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
  const first=bundleEnvironment(),indexedDB=first.environment.window.indexedDB;
  let pairing={url:'https://sync.example',token:'synthetic-revoked-token',deviceId:'synthetic-device',deviceName:'Synthetic phone'},reject=true;
- const GM={getValue:async()=>pairing,setValue:async(key,value)=>{pairing=value;},deleteValue:async()=>{pairing=undefined;}};
+ const GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
  const mount=async()=>{
   const mounted=bundleEnvironment();mounted.environment.window.indexedDB=indexedDB;mounted.environment.GM=GM;mounted.environment.AbortSignal=AbortSignal;
   mounted.environment.window.fetch=async()=>reject?new Response('{}',{status:401}):new Response(JSON.stringify({decisions:[],history:[],progress:{}}));
@@ -2813,7 +2813,8 @@ test('receiver claim during session opening activates the saved pairing after le
 
 for(const failSave of [false,true])test(`Settings pairing retains the claimed token after an in-flight 401${failSave?' and a failed save':''}`,async()=>{
  let release,started=false,claimed=false,rejectOld=false,claims=0,stored,fail=failSave;
- const GM={getValue:async()=>stored,setValue:async(key,value)=>{if(fail&&value.token==='claimed-token')throw Error('Synthetic pairing save failure');stored=value;},deleteValue:async()=>{stored=undefined;}};
+ const values=new Map();
+ const GM={getValue:async key=>values.get(key),setValue:async(key,value)=>{if(fail&&value.token==='claimed-token')throw Error('Synthetic pairing save failure');values.set(key,value);if(key==='photos-swipe-pairing')stored=value;},deleteValue:async key=>{values.delete(key);if(key==='photos-swipe-pairing')stored=undefined;}};
  const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
   if(url.endsWith('/api/pair/claim')){claims++;claimed=true;return {ok:true,json:async()=>({token:'claimed-token'})};}
   if(rejectOld&&options.headers.Authorization==='Bearer old-token'){started=true;return new Promise(resolve=>{release=()=>resolve({ok:false,status:401});});}
@@ -2844,4 +2845,19 @@ for(const failSave of [false,true])test(`Settings pairing retains the claimed to
   assert.equal(mounted.nodes.get('unpaired-banner').hidden,true);
   assert.match(mounted.nodes.get('enter-pairing-code').childNodes.at(-1).textContent,/Device paired/);
  }finally{release?.();await pairing;await mounted.nodes.get('close').onclick();}
+});
+
+test('onboarding dismissal belongs to the GM installation and survives reopening',async()=>{
+ const {createPairingStore}=await import('../lib/userscript-settings.mjs');
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(fakeIndexedDB());
+ await db.saveSettings({onboardingDismissed:true});
+ const installation=()=>{const values=new Map();return {getValue:async key=>values.get(key),setValue:async(key,value)=>values.set(key,value),deleteValue:async key=>values.delete(key)};};
+ const GM=installation(),otherGM=installation();
+ const create=GM=>createPairingStore({GM,database:async()=>db,crypto:webcrypto});
+ const store=await create(GM);
+ assert.equal((await store.settings()).onboardingDismissed,undefined);
+ await store.saveSettings({...await store.settings(),onboardingDismissed:true});
+ assert.equal((await (await create(GM)).settings()).onboardingDismissed,true);
+ assert.equal((await (await create(otherGM)).settings()).onboardingDismissed,undefined);
 });
