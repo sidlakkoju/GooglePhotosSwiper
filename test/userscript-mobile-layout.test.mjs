@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+const counterSource=(await readFile(new URL('../lib/userscript-counter.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const setup=source.slice(source.indexOf(" const host=document.createElement('div');"),source.indexOf(' const $=id=>root.getElementById(id);'));
 const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
 const probe=chrome&&spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--dump-dom','about:blank'],{encoding:'utf8',timeout:10000});
@@ -16,22 +17,23 @@ test('userscript status keeps a bounded layout slot even when empty',()=>{
  assert.match(source,/\.counter\{[^}]*white-space:nowrap/);
 });
 
-test('iPhone counts stay on one line and status updates do not add window scrolling',{skip:!chrome||probe.status!==0},async()=>{
+test('iPhone capsule stays centered without clipping and status updates do not add window scrolling',{skip:!chrome||probe.status!==0},async()=>{
  const dir=await mkdtemp(join(tmpdir(),'userscript-mobile-'));
  try{
   const page=join(dir,'layout.html');
   await writeFile(page,`<!doctype html><html><body><script>
   const environment={version:'test'};
   const createPairingModal=()=>({open(){}});
+  ${counterSource}
   ${setup}
   overlayElement.hidden=false;
-  counter.textContent='2 reviewed · 0 marked';
+  storageCapsule.update(1.24e9);
   reviewButton.textContent='🗑 0';
   const rect=element=>element.getBoundingClientRect();
   const snapshot=()=>({height:rect(divElement4).height,scrollHeight:divElement4.scrollHeight,clientHeight:divElement4.clientHeight,outerScroll:overlayElement.scrollHeight,outerHeight:overlayElement.clientHeight});
   const before=snapshot();
-  const range=document.createRange();range.selectNodeContents(counter);
-  const results={width:innerWidth,height:innerHeight,countLines:new Set(Array.from(range.getClientRects(),rect=>rect.top)).size,countUnclipped:counter.scrollWidth<=counter.clientWidth,headerInside:rect(closeElement).right<=rect(divElement4).right,noInitialScroll:before.scrollHeight===before.clientHeight&&before.outerScroll===before.outerHeight};
+  const capsule=counter.querySelector('svg'),face=counter.querySelector('.face');
+  const results={width:innerWidth,height:innerHeight,countLabel:face.textContent,headerHeight:rect(headerElement5).height,counterCentered:Math.abs((rect(capsule).left+rect(capsule).right)/2-(rect(headerElement5).left+rect(headerElement5).right)/2)<1,countUnclipped:rect(capsule).left>=rect(gear).right&&rect(capsule).right<=rect(reviewButton).left,headerInside:rect(closeElement).right<=rect(divElement4).right,noInitialScroll:before.scrollHeight===before.clientHeight&&before.outerScroll===before.outerHeight};
   for(const [name,value] of Object.entries({short:'Saved locally',long:'Local save failed. '+('Please retry after checking your connection. '.repeat(30)),empty:''})){
    statusElement.textContent=value;
    const after=snapshot();
@@ -46,8 +48,8 @@ test('iPhone counts stay on one line and status updates do not add window scroll
    const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files','--virtual-time-budget=1000','--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
    assert.equal(result.status,0,result.stderr);
    const values=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);
-   assert.equal(values.width,width);assert.equal(values.height,height);assert.equal(values.countLines,1);
-   for(const [name,value] of Object.entries(values).filter(([name])=>!['width','height','countLines','noInitialScroll','countUnclipped'].includes(name)))assert.equal(value,true,`${width}×${height}: ${name}`);
+   assert.equal(values.width,width);assert.equal(values.height,height);assert.equal(values.countLabel,'1.24 GB');assert.equal(values.headerHeight,56);assert.equal(values.counterCentered,true);
+   for(const [name,value] of Object.entries(values).filter(([name])=>!['width','height','countLabel','headerHeight','noInitialScroll','countUnclipped'].includes(name)))assert.equal(value,true,`${width}×${height}: ${name}`);
    if(width===393){assert.equal(values.noInitialScroll,true);assert.equal(values.countUnclipped,true);}
   }
  }finally{await rm(dir,{recursive:true,force:true});}
@@ -60,9 +62,10 @@ test('decision controls and status fit short viewports with Enlarge on and off',
   await writeFile(page,`<!doctype html><html><body><script>
    const environment={version:'test'};
    const createPairingModal=()=>({open(){}});
+   ${counterSource}
    ${setup}
    overlayElement.hidden=false;
-   counter.textContent='2 reviewed · 0 marked';
+   storageCapsule.update(1.24e9);
    const image=document.createElement('img');
    image.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><rect width="1600" height="1200" fill="blue"/></svg>');
    root.querySelector('.media').append(image);
@@ -105,6 +108,7 @@ test('settings header keeps Done visible and clickable while the sheet scrolls',
   await writeFile(page,`<!doctype html><html><body><script>
    const environment={version:'test'};
    const createPairingModal=()=>({open(){}});
+   ${counterSource}
    ${setup}
    overlayElement.hidden=false;
    gear.click();
@@ -140,6 +144,7 @@ test('phone fullscreen locks and restores page styles, viewport and scroll',{ski
   const page=join(dir,'lock.html');
   await writeFile(page,`<!doctype html><html style="overflow:auto"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;background:pink"><div style="height:3000px"></div><script>
   const environment={version:'test'},createPairingModal=()=>({open(){}});
+  ${counterSource}
   ${setup}
   scrollTo(0,180);const before={html:document.documentElement.style.cssText,body:document.body.style.cssText,viewport:document.querySelector('meta[name=viewport]').content,y:scrollY};
   overlayElement.hidden=false;lockPage();lockPage();
@@ -160,6 +165,7 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
   const page=join(dir,'review.html');
   await writeFile(page,`<!doctype html><html><body><script>
    const environment={version:'test'},createPairingModal=()=>({open(){}});
+   ${counterSource}
    ${setup}
    const $=id=>root.getElementById(id),swipeFeedback={reset(){}};
    let busy=false,identity={},leaseError=null,state={items:Array.from({length:6},(_,index)=>({mediaKey:'fixture-'+index,name:'IMG_'+index+'.JPG',type:index===2?'video':'photo',duration:14000,decision:index===1?'keep':'remove',queueSent:index===4,state:'active',thumbUrl:'synthetic'}))};
