@@ -2650,3 +2650,48 @@ for(const action of ['untick','selectAll','previewKeep','previewTrash'])test(`tr
  }
  await mounted.click('undo');assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='a').decision,null);
 });
+
+test('undoing a review Keep returns to swipe review across reopen',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ await mounted.click('remove');await mounted.click('review');
+ mounted.nodes.get('trash-review-grid').childNodes[0].childNodes[1].onclick();await mounted.settle();
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('undo');
+ assert.equal((await mounted.read()).items[0].decision,'remove');
+ assert.match(mounted.nodes.get('caption').textContent,/^b · /);
+ assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for deletion');
+ await mounted.click('close');await mounted.click('launcher');
+ assert.match(mounted.nodes.get('caption').textContent,/^b · /);
+ assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for deletion');
+ await mounted.click('remove');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove','remove']);
+});
+
+test('chained review undo uploads valid history and progress without remaining dirty',async()=>{
+ let scheduledSync;
+ const uploads=[];
+ const mounted=await mountedReview([item('a'),item('b')],{
+  setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
+  clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
+  fetch:async(url,options)=>{
+   const path=new URL(url).pathname,value=options.body?JSON.parse(options.body):null;
+   if(path==='/api/undo'&&options.method==='PUT'){
+    assert.ok(value.history.every(entry=>Object.keys(entry).every(key=>['key','previous','decision','revision'].includes(key))));
+   }
+   if(value)uploads.push({path,value});
+   return {ok:true,json:async()=>path==='/api/progress'&&options.method==='PUT'?{items:value.items}:{decisions:[],history:[],progress:{}}};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'},{AbortSignal});
+ await mounted.click('remove');await mounted.click('review');
+ const grid=mounted.nodes.get('trash-review-grid');grid.childNodes[0].childNodes[1].onclick();await mounted.settle();
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[1].onclick();await mounted.settle();
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();
+ for(const decision of ['keep','remove',null]){
+  await mounted.click('undo');
+  assert.equal((await mounted.read()).items[0].decision,decision);
+  const before=uploads.length;scheduledSync();
+  await waitForReview(async()=>!(await mounted.read()).syncDirty);
+  assert.ok(uploads.slice(before).some(upload=>upload.path==='/api/undo'));
+  assert.ok(uploads.slice(before).some(upload=>upload.path==='/api/progress'));
+ }
+ assert.equal((await mounted.read()).history.length,0);
+});
