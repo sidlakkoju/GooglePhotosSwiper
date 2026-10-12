@@ -360,12 +360,12 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
- const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){for(const child of children){if(child.parentNode)child.parentNode.childNodes=child.parentNode.childNodes.filter(node=>node!==child);child.parentNode=this;child.parentElement=this;this.childNodes.push(child);}},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){for(const child of this.childNodes)child.parentNode=null;this.childNodes=[];this.append(...children);},querySelector(selector){const match=node=>selector.startsWith('.')?(node.class||'').split(' ').includes(selector.slice(1)):node.tagName===selector.toUpperCase();const visit=node=>node.childNodes?.map(child=>match(child)?child:visit(child)).find(Boolean);return visit(this)||null;},querySelectorAll(selector){const result=[];const visit=node=>{for(const child of node.childNodes||[]){if(selector.startsWith('.')&&(child.class||'').split(' ').includes(selector.slice(1)))result.push(child);visit(child);}};visit(this);return result;},getAttribute(key){return this[key]??null;},remove(){if(this.parentNode)this.parentNode.childNodes=this.parentNode.childNodes.filter(child=>child!==this);},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{setProperty(key,value){this[key]=value;}},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),add(name){this.values.add(name);},remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){for(const child of children){if(child.parentNode)child.parentNode.childNodes=child.parentNode.childNodes.filter(node=>node!==child);child.parentNode=this;child.parentElement=this;this.childNodes.push(child);}},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){for(const child of this.childNodes)child.parentNode=null;this.childNodes=[];this.append(...children);},querySelector(selector){const match=node=>selector.startsWith('.')?(node.class||'').split(' ').includes(selector.slice(1)):node.tagName===selector.toUpperCase();const visit=node=>node.childNodes?.map(child=>match(child)?child:visit(child)).find(Boolean);return visit(this)||null;},querySelectorAll(selector){const result=[];const visit=node=>{for(const child of node.childNodes||[]){if(selector.startsWith('.')&&(child.class||'').split(' ').includes(selector.slice(1)))result.push(child);visit(child);}};visit(this);return result;},getAttribute(key){return this[key]??null;},remove(){if(this.parentNode)this.parentNode.childNodes=this.parentNode.childNodes.filter(child=>child!==this);},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
 
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById(id){const visit=node=>{for(const child of node.childNodes||[]){if(child.id===id)return child;const found=visit(child);if(found)return found;}return null;};return visit(this);},querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
  const result={nodes,hosts,root};
- const document={listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},querySelector:()=>null,createElementNS:(namespace,tag)=>element(tag),head:element('head'),body:element('body'),documentElement:{style:{cssText:''},dataset:{},append:host=>hosts.push(host)}};
+ const document={defaultView:{performance:{now:()=>performance.now()},matchMedia:()=>({matches:true}),requestAnimationFrame:callback=>{callback(performance.now());return null;}},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='canvas')node.getContext=()=>({measureText:text=>({width:text.length*7})});if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},querySelector:()=>null,createElementNS:(namespace,tag)=>element(tag),head:element('head'),body:element('body'),documentElement:{style:{cssText:''},dataset:{},append:host=>hosts.push(host)}};
  const events=new EventTarget();
  const window={scrollX:0,scrollY:0,scrollTo(){},requestAnimationFrame:callback=>{callback();return null;},cancelAnimationFrame(){},dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;events.addEventListener(name,handler);}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,AbortController,AbortSignal,setInterval,clearInterval};
@@ -1049,7 +1049,7 @@ test('opening with sync pauses if another tab takes ownership during sync',async
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
  const stats=mounted.nodes.get('stats').textContent;
- assert.equal(stats,'0 to review · 2/2 reviewed · Queue: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total) · Lifetime freed: 112 KB');
+ assert.equal(stats,'0 to review · 2/2 reviewed · Queue: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total)');
  assert.equal(stats.match(/estimated savings/g).length,1);
 });
 test('mounted Keep names the decided item after advancing and during candidate inspection',async()=>{
@@ -2660,7 +2660,7 @@ test('paired wiped database rebuilds synced batch, Undo and storage totals befor
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB),restored=await db.read(account);
  assert.equal(restored.started,true);assert.equal(restored.items.length,64);assert.equal(restored.items.filter(item=>item.decision).length,10);
  assert.deepEqual(restored.history,history);assert.equal(canUndoReview(restored,history.at(-1)),true);assert.equal(restored.lifetimeFreed,224000);
- assert.match(mounted.nodes.get('stats').textContent,/54 to review · 10\/64 reviewed.*In Trash: 112 KB.*Lifetime freed: 224 KB/);
+ assert.match(mounted.nodes.get('stats').textContent,/54 to review · 10\/64 reviewed.*In Trash: 112 KB/);
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: QA-DUMMY-4/);
  assert.match(mounted.nodes.get('caption').textContent,/^QA-DUMMY-10/);
  assert.equal(mounted.nodes.get('media').querySelector('img').src.includes('synthetic'),true);
@@ -3011,7 +3011,7 @@ test('queue pill grows beyond 25 while swipe decisions continue without opening 
  const content=mounted.nodes.get('overlay').childNodes[0],pill=content.childNodes.find(node=>node.class==='queue-pill');
  assert.equal(pill.hidden,true);
  for(let index=0;index<31;index++)mounted.nodes.get('remove').onclick();
- assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(pill.hidden,false);assert.equal(pill.childNodes[1].textContent,'31 going to Trash');assert.equal(pill.childNodes[2].textContent,'+6');assert.equal(pill.childNodes[0].childNodes.length,3);
+ assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(pill.hidden,false);assert.equal(pill.childNodes[1].textContent,'31 going to Trash');assert.equal(pill.childNodes[3].textContent,'+6');assert.equal(pill.childNodes[0].childNodes.length,3);
  await mounted.settle();assert.equal(reviewQueue(await mounted.read()).length,31);assert.match(mounted.nodes.get('caption').textContent,/^queue-31 · /);
  pill.childNodes.at(-1).onclick();assert.equal(mounted.nodes.get('review-panel').hidden,false);assert.equal(mounted.nodes.get('trash-review-grid').childNodes.length,31);
  mounted.nodes.get('remove').onclick();mounted.nodes.get('keep').onclick();assert.equal(reviewQueue(await mounted.read()).length,31);
@@ -3606,4 +3606,67 @@ test('copied handoffs produce independent owners even after the original documen
  assert.notEqual(copied,returned);
  const unsupported=await createLeaseOwner({sessionStorage:{getItem:()=>returned,removeItem(){}}},webcrypto);
  assert.notEqual(unsupported,returned);
+});
+
+test('completed Move to Trash resets the session capsule and new swipes count from zero',async()=>{
+ const trashed=new Set();
+ const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf')for(const key of args[2])trashed.add(key);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6}),item('b',{size:5e6})],{fetch,confirm:()=>true});
+ const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
+ assert.match(capsule['aria-label'],/^38.2 MB/);
+ await mounted.click('move-trash');assert.equal((await mounted.read()).items[0].state,'in_trash');assert.match(capsule['aria-label'],/^0.00 MB/);
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('remove');assert.match(capsule['aria-label'],/^5.00 MB/);
+ await mounted.nodes.get('close').onclick();
+});
+test('completed Move to Trash preserves queued items outside the review snapshot',async()=>{
+ const trashed=new Set();
+ const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf')for(const key of args[2])trashed.add(key);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6}),item('b',{size:5e6})],{fetch,confirm:()=>true});
+ const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
+ await mounted.click('review');
+ mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('remove');
+ mounted.nodes.get('review-panel').hidden=false;
+ assert.match(capsule['aria-label'],/^43.2 MB/);
+ await mounted.click('move-trash');
+ const state=await mounted.read();
+ assert.equal(state.items[0].state,'in_trash');assert.equal(state.items[1].state,'active');assert.equal(state.items[1].decision,'remove');
+ assert.match(capsule['aria-label'],/^5.00 MB/);
+ await mounted.nodes.get('close').onclick();
+});
+test('failed Move to Trash leaves the session capsule intact',async()=>{
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6})],{fetch:async()=>({ok:false,status:500}),confirm:()=>true});
+ const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
+ await mounted.click('move-trash');assert.match(capsule['aria-label'],/^38.2 MB/);assert.equal((await mounted.read()).items[0].state,'active');await mounted.nodes.get('close').onclick();
+});
+
+for(const scenario of ['partial batch failure','Check deleted items'])test(`completed Move clears earlier session Trash after ${scenario}`,async()=>{
+ const trashed=new Set();let moveCalls=0,failSecondBatch=scenario==='partial batch failure';
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){
+   moveCalls++;
+   if(failSecondBatch&&moveCalls===2)return {ok:false,status:500};
+   for(const key of args[2])trashed.add(key);
+  }
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};
+ };
+ const count=scenario==='partial batch failure'?26:2;
+ const items=Array.from({length:count},(_,index)=>item(String(index),{decision:'remove',dedupKey:`stable-${index}`,size:1e6}));
+ const mounted=await mountedReview(items,{fetch,confirm:()=>true});
+ const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
+ if(scenario==='partial batch failure'){
+  await mounted.click('move-trash');
+  assert.equal((await mounted.read()).items.filter(item=>item.state==='in_trash').length,25);
+  assert.match(capsule['aria-label'],/^26.0 MB/);
+  failSecondBatch=false;
+ }else{
+  trashed.add('stable-0');await mounted.click('trash');
+  assert.equal((await mounted.read()).items[0].state,'in_trash');
+  assert.match(capsule['aria-label'],/^2.00 MB/);
+ }
+ await mounted.click('move-trash');
+ assert.ok((await mounted.read()).items.every(item=>item.state==='in_trash'));
+ assert.match(capsule['aria-label'],/^0.00 MB/);
+ await mounted.click('trash');assert.match(capsule['aria-label'],/^0.00 MB/);
+ await mounted.nodes.get('close').onclick();
 });
