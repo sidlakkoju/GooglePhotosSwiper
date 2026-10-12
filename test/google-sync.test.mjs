@@ -295,3 +295,10 @@ for(const failure of ['network','http','json','keys','import'])test(`Google key 
  assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
 });
+
+test('auth start allowlists Photos return URLs and redirects after success',async()=>{
+ const env={DB:new D1()},state='r'.repeat(43);await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ for(const target of ['https://evil.test','https://photos.google.com.evil.test/','http://photos.google.com/','https://user@photos.google.com/','javascript:alert(1)','/relative'])assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,400);
+ const target='https://photos.google.com/u/0/?test=1#album',response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);assert.equal(response.status,200);
+ const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},fetch:async()=>({ok:true}),window:{location:{replace:value=>returned=value}}});await callback({credential:'test'});assert.equal(returned,target);
+});
