@@ -68,3 +68,17 @@ test('Worker serves separate loader and uncached release routes',async()=>{
   assert.equal((await worker.fetch(new Request(url,{method:'POST'}))).status,405);
  }
 });
+
+test('Worker publishes headerless app and matching live version with CORS and fresh caching',async()=>{
+ const bundle=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
+ const version=/^\/\/ @version (\S+)$/m.exec(bundle)[1];
+ for(const path of ['/app.js','/version']){
+  const response=await worker.fetch(new Request(new URL(path,installURL)));
+  assert.equal(response.headers.get('Cache-Control'),'no-store');assert.equal(response.headers.get('Access-Control-Allow-Origin'),'*');assert.equal(response.headers.get('X-Photoswiper-Version'),version);
+  if(path==='/app.js'){assert.equal(response.headers.get('Content-Type'),'text/javascript; charset=utf-8');assert.equal(await response.text(),bundle.split('// ==/UserScript==')[1].trimStart());}
+  else assert.deepEqual(await response.json(),{version});
+  const head=await worker.fetch(new Request(new URL(path,installURL),{method:'HEAD'}));assert.equal(head.body,null);assert.deepEqual([...head.headers],[...response.headers]);
+  assert.equal((await worker.fetch(new Request(new URL(path,installURL),{method:'OPTIONS'}))).status,204);
+  assert.equal((await worker.fetch(new Request(new URL(path,installURL),{method:'POST'}))).status,405);
+ }
+});

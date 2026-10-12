@@ -134,7 +134,7 @@ test('Trash pagination and unknown reconciliation preserve local state and do no
  await assert.rejects(reconcileReviewTrash({...state,job:{}},call),/Finish/);
 });
 test('built userscript metadata, page isolation, privileged pairing storage and reproducible artifact',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const url='https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js';
  for(const entry of ['@match https://photos.google.com/*','@run-at document-idle','@grant GM.getValue','@grant GM.setValue','@grant GM.deleteValue','@grant unsafeWindow','@inject-into content',`@updateURL ${url}`,`@downloadURL ${url}`])assert.ok(source.includes(`// ${entry}\n`));
  assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.doesNotMatch(source,/chrome\.|localhost|photos-swipe-request/);
@@ -155,7 +155,7 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
 });
 test('first launcher activation after reload stays isolated from page input handlers',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  for(const input of [['pointerdown','mousedown','pointerup','mouseup','click'],['touchstart','touchend','mousedown','mouseup','click']]){
   const mounted=bundleEnvironment();
   vm.runInNewContext(source,mounted.environment);
@@ -177,7 +177,7 @@ test('first launcher activation after reload stays isolated from page input hand
  }
 });
 test('page keyboard shortcuts remain available when close restores launcher focus',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const mounted=bundleEnvironment();
  vm.runInNewContext(source,mounted.environment);
  const launcher=mounted.nodes.get('launcher'),overlay=mounted.nodes.get('overlay');
@@ -206,7 +206,7 @@ test('rebuilt panel version follows a metadata version bump',async()=>{
   await writeFile(builderPath,builder.replace(/^\/\/ @version .*$/gm,'// @version '+version));
   const result=spawnSync(process.execPath,[builderPath],{cwd:directory,encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
-  const source=await readFile(join(directory,'userscript/photoswiper.user.js'),'utf8');
+  const source=await readFile(join(directory,'userscript/photoswiper-app.user.js'),'utf8');
   const metadataVersion=/^\/\/ @version (\S+)$/m.exec(source)[1];
   assert.equal(metadataVersion,version);
   const mounted=bundleEnvironment();
@@ -236,7 +236,7 @@ test('rebuilt panel version follows a metadata version bump',async()=>{
  }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('userscript installed without UTF-8 decoding preserves Unicode UI labels',async()=>{
- const bytes=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url));
+ const bytes=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url));
  assert.ok(bytes.every(byte=>byte<128),'Installable userscript must contain only ASCII bytes');
  const mounted=bundleEnvironment();
  vm.runInNewContext(bytes.toString('latin1'),mounted.environment);
@@ -418,7 +418,7 @@ test('undo eligibility rejects missing, trashed, revised and job-locked decision
  for(const changed of [{...state,items:[]},{...state,items:[item('a',{decision:'keep',revision:2})]},{...state,items:[item('a',{decision:'keep',revision:1,state:'in_trash'})]},{...state,job:{mediaKeys:['a']}}])assert.equal(canUndoReview(changed,entry),false);
 });
 test('mounted bundle keeps album links and Undo responds before failed storage',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),fault={};
  mounted.environment.window.indexedDB=fakeIndexedDB(fault);
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
@@ -445,7 +445,7 @@ function dismissReviewPairing(mounted){
  if(receiver){receiver.childNodes.find(node=>node.className==='toolbar').childNodes.find(node=>node.textContent==='Cancel').onclick();mounted.nodes.get('close').focus();}
 }
 async function mountedReview(items,windowOverrides={},syncSettings,environmentOverrides={}) {
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(syncSettings?.url?{}:syncSettings);
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment(syncSettings?.url?{}:syncSettings);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  if(typeof windowOverrides==='function')windowOverrides={fetch:windowOverrides};
  if(windowOverrides?.indexedDB)mounted.environment.window.indexedDB=windowOverrides.indexedDB;
@@ -535,7 +535,7 @@ test('mounted undo survives a fresh script instance with the same IndexedDB',asy
  const first=await mountedReview([item('a',{size:1}),item('b',{size:100})]);await first.click('keep');
  await waitForReview(async()=>{const state=await first.read();return state.items[0].decision==='keep'&&state.history.length===1;});
  await first.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();
  second.nodes.get('sort').value='largest';second.nodes.get('sort').onchange();
  assert.match(second.nodes.get('caption').textContent,/^b · /);
@@ -557,7 +557,7 @@ test('mounted Trash requires confirmation, confirms the exact count and verifies
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return false;};if(mounted.nodes.get('review-panel').hidden)await mounted.click('review');await mounted.click('move-trash');assert.equal(requests.length,0);assert.match(prompts[0],/exactly 1 items/);
  mounted.environment.window.confirm=()=>true;
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  await mounted.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;second.environment.window.fetch=mounted.environment.window.fetch;second.environment.window.confirm=()=>true;
  vm.runInNewContext(source,second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('trash-opt-in').checked=true;second.nodes.get('trash-opt-in').onchange();second.nodes.get('review').onclick();second.nodes.get('move-trash').onclick();
  await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&second.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
@@ -581,7 +581,7 @@ test('Trash completion status resets on reload and cached-page restore while est
  assert.equal(mounted.nodes.get('status').textContent,ready);
  assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  await mounted.nodes.get('close').onclick();const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reloaded.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
  assert.equal(reloaded.nodes.get('status').textContent,ready);
  assert.match(reloaded.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
@@ -619,7 +619,7 @@ test('legacy candidates share one Going to Trash grid and persist Keep across re
  grid.childNodes[0].childNodes[0].onclick();const preview=mounted.nodes.get('trash-preview');assert.equal(preview.childNodes[0].childNodes[1].textContent,'1 of 5');preview.childNodes.at(-1).childNodes[0].onclick();await mounted.settle();
  assert.equal((await mounted.read()).items[0].decision,'keep');assert.equal(grid.childNodes.length,5);assert.equal(mounted.nodes.get('move-trash').textContent,'Move 4 to Trash');
  await mounted.nodes.get('close').onclick();const second=bundleEnvironment();second.environment.window.indexedDB=mounted.environment.window.indexedDB;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('review').onclick();assert.equal(second.nodes.get('trash-review-grid').childNodes.length,4);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);await second.nodes.get('launcher').onclick();second.nodes.get('review').onclick();assert.equal(second.nodes.get('trash-review-grid').childNodes.length,4);
 });
 test('Trash grid merges queued and legacy items regardless of filters',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',type:'video',duration:14000}),item('sent',{decision:'remove',queueSent:true}),item('kept',{decision:'keep'}),item('trashed',{decision:'remove',state:'in_trash'})]);
@@ -984,7 +984,7 @@ test('opening with sync respects an in-flight Trash lease and holds the lease un
   assert.equal(new URL(url).origin,'https://sync.example');syncCalls++;syncStarted();await pendingSync;
   return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
  };
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
  first.nodes.get('trash-opt-in').checked=true;first.nodes.get('trash-opt-in').onchange();
  const moving=first.click('move-trash');await started;
  const before=await first.read();
@@ -1025,7 +1025,7 @@ test('opening with sync pauses if another tab takes ownership during sync',async
   assert.equal(new URL(url).origin,'https://sync.example');syncCalls++;syncStarted();await pendingSync;
   return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
  };
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
  first.nodes.get('trash-opt-in').checked=true;first.nodes.get('trash-opt-in').onchange();
  const moving=first.click('move-trash');await started;
  assert.equal(syncCalls,0);
@@ -1168,7 +1168,7 @@ test('photo viewer consumes Space without scrolling, closing or recording decisi
 });
 
 test('pairing settings failure after sign-in preserves the loaded review session',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted=bundleEnvironment();
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(mounted.environment.window.indexedDB),account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  const saved=await db.save(account,{...emptyReview(),items:[item('synthetic-photo')]});
@@ -1199,7 +1199,7 @@ test('sync setup lives in the gear sheet and local dismissal survives reopening'
  assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
  await mounted.click('sync-local');assert.equal(mounted.nodes.get('settings-sheet').hidden,true);assert.equal(mounted.nodes.get('pair-onboarding').hidden,true);
  await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('settings-sheet').hidden,true);assert.equal(reopened.nodes.get('pair-onboarding').hidden,true);
  assert.equal(reopened.nodes.get('status').textContent,'');
 });
@@ -1230,7 +1230,7 @@ test('sync setup actions preserve the saved album retry status and job',async()=
 
 test('sync success stays quiet and errors show a toast and gear dot',async()=>{
  const mounted=await mountedReview([item('a')]);
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.AbortSignal=AbortSignal;
  reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  let fail=false,requests=0;
@@ -1258,11 +1258,11 @@ test('sync success stays quiet and errors show a toast and gear dot',async()=>{
 test('decision history previews the same next Undo and updates after undo and reload',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);await mounted.click('remove');await mounted.click('keep');
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: b · Unreviewed → Keep; restores Unreviewed/);assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
- await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
+ await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
  reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
 });
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  assert.match(source,/\/\/ @version \d+\.\d+\.\d+\n/);assert.match(source,/\/\/ @author sidlakkoju\n/);
  const guide=await readFile(new URL('../docs/userscript.md',import.meta.url),'utf8');
  assert.match(guide,/chrome:\/\/extensions/);assert.match(guide,/Allow User Scripts.*off by default/);
@@ -1500,7 +1500,7 @@ test('failed saves release the lease on close and retain pending decisions for r
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  await db.save(account,{...emptyReview(),items:[item('a'),item('b')]});
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
  await mounted.nodes.get('launcher').onclick();fault.failSave=true;mounted.nodes.get('keep').onclick();
  await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
  await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
@@ -1551,7 +1551,7 @@ test('a clean tab pauses for another owner and Use here reloads saved decisions'
   const syncFetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
   const first=await mountedReview([item('a'),item('b')],{fetch:syncFetch},{url:'https://sync.example',token:'synthetic-token'});
   const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;second.environment.window.fetch=syncFetch;
-  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
   first.environment.document.hidden=true;first.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
   await second.nodes.get('launcher').onclick();
   if(changed){second.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));}
@@ -1946,7 +1946,7 @@ test('GM failures preserve migration credentials and undefined GM uses local fal
 });
 
 test('privileged bundle keeps sync fetch and saved credentials away from the page',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const mounted=bundleEnvironment(),pageWindow=mounted.environment.window;
  mounted.environment.window={...pageWindow,WIZ_global_data:undefined};
  mounted.environment.unsafeWindow=pageWindow;
@@ -1984,7 +1984,7 @@ test('content-only manager bridges Google operations without passing pairing cre
 });
 
 test('sync saves reuse tokens for equivalent origins and retain typed tokens after storage failure',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const mounted=bundleEnvironment();mounted.environment.AbortSignal=AbortSignal;
  let pairing={url:'https://sync.example',token:'saved-token',deviceId:'device'},fail=false,requests=0;
  mounted.environment.GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(fail)throw Error('Pairing write failed');if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
@@ -2015,7 +2015,7 @@ function isolatedPageBridge(mounted,timers={setTimeout,clearTimeout},fetchOverri
 }
 
 test('bundle bridges hidden page data with or without unsafeWindow and migrates page storage',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  for(const hasUnsafeWindow of [true,false]){
   const mounted=bundleEnvironment(),bridge=isolatedPageBridge(mounted);
@@ -2096,7 +2096,7 @@ test('failed GM migration preserves legacy pairing until a durable write succeed
 });
 
 test('signed-in privileged bundle uses page AbortSignals for library, album and Trash requests',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const mounted=bundleEnvironment(),pageWindow=mounted.environment.window,requests=[];
  const pageSignals=new WeakSet();
  class PageAbortController extends AbortController {constructor(){super();pageSignals.add(this.signal);}}
@@ -2467,7 +2467,7 @@ test('revoked userscript shows recovery, keeps local swipes and clears credentia
  await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.AbortSignal=AbortSignal;
  let requests=0;reopened.environment.window.fetch=async()=>{requests++;return new Response('{}',{status:401});};
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);assert.equal((await db.settings()).token,'');
  reopened.nodes.get('keep').onclick();await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
  const saved=await mounted.read();assert.equal(saved.items[0].decision,'keep');assert.equal(saved.syncPending.synthetic,'keep');assert.equal(requests,1);
@@ -2582,7 +2582,7 @@ test('late expired preview responses cannot replace a newly selected card',async
 });
 
 test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const first=bundleEnvironment(),indexedDB=first.environment.window.indexedDB;
  let pairing={url:'https://sync.example',token:'synthetic-revoked-token',deviceId:'synthetic-device',deviceName:'Synthetic phone'},reject=true;
  const GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
@@ -2649,7 +2649,7 @@ test('paired wiped database rebuilds synced batch, Undo and storage totals befor
   if(entry[0]==='lcxiM'){libraryStarted();await libraryGate;}
   return {ok:true,text:async()=>envelope(entry[0],entry[0]==='lcxiM'?[items.filter(item=>item.state!=='in_trash').map(item=>[item.mediaKey,['https://lh3.googleusercontent.com/synthetic'],1720000000000,'synthetic-dedup',0,{396644657:[item.mediaKey]}]),null]:[])};
  };
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
  const opening=mounted.nodes.get('launcher').onclick();
  try{
   await fetchingState;assert.equal(mounted.nodes.get('media').childNodes.length,0);assert.equal(mounted.nodes.get('keep').disabled,true);
@@ -2677,7 +2677,7 @@ test('paired wiped database falls back without cards or a blocking error when st
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
   return {ok:true,text:async()=>envelope(entry[0],entry[0]==='lcxiM'?[[['QA-FRESH',['https://lh3.googleusercontent.com/synthetic'],1720000000000,'synthetic-dedup',0,{396644657:['QA-FRESH']}]],null]:[])};
  };
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);await mounted.nodes.get('launcher').onclick();
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);await mounted.nodes.get('launcher').onclick();
  assert.equal(syncRequests,1);assert.equal(mounted.nodes.get('media').querySelector('img'),null);
  assert.match(mounted.nodes.get('sync-status').textContent,/Synthetic offline.*saved locally/);
  assert.match(mounted.nodes.get('stats').textContent,/0\/0 reviewed/);assert.equal(mounted.nodes.get('load').disabled,false);
@@ -2686,7 +2686,7 @@ test('paired wiped database falls back without cards or a blocking error when st
 });
 
 test('loader panel displays the selected signed release version instead of the bundled version',async()=>{
- const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const code=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  for(const version of ['1.2.99','1.2.8']){
   const mounted=bundleEnvironment();
   const GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
@@ -2756,7 +2756,7 @@ test('video resume is throttled, flushed on close and seeks after metadata on re
  await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal((await db.resume(account)).video.time,37.25);
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.window.fetch=fetch;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);
  await reopened.nodes.get('launcher').onclick();await new Promise(resolve=>setTimeout(resolve,20));
  const restored=reopened.nodes.get('media').querySelector('video');restored.duration=120;restored.listeners.loadedmetadata();
  assert.equal(restored.currentTime,37.25);
@@ -2835,7 +2835,7 @@ test('resume stays on an uncommitted item and advances after persistence before 
   assert.equal((await db.resume(account)).currentId,'a');
   fault.saveGate=null;release();await mounted.nodes.get('close').onclick();
   const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
-  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),reopened.environment);
+  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);
   await reopened.nodes.get('launcher').onclick();
   assert.match(reopened.nodes.get('caption').textContent,/^b · /);
  }finally{fault.saveGate=null;release();await mounted.settle();}
@@ -3116,7 +3116,7 @@ test('unpaired launcher shows the receiver with another Photos tab open',async()
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(first.environment.window.indexedDB);await db.saveSettings({});
  const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
  await second.nodes.get('launcher').onclick();
  const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
  assert.ok(receiver);assert.equal(receiver.hidden,false);assert.ok(second.nodes.get('pairing-short-code'));
@@ -3138,7 +3138,7 @@ test('unpaired script opens the receiver despite a paired script dismissing shar
  assert.equal(first.root.childNodes.some(node=>node.className==='pairing-receiver settings-sheet'&&!node.hidden),false);
  const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
  second.environment.GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),second.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
  try{
   await second.nodes.get('launcher').onclick();
   const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
@@ -3198,7 +3198,7 @@ test('receiver claim during session opening activates the saved pairing after le
   return {ok:true,json:async()=>url.endsWith('/api/pair/claim')?{token:'receiver-token'}:{decisions:[],history:[],progress:{}}};
  };
  let release;fault.leaseGate=new Promise(resolve=>{release=resolve;});
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
  const opening=mounted.nodes.get('launcher').onclick();let claiming;
  try{
   await waitForReview(()=>fault.leaseWrites>0);
@@ -3413,7 +3413,7 @@ for(const openingStage of ['identity','lease'])for(const resumeTiming of ['after
  let started,finish,holding=true,digests=0;
  const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
  mounted.environment.window.crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding&&++digests===(openingStage==='identity'?1:2)){started();await gate;}return webcrypto.subtle.digest(...args);}}};
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
  const opening=mounted.nodes.get('launcher').onclick();await checking;
  mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
  if(resumeTiming==='during opening'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
@@ -3438,7 +3438,7 @@ test('automatic library loading resumes after hiding an open that already read p
   if(id==='lcxiM')libraryCalls++;
   return {ok:true,text:async()=>envelope(id,[[],null])};
  };
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
  const opening=mounted.nodes.get('launcher').onclick();await reading;
  mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
  finish();await opening;
@@ -3480,7 +3480,7 @@ for(const resumeTiming of ['after request','during request'])test(`automatic lib
   if(id==='lcxiM'&&++libraryCalls===1){started();await gate;}
   return {ok:true,text:async()=>envelope(id,[[],null])};
  };
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
  await mounted.nodes.get('launcher').onclick();await requesting;
  mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
  if(resumeTiming==='during request'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
@@ -3542,7 +3542,7 @@ for(const navigation of ['reload','navigate'])test(`reload reclaims an unexpired
  database.transaction=function(name,...args){if(name==='leases')throw Error('Page torn down before release');return transaction.call(this,name,...args);};
  mounted.environment.window.dispatchEvent(new Event('pagehide'));await mounted.settle();
  database.transaction=transaction;locks.held.clear();
- const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const reloaded=bundleEnvironment();
  Object.assign(reloaded.environment.window,{indexedDB,sessionStorage,navigator:{locks},performance:{getEntriesByType:()=>[{type:navigation}]}});
  vm.runInNewContext(source,reloaded.environment);
@@ -3583,7 +3583,7 @@ for(const navigation of ['back_forward','reload'])test(`duplicate tab with ${nav
  const copiedValues=new Map(values),copiedStorage={getItem:key=>copiedValues.get(key)||null,setItem:(key,value)=>copiedValues.set(key,value),removeItem:key=>copiedValues.delete(key)};
  const copied=bundleEnvironment(),indexedDB=mounted.environment.window.indexedDB;
  Object.assign(copied.environment.window,{indexedDB,sessionStorage:copiedStorage,navigator:{locks},performance:{getEntriesByType:()=>[{type:navigation}]}});
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),copied.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),copied.environment);
  await copied.nodes.get('launcher').onclick();
  assert.match(copied.nodes.get('status').textContent,/busy in another tab/);
  await mounted.environment.window.listeners.pageshow({persisted:true});
@@ -3591,7 +3591,7 @@ for(const navigation of ['back_forward','reload'])test(`duplicate tab with ${nav
  assert.doesNotMatch(mounted.nodes.get('status').textContent,/busy in another tab/);
  copied.environment.window.dispatchEvent(new Event('pagehide'));await new Promise(resolve=>setTimeout(resolve,0));
  const third=bundleEnvironment();third.environment.window.indexedDB=indexedDB;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),third.environment);
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),third.environment);
  await third.nodes.get('launcher').onclick();
  assert.match(third.nodes.get('status').textContent,/busy in another tab/);
  assert.match(mounted.nodes.get('stats').textContent,/1 to review/);

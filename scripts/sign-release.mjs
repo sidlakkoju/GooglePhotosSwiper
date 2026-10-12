@@ -5,7 +5,7 @@ const keyPath=process.env.PHOTOSWIPER_SIGNING_KEY||'/home/box/shared/photoswiper
 const key=createPrivateKey(await readFile(keyPath));
 const publicKey=createPublicKey(key).export({format:'jwk'});
 if(key.asymmetricKeyType!=='ed25519'||Buffer.from(publicKey.x,'base64url').toString('base64')!==pinnedReleaseKey)throw Error('Signing key does not match the pinned Ed25519 key');
-const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+const code=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
 const version=code.match(/^\/\/ @version\s+(\S+)/m)?.[1];
 if(!version)throw Error('Missing app version');
 const release={version,code};
