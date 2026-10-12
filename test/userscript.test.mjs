@@ -314,7 +314,7 @@ function fakeIndexedDB(fault={}) {
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='settings'&&String(key).startsWith('resume:')&&fault.resumeGate){fault.resumeStarted?.();await fault.resumeGate;}if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
     delete:key=>staged.delete(key),
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
@@ -416,7 +416,7 @@ test('mounted bundle keeps album links and Undo responds before failed storage',
  fault.failSave=true;mounted.nodes.get('undo').onclick();
  assert.match(mounted.nodes.get('caption').textContent,/^a · /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
- await new Promise(resolve=>setTimeout(resolve,10));
+ await waitForReview(()=>/Local save failed.*pending changes/.test(mounted.nodes.get('status').textContent));
  assert.match(mounted.nodes.get('status').textContent,/Local save failed.*pending changes/);
  assert.equal((await db.read(account)).items[0].decision,'keep');
  fault.failSave=false;mounted.nodes.get('keep').onclick();await new Promise(resolve=>setTimeout(resolve,10));
@@ -3032,5 +3032,46 @@ for(const openingStage of ['identity','lease'])for(const resumeTiming of ['after
  if(resumeTiming==='after opening'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
  await waitForReview(()=>mounted.nodes.get('caption').textContent.startsWith('saved-first-open ·'));
  assert.equal(mounted.nodes.get('keep').disabled,false);
+ await mounted.nodes.get('close').onclick();
+});
+
+
+test('automatic library loading resumes after hiding an open that already read progress',async()=>{
+ const fault={},mounted=bundleEnvironment(fault);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),started:true,items:[item('saved')]});
+ let finish,started,libraryCalls=0;
+ const reading=new Promise(resolve=>{started=resolve;});
+ fault.resumeStarted=started;fault.resumeGate=new Promise(resolve=>{finish=resolve;});
+ mounted.environment.window.fetch=async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];
+  if(id==='lcxiM')libraryCalls++;
+  return {ok:true,text:async()=>envelope(id,[[],null])};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ const opening=mounted.nodes.get('launcher').onclick();await reading;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ finish();await opening;
+ assert.equal(libraryCalls,0);
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/Library loading failed/);
+ fault.resumeGate=null;mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();
+ await waitForReview(async()=>libraryCalls===1&&(await db.read(account)).exhausted);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('showing during a pending swipe save recovers ownership after suspension releases it',async()=>{
+ const timers=new Map();let timerId=0,holding=false,started,finish;
+ const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
+ const mounted=await mountedReview([item('a'),item('b')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ mounted.nodes.get('keep').onclick();holding=true;await checking;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();
+ holding=false;finish();await mounted.settle();
+ await waitForReview(()=>mounted.nodes.get('caption').textContent.startsWith('b ·')&&mounted.nodes.get('keep').disabled===false);
+ await mounted.click('keep');
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep']);
+ assert.equal(timers.size,1);
  await mounted.nodes.get('close').onclick();
 });

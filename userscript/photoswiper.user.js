@@ -1284,6 +1284,7 @@ function mountPhotosSwipe(environment) {
   }finally{if(token===leaseGeneration)acquiringAccount=null;}
  }
  async function refreshLease(){
+  await suspendingPromise;
   const token=leaseGeneration,recovering=leaseRecoveryPending||!!leaseError;
   if(!pageActive||document.hidden||$('overlay').hidden||(recovering&&(busy||activeOperation)))return;
   if(recovering)leaseRecoveryPending=true;
@@ -1378,7 +1379,7 @@ function mountPhotosSwipe(environment) {
  }
  let libraryLoading=null,libraryFailure=null;
  function fillLibrary(){
-  if(libraryLoading||libraryFailure||closingPromise||busy||leaseError||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
+  if(libraryLoading||libraryFailure||closingPromise||busy||leaseError||leaseRecoveryPending||!pageActive||document.hidden||!lockedAccount||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
   libraryLoading=load().catch(error=>{libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{libraryLoading=null;render();});
  }
  function refill(){
