@@ -83,7 +83,7 @@ test('loader watchdog falls back when the GM request never calls back',async()=>
 });
 
 test('verified loader pairing stays in its GM store and restores server state after claiming',async()=>{
- const modules=await Promise.all(['settings','pairing','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
+ const modules=await Promise.all(['core','settings','pairing','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
  const code=modules.map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n')+`
  window.completed=(async()=>{
   const store=await createPairingStore({GM,database:window.database,crypto:window.crypto});
@@ -91,14 +91,15 @@ test('verified loader pairing stays in its GM store and restores server state af
    const client=createSyncClient({fetch});client.configure(await store.settings());
    window.restored=await client.sync('synthetic-account',{items:[],history:[]},async value=>value);
   }});
-  panel.children[3].value='123456';await panel.children[1].onclick();
+  const nodes=node=>node.children.flatMap(child=>[child,...nodes(child)]);
+  nodes(panel).find(node=>node.id==='pairing-short-code').value='123456';await nodes(panel).find(node=>node.tag==='button'&&node.textContent==='Pair this device').onclick();
  })();`;
  const {env,scripts}=environment(null,signed('1.2.3',code));
  const storage=new Map(),pageWorld={localStorage:{},indexedDB:{}},persisted=[];
  let settings={};
  env.GM.getValue=async name=>storage.get(name);env.GM.setValue=async(name,value)=>storage.set(name,value);
  env.GM.deleteValue=async name=>storage.delete(name);
- env.document.createElement=tag=>({tag,children:[],style:{},setAttribute(){},append(...nodes){this.children.push(...nodes);},focus(){}});
+ env.document.createElement=tag=>({tag,children:[],style:{},setAttribute(key,value){this[key]=value;},append(...nodes){this.children.push(...nodes);},focus(){}});
  env.window={crypto:webcrypto,navigator:{},parent:{children:[],append(node){this.children.push(node);}},database:async()=>({settings:async()=>settings,deleteSettings:async()=>{settings={};},saveSettings:async value=>{settings=value;persisted.push(value);}})};
  env.unsafeWindow=pageWorld;
  const calls=[],remote={decisions:[{id:'photo',decision:'keep'}],history:[{key:'photo',decision:'keep',previous:null,revision:1}],progress:{started:true,reviewed:1}};

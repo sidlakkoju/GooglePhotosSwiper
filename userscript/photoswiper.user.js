@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.27
+// @version 1.2.28
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -174,9 +174,9 @@ function createPhotosAPI(environment) {
 }
 
 const emptyReview = () => ({revision:0,history:[],items:[],cursor:null,started:false,exhausted:false,albumKey:null,job:null});
-const reviewDeck = state => state.items.filter(item=>!item.decision&&item.state!=='in_trash');
-const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.queueSent&&item.state!=='in_trash');
-const reviewTrashCandidates = state => state.items.filter(item=>item.decision==='remove'&&item.state!=='in_trash');
+const reviewDeck = state => state.items.filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash');
+const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.needsPreview&&!item.queueSent&&item.state!=='in_trash');
+const reviewTrashCandidates = state => state.items.filter(item=>item.decision==='remove'&&!item.needsPreview&&item.state!=='in_trash');
 function reviewStorage(items) {
  return items.reduce((total,item)=>{
   const bytes=item.takesUpSpace===false?0:item.spaceTaken??item.size;
@@ -188,7 +188,7 @@ function mergeReviewPage(state,page,requestCursor,refresh=false) {
  if(!refresh&&state.cursor!==requestCursor)throw Error('Library progress changed. Retry Load more.');
  if(page.nextPageId&&page.nextPageId===requestCursor)throw Error('Google repeated a page. Reload before retrying.');
  const items=new Map(state.items.map(item=>[item.mediaKey,item]));
- for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,urlFetchedAt:Date.now(),decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
+ for(const item of page.items){const old=items.get(item.mediaKey);items.set(item.mediaKey,{...old,...item,urlFetchedAt:Date.now(),decision:old?.decision??null,queueSent:old?.queueSent??false,albumKey:old?.albumKey??null,state:'active',needsPreview:false,revision:(old?.revision||0)+(old&&old.state!=='active'?1:0)});}
  const progress=!refresh||!state.started?{cursor:page.nextPageId,exhausted:!page.nextPageId,started:true}:{};
  return {...state,...progress,items:[...items.values()]};
 }
@@ -257,7 +257,8 @@ async function reconcileReviewTrash(state,call) {
   else if(item.state==='in_trash'||item.dedupKey&&trash.dedupKeys.has(item.dedupKey)){const result=await call('itemState',{mediaKey:item.mediaKey});if(['active','in_trash'].includes(result.state))next=result.state;}
   items.push({...item,state:next,revision:(item.revision||0)+(next!==item.state?1:0)});
  }
- return {...state,items};
+ const newlyTrashed=items.filter(item=>item.state==='in_trash'&&state.items.find(previous=>previous.mediaKey===item.mediaKey)?.state!=='in_trash');
+ return {...state,items,lifetimeFreed:(state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes)+reviewStorage(newlyTrashed).bytes};
 }
 async function loadReviewPages({read,save,call,refresh=false,progress=()=>{},target=50,maxPages=12}) {
  let state=await read();
@@ -313,6 +314,10 @@ async function openReviewDatabase(indexedDB) {
  };
 }
 
+const fields=['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent'];
+function mergeProgressItem(item,checkpoint) {
+ return {...Object.fromEntries(Object.entries(item).filter(([field])=>!fields.includes(field))),...checkpoint};
+}
 function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
  let settings={},blocked=false,firstSync=true;
  const configure=value=>{settings=value||{};blocked=false;firstSync=true;status(settings.url&&settings.token?'Sync ready':'Sync off \u00b7 saved locally');};
@@ -332,7 +337,8 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    throw error;
   }
  }
- async function sync(scope,state,save,{pull=true}={}) {
+ async function sync(scope,state,save,options={}) {
+  const {pull=true,rebuild=async value=>value}=typeof options==='function'?{rebuild:options}:options;
   if(blocked||!settings.url||!settings.token)return state;
   let retryAvailable=firstSync;firstSync=false;
   const syncRequest=async(...args)=>{
@@ -344,7 +350,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   status('Syncing\u2026');
   let checkpoint=state;
   try {
-   const remote=pull?await syncRequest(scope,'api/state'):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress};
+   const remote=pull?await syncRequest(scope,'api/state'):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress||{}};
    const decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
    const pending={...state.syncPending};
    if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey))pending[item.mediaKey]=item.decision;
@@ -356,19 +362,45 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
     for(const {id,decision} of batch){delete remaining[id];if(decision===null)delete decisions[id];else decisions[id]=decision;}
     checkpoint={...state,syncDecisions:{...decisions},syncPending:{...remaining},syncDirty:dirty,syncHistoryKeys:[...historyKeys]};
    }
-   for(const [id,value] of Object.entries(pending)){if(value===null)delete decisions[id];else decisions[id]=value;}
    const history=(dirty?mergeHistory(remote.history,state.history,historyKeys):remote.history).slice(-2000);
-   const items=state.items.map(item=>{
+   const checkpointItems=new Map((remote.progress.items||[]).map(item=>[item.mediaKey,item]));
+   const checkpointRevisions=new Map([...checkpointItems].map(([key,item])=>[key,item.revision||0]));
+   const mergedItems=state.items.map(item=>{
+    const checkpoint=checkpointItems.get(item.mediaKey);checkpointItems.delete(item.mediaKey);
+    return checkpoint&&(checkpoint.revision||0)>=(item.revision||0)?mergeProgressItem(item,checkpoint):item;
+   });
+   for(const item of checkpointItems.values())mergedItems.push({...item,name:item.mediaKey,type:item.type||'photo',needsPreview:true});
+   const items=mergedItems.map(item=>{
     const value=Object.hasOwn(pending,item.mediaKey)?pending[item.mediaKey]:decisions[item.mediaKey]??(Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
     const entry=history.findLast(entry=>entry.key===item.mediaKey&&entry.decision===value);
-    return {...item,decision:value,revision:!dirty&&entry&&(value!==item.decision||!item.revision)?entry.revision:item.revision};
+    return {...item,decision:value,revision:!dirty&&entry&&(value!==item.decision||!item.revision)?Math.max(entry.revision,checkpointRevisions.get(item.mediaKey)||0):item.revision};
    });
-   let next={...state,history,items,syncDecisions:decisions};
-   if(dirty){
-    await syncRequest(scope,'api/undo','PUT',{history});
-    await syncRequest(scope,'api/progress','PUT',{started:state.started,reviewed:Object.keys(decisions).length});
+   let next={...state,history,items,syncDecisions:decisions,lifetimeFreed:Math.max(state.lifetimeFreed||0,remote.progress.lifetimeFreed||0,reviewStorage(items.filter(item=>item.state==='in_trash')).bytes)};
+   if(!state.started&&!state.items.length&&!state.history.length&&!dirty&&Object.keys(pending).length===0&&(remote.progress.started||Object.keys(decisions).length)){
+    const restored=remote.progress.items?.map(item=>({...item}))||Object.keys(decisions).map(mediaKey=>({mediaKey,revision:history.findLast(entry=>entry.key===mediaKey)?.revision||0,state:'active'}));
+    for(const mediaKey of Object.keys(decisions))if(!restored.some(item=>item.mediaKey===mediaKey))restored.push({mediaKey,revision:history.findLast(entry=>entry.key===mediaKey)?.revision||0,state:'active'});
+    next={...next,started:!!remote.progress.started,items:restored.map(item=>({...item,name:item.mediaKey,type:item.type||'photo',decision:decisions[item.mediaKey]??null,needsPreview:true})),lifetimeFreed:remote.progress.lifetimeFreed||0};
+    try{next=await rebuild(next);}catch(error){status(`${error.message} \u00b7 checkpoint recovered; retry loading the library`);}
    }
-   next=await save({...next,syncPending:{},syncDirty:false,syncHistoryKeys:[],syncProgress:remote.progress});
+   let progress=reviewSyncProgress(next,decisions);
+   const progressDirty=dirty||JSON.stringify(progress)!==JSON.stringify(state.syncCheckpoint)&&state.items.length>0;
+   let writeError=null;
+   try{
+    if(dirty)await syncRequest(scope,'api/undo','PUT',{history});
+    if(progressDirty){
+     const accepted=new Map();
+     for(const batch of progressBatches(progress)){
+      const result=await syncRequest(scope,'api/progress','PUT',batch);
+      const items=result.items||(await syncRequest(scope,'api/state')).progress.items;
+      if(!Array.isArray(items)||batch.items.some(item=>!items.some(row=>row.mediaKey===item.mediaKey)))throw Error('Unconfirmed sync');
+      for(const item of items)accepted.set(item.mediaKey,item);
+     }
+     next={...next,items:next.items.map(item=>accepted.has(item.mediaKey)?mergeProgressItem(item,accepted.get(item.mediaKey)):item)};
+     progress.items=reviewSyncProgress(next,decisions).items;
+    }
+   }catch(error){writeError=error;}
+   next=await save({...next,syncPending:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:remote.progress,syncCheckpoint:writeError?state.syncCheckpoint:progress});
+   if(writeError){if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
@@ -396,6 +428,35 @@ function validateSyncSettings(url,token) {
  return {url:parsed.origin,token};
 }
 
+function progressBatches(progress) {
+ const {items,...metadata}=progress,encoder=new TextEncoder(),batches=[];
+ let batch=[],bytes=encoder.encode(JSON.stringify({...metadata,items:[]})).length;
+ const baseBytes=bytes;
+ for(const item of items){
+  const itemBytes=encoder.encode(JSON.stringify(item)).length;
+  if(batch.length&&(batch.length===2000||bytes+itemBytes+1>262144)){
+   batches.push({...metadata,items:batch});batch=[];bytes=baseBytes;
+  }
+  bytes+=itemBytes+(batch.length?1:0);batch.push(item);
+ }
+ if(batch.length||!batches.length)batches.push({...metadata,items:batch});
+ return batches;
+}
+function reviewSyncProgress(state,decisions=state.syncDecisions||{}) {
+ return {started:!!state.started,reviewed:Object.keys(decisions).length,items:state.items.map(item=>Object.fromEntries(fields.filter(field=>item[field]!==undefined).map(field=>[field,item[field]]))),lifetimeFreed:state.lifetimeFreed||reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes};
+}
+async function rebuildSyncedReview(state,call) {
+ const items=new Map(state.items.map(item=>[item.mediaKey,item])),seen=new Set();let cursor=null,exhausted=false;
+ for(let count=0;count<12;count++){
+  const page=await call('library',{cursor});
+  for(const item of page.items){const old=items.get(item.mediaKey),storage=Object.fromEntries(['size','spaceTaken','takesUpSpace'].map(field=>[field,item[field]??old?.[field]]));items.set(item.mediaKey,{...old,...item,...storage,decision:state.syncDecisions[item.mediaKey]??null,state:old?.state||'active',revision:old?.revision||0,needsPreview:false});}
+  if(page.nextPageId&&(page.nextPageId===cursor||seen.has(page.nextPageId)))throw Error('Google repeated a library page during sync recovery.');
+  cursor=page.nextPageId;exhausted=!cursor;seen.add(cursor);
+  if(exhausted||[...items.values()].filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash').length>=50)break;
+ }
+ return {...state,items:[...items.values()],started:true,cursor,exhausted};
+}
+
 function mergeHistory(remote,local,keys) {
  return [...remote.filter(entry=>!keys.has(entry.key)),...local.filter(entry=>keys.has(entry.key))];
 }
@@ -407,7 +468,11 @@ function mergeSyncResult(current,snapshot,synced) {
  const pending={...synced.syncPending};
  for(const key of changed)if(Object.hasOwn(current.syncPending||{},key))pending[key]=current.syncPending[key];
  const history=mergeHistory(synced.history,current.history,changed).slice(-2000);
- return {...current,items:current.items.map(item=>changed.has(item.mediaKey)?item:incoming.get(item.mediaKey)||item),history,syncDecisions:synced.syncDecisions,syncPending:pending,syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
+ const items=current.items.map(item=>changed.has(item.mediaKey)?item:incoming.get(item.mediaKey)||item);
+ const existing=new Set(items.map(item=>item.mediaKey));
+ for(const item of synced.items)if(!existing.has(item.mediaKey))items.push(item);
+ const recovered=!snapshot.started&&!snapshot.items.length&&synced.started;
+ return {...current,...(recovered?{started:synced.started,cursor:synced.cursor,exhausted:synced.exhausted}:{}),lifetimeFreed:Math.max(current.lifetimeFreed||0,synced.lifetimeFreed||0),syncProgress:synced.syncProgress,syncCheckpoint:synced.syncCheckpoint,items,history,syncDecisions:synced.syncDecisions,syncPending:pending,syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
 }
 function decisionBatches(pending) {
  const batches=[];let batch=[],bytes=16;
@@ -699,7 +764,17 @@ function receivePairingLink({document,parent,location,window,fetch,saveSettings,
  const match=location.hash?.match(/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/);if(!match&&!manual)return;
  if(match)window.history.replaceState(null,'',location.pathname+location.search);
  const panel=document.createElement('section'),name=document.createElement('input'),button=document.createElement('button'),status=document.createElement('p'),shortCode=document.createElement('input'),origin=document.createElement('input'),cancel=document.createElement('button');
- panel.style.cssText='position:fixed;inset:0;background:#f4f7f1;padding:24px;pointer-events:auto;z-index:2';name.value=/iPhone/.test(window.navigator?.userAgent||'')?'iPhone (Safari)':'New browser';name.setAttribute('aria-label','Device name');button.textContent='Pair this device';panel.append(name,button,status);if(manual){shortCode.setAttribute('aria-label','Six-digit pairing code');shortCode.inputMode='numeric';shortCode.maxLength=7;origin.setAttribute('aria-label','Worker origin');origin.type='url';origin.value=url;panel.append(shortCode,origin);}cancel.textContent='Cancel';cancel.onclick=()=>{panel.hidden=true;};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.append(cancel);panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);name.focus();
+ panel.className='pairing-receiver settings-sheet';
+ const title=document.createElement('h2');title.textContent='Pair this device';panel.append(title);
+ const field=(input,id,text,parent=panel)=>{const label=document.createElement('label');label.textContent=text;label.setAttribute('for',id);input.setAttribute('id',id);parent.append(label,input);};
+ name.value=/iPhone/.test(window.navigator?.userAgent||'')?'iPhone (Safari)':'New browser';field(name,'pairing-device-name','Device name');
+ if(manual){
+  field(shortCode,'pairing-short-code','6-digit code from a paired device');shortCode.setAttribute('inputmode','numeric');shortCode.setAttribute('pattern','[0-9]{6}');shortCode.setAttribute('autocomplete','one-time-code');shortCode.oninput=()=>{shortCode.value=shortCode.value.replace(/[^0-9]/g,'').slice(0,6);};
+  const hint=document.createElement('p');hint.setAttribute('id','pairing-code-hint');hint.textContent="Get a code from Settings > Sync on a device that's already paired";shortCode.setAttribute('aria-describedby','pairing-code-hint');panel.append(hint);
+  const advanced=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Advanced';advanced.open=false;advanced.append(summary);origin.type='url';origin.value=url;field(origin,'pairing-server','Sync server',advanced);panel.append(advanced);
+ }
+ const actions=document.createElement('div');actions.className='toolbar';button.textContent='Pair this device';cancel.textContent='Cancel';actions.append(button,cancel);status.setAttribute('role','status');panel.append(actions,status);
+ cancel.onclick=()=>{panel.hidden=true;};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);name.focus();
  button.onclick=async()=>{button.disabled=true;try{const worker=new URL(match?.[2]?decodeURIComponent(match[2]):manual?origin.value:url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
  return panel;
 }
@@ -1021,6 +1096,7 @@ function mountPhotosSwipe(environment) {
  const historyList=document.createElement('ol');historyList.setAttribute('id','history-list');
  historyPanel.append(historyTitle,historyList);divElement13.insertBefore(undoPreview,enlargeElement);divElement4.insertBefore(historyPanel,queue_detailsElement);
  const shellStyle=document.createElement('style');shellStyle.textContent='.overlay{scrollbar-gutter:auto;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);padding:24px}.content{position:relative;width:540px;max-width:100%;max-height:calc(100dvh - 48px);overflow:auto;margin:0;background:var(--ps-bg);border-radius:28px;padding:20px}.content header{flex-wrap:nowrap}.content h1{position:absolute;width:1px;height:1px;overflow:hidden}.media{height:56dvh}.caption{position:absolute;bottom:0;left:0;right:0;background:var(--ps-surface);pointer-events:none}.actions{display:flex}.actions #remove,.actions #keep{width:72px;height:72px;border-radius:50%;font-size:30px}.actions #undo,.actions #enlarge{border-radius:50%}.settings-sheet{position:absolute;inset:0;z-index:5;overflow:auto;padding:20px;background:var(--ps-surface-solid);border-radius:28px}.settings-sheet .group{padding:12px;background:var(--ps-fill);border-radius:16px;margin:12px 0}.settings-sheet label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0}.settings-sheet input{max-width:100%;min-width:0}.settings-sheet #sync-settings{margin:0}.settings-sheet #sync-settings label{display:block}.settings-sheet #sync-settings input{width:100%}.settings-sheet #stats{margin:0}.gear-error::after{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ps-destructive)}#sync-status,#undo-preview,.swipe,.zoom-control{display:none}.counter{font:var(--ps-t-callout);border-radius:999px;background:var(--ps-fill);padding:8px}.status:empty{display:none}.status{position:sticky;bottom:0;background:var(--ps-surface);border-radius:999px;padding:8px;text-align:center}.review-panel{padding:12px;background:var(--ps-surface-solid);border-radius:16px;margin-top:12px}@supports(backdrop-filter:blur(20px)){.settings-sheet{background:var(--ps-surface);backdrop-filter:blur(20px)}}@media(max-width:599px){.overlay{padding:0}.content{width:100%;max-height:100dvh;border-radius:0;padding:16px}.settings-sheet{border-radius:0}.media{height:56dvh}.actions{display:flex}}';root.append(shellStyle);
+ const pairingStyle=document.createElement('style');pairingStyle.textContent='.pairing-receiver{position:fixed;inset:0;z-index:6;overflow:auto;pointer-events:auto;background:var(--ps-bg);color:var(--ps-label);padding:var(--ps-s5);border-radius:0}.pairing-receiver label{display:block;margin:var(--ps-s3) 0 var(--ps-s1)}.pairing-receiver input{display:block;width:100%;min-width:0;min-height:44px}.pairing-receiver p{color:var(--ps-label2)}.pairing-receiver summary{cursor:pointer;min-height:44px;padding:var(--ps-s3) 0}.pairing-receiver .toolbar{margin-top:var(--ps-s4)}';root.append(pairingStyle);
  const gear=document.createElement('button');gear.setAttribute('id','settings');gear.textContent='\u2699';gear.setAttribute('aria-label','Settings');gear.setAttribute('aria-haspopup','dialog');headerElement5.insertBefore(gear,h1Element6);
  const counter=document.createElement('span');counter.setAttribute('class','counter');headerElement5.insertBefore(counter,closeElement);
  const reviewButton=document.createElement('button');reviewButton.setAttribute('id','review');reviewButton.setAttribute('aria-label','Review marked items');headerElement5.insertBefore(reviewButton,closeElement);
@@ -1074,7 +1150,7 @@ function mountPhotosSwipe(environment) {
   const account=identity.account;let version;
   syncRunning=(async()=>{
    await writes.flush();if(writes.pending)return;version=state;
-   const next=await syncClient.sync(account,version,async value=>value,{pull});
+   const next=await syncClient.sync(account,version,async value=>value,{pull,rebuild:next=>rebuildSyncedReview(next,call)});
    if(identity?.account===account&&next!==version){
     state={...mergeSyncResult(state,version,next),revision:writeRevision};
     await writes.enqueue();render();
@@ -1341,7 +1417,7 @@ function mountPhotosSwipe(environment) {
   const queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
   lifetime.textContent=estimate(state.items.filter(item=>item.state==='in_trash'&&item.decision==='remove'));
   counter.textContent=`${state.items.filter(item=>item.decision).length} reviewed \u00b7 ${candidates.length} marked`;reviewButton.textContent=`\ud83d\uddd1 ${candidates.length}`;
-  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
+  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total) \u00b7 Lifetime freed: ${bytes(state.lifetimeFreed??reviewStorage(state.items.filter(item=>item.state==='in_trash')).bytes)}`;
   const {nextUndo,historyLabel,decisionLabel}=historyView();
   undoPreview.textContent=nextUndo?`Next Undo: ${historyLabel(nextUndo)}; restores ${decisionLabel(nextUndo.previous)}.`:'No previous decisions can be undone.';
   $('undo').title=undoPreview.textContent;$('undo').setAttribute('aria-describedby','undo-preview');
@@ -1369,7 +1445,7 @@ function mountPhotosSwipe(environment) {
   if(trashOptIn.checked&&trashListKey!==candidateKey){trashListKey=candidateKey;trashList.replaceChildren();
   for(const candidate of candidates){
    const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');
-   image.onerror=()=>image.remove();image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
+   image.onerror=()=>image.remove();if(candidate.thumbUrl)image.src=mediaURL(candidate.thumbUrl);image.alt='';image.loading='lazy';
    label.textContent=`${candidate.name} \u00b7 ${candidate.type} \u00b7 ${candidate.date?new Date(candidate.date).toLocaleDateString():'Unknown date'} \u00b7 ${candidate.queueSent?'Sent to review album':'Queued'} \u00b7 ID: ${candidate.mediaKey}`;
    label.style.cssText='white-space:normal;overflow-wrap:anywhere';
    button.append(image,label);button.setAttribute('aria-label',`Inspect ${label.textContent}`);
@@ -1379,7 +1455,7 @@ function mountPhotosSwipe(environment) {
   $('queue-title').textContent=`Removal queue (${queue.length})`;
   const queueKey=JSON.stringify(queue.map(item=>[item.mediaKey,item.name,item.thumbUrl]));
   if(queue_detailsElement.open&&queueListKey!==queueKey){queueListKey=queueKey;$('queue').replaceChildren();
-  for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.onerror=()=>image.remove();image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
+  for(const item of queue){const button=document.createElement('button'),image=document.createElement('img'),label=document.createElement('span');image.onerror=()=>image.remove();if(item.thumbUrl)image.src=mediaURL(item.thumbUrl);image.alt='';image.loading='lazy';label.textContent=item.name;button.append(image,label);button.setAttribute('aria-label',`Inspect ${item.name}`);button.onclick=()=>{if(!busy){inspected=item.mediaKey;render();}};$('queue').append(button);}
   }
  }
  function render(){
@@ -1540,7 +1616,7 @@ function mountPhotosSwipe(environment) {
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.27":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.28":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
