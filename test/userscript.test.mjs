@@ -3060,18 +3060,46 @@ test('automatic library loading resumes after hiding an open that already read p
  await mounted.nodes.get('close').onclick();
 });
 
-test('showing during a pending swipe save recovers ownership after suspension releases it',async()=>{
+for(const overlappingLoad of [false,true])test(`showing during a pending swipe save recovers ownership with overlapping Load more ${overlappingLoad}`,async()=>{
  const timers=new Map();let timerId=0,holding=false,started,finish;
  const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
  const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
- const mounted=await mountedReview([item('a'),item('b')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const mounted=await mountedReview([item('a'),item('b'),item('c')],{crypto},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
  mounted.nodes.get('keep').onclick();holding=true;await checking;
+ const loading=overlappingLoad?mounted.nodes.get('load').onclick():null;
  mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
  mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();
- holding=false;finish();await mounted.settle();
+ holding=false;finish();await loading;await mounted.settle();
  await waitForReview(()=>mounted.nodes.get('caption').textContent.startsWith('b ·')&&mounted.nodes.get('keep').disabled===false);
  await mounted.click('keep');
- assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep']);
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep',null]);
  assert.equal(timers.size,1);
+ mounted.nodes.get('keep').onclick();mounted.environment.window.listeners.pagehide();await mounted.settle();
+ assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep','keep']);
+ await mounted.nodes.get('close').onclick();
+});
+
+for(const resumeTiming of ['after request','during request'])test(`automatic library loading retries a hidden in-flight request when shown ${resumeTiming}`,async()=>{
+ const mounted=bundleEnvironment();
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),started:true,items:[item('saved')]});
+ let finish,started,libraryCalls=0;
+ const requesting=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
+ mounted.environment.window.fetch=async(url,options)=>{
+  const id=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][0];
+  if(id==='lcxiM'&&++libraryCalls===1){started();await gate;}
+  return {ok:true,text:async()=>envelope(id,[[],null])};
+ };
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8'),mounted.environment);
+ await mounted.nodes.get('launcher').onclick();await requesting;
+ mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();
+ if(resumeTiming==='during request'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ finish();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.doesNotMatch(mounted.nodes.get('status').textContent,/Library loading failed/);
+ if(resumeTiming==='after request'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ await waitForReview(async()=>libraryCalls===2&&(await db.read(account)).exhausted);
+ await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();
+ assert.equal(libraryCalls,2);
  await mounted.nodes.get('close').onclick();
 });
