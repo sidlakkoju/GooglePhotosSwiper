@@ -1577,10 +1577,12 @@ test('pausing dismisses settings and trash review so takeover and close remain r
   assert.equal(layer.hidden,false);
   const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
   const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+  await db.lease(account,(await db.readLease(account)).owner,true);
   await db.lease(account,'other-tab');
   await mounted.environment.window.listeners.focus();
   assert.equal(layer.hidden,true);assert.equal(mounted.nodes.get('close').disabled,undefined);
   assert.equal(mounted.nodes.get('use-here').hidden,false);assert.equal(mounted.nodes.get('use-here').disabled,false);
+  await db.lease(account,'other-tab',true);
   await mounted.nodes.get('use-here').onclick();assert.equal(mounted.nodes.get('keep').disabled,false);
   await mounted.nodes.get('close').onclick();assert.equal(mounted.nodes.get('overlay').hidden,true);
  }
@@ -1590,7 +1592,9 @@ test('a swipe queued during a clean lease read is saved on close',async()=>{
  const mounted=await mountedReview([item('a'),item('b')]);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,(await db.readLease(account)).owner,true);
  await db.lease(account,'other-tab');
+ await db.lease(account,'other-tab',true);
  const database=await new Promise(resolve=>{const request=mounted.environment.window.indexedDB.open();request.onsuccess=()=>resolve(request.result);});
  const transaction=database.transaction;let finish,started,hold=true;
  const reading=new Promise(resolve=>{started=resolve;});

@@ -1306,13 +1306,6 @@ function mountPhotosSwipe(environment) {
   const token=leaseGeneration,recovering=leaseRecoveryPending||!!leaseError;
   const account=identity?.account;
   if(!account)return;
-  let lease;
-  try{lease=await db.readLease(account);}catch(error){if(token===leaseGeneration){leaseError=error;message(error.message);}return;}
-  if(token!==leaseGeneration||account!==identity?.account)return;
-  if(!leaseError&&!activeOperation&&!libraryLoading&&!writes.pending&&state.items===persistedItems&&lease?.owner!==owner&&lease?.expires>Date.now()){
-   pauseForOtherTab();return;
-  }
-  if(otherTab)return;
   if(recovering)leaseRecoveryPending=true;
   if(!await renewLease()||token!==leaseGeneration)return;
   if(recovering){if(busy||activeOperation||syncRunning||closingPromise||$('overlay').hidden)return;await open();return;}
