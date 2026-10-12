@@ -108,7 +108,7 @@ test('repeated receiver activation reuses one panel and focuses it',()=>{
 
 test('busy viewer controls leave pairing Cancel enabled',()=>{
  const cancel={id:'',disabled:false},keep={id:'keep',disabled:false},receiverCancel={id:'',disabled:false};
- const context={root:{querySelectorAll:()=>[cancel,keep,receiverCancel]},pairingModal:{modal:{contains:button=>button===cancel}},receivingPanel:{contains:button=>button===receiverCancel},busy:true,identity:null,savingDecisions:false,reviewingUndo:false,syncEnabled:false,$:()=>({setAttribute(){}})};
+ const context={pairSubmit:{disabled:false},root:{querySelectorAll:()=>[cancel,keep,receiverCancel]},pairingModal:{modal:{contains:button=>button===cancel}},receivingPanel:{contains:button=>button===receiverCancel},busy:true,identity:null,savingDecisions:false,reviewingUndo:false,syncEnabled:false,$:()=>({setAttribute(){}})};
  vm.runInNewContext(ui.slice(ui.indexOf(' function controls()'),ui.indexOf('\n',ui.indexOf(' function controls()')))+'\ncontrols();',context);
  assert.equal(cancel.disabled,false);assert.equal(receiverCancel.disabled,false);assert.equal(keep.disabled,true);
 });
@@ -239,3 +239,30 @@ test('receiver cancellation, Escape and successful pairing notify shortcut suppr
  }
 });
 test('background suspension expires from the server deadline on the next tick',async()=>{const f=fixture();await f.open();f.setTime(310000);await f.timers.shift()();assert.equal(f.modal.children[0].textContent,'Code expired');assert.equal(f.timers.length,0);assert.equal(f.calls.at(-2).options.method,'DELETE');});
+
+for(const action of ['sync-save','sync-local'])test(`settings pairing serializes credential writes with ${action}`,async()=>{
+ let stored={url:'',token:''},releaseSave,releaseClaim,claims=0;
+ const nodes=Object.fromEntries(['sync-save','sync-local','pair-submit','sync-url','sync-token','pair-code','pair-name','overlay'].map(id=>[id,{id,value:'',setAttribute(){}}]));
+ nodes['sync-url'].value='https://worker.example';nodes['pair-code'].value='123456';
+ const context={busy:false,activeOperation:null,database:async()=>({}),assertAccount:async()=>{},withAccountLease:async task=>task(),render(){},identity:{},syncEnabled:false,leaseError:null,lockedAccount:null,libraryLoading:null,syncRunning:null,pairSubmit:nodes['pair-submit'],pairFeedback:{},$:id=>nodes[id],root:{querySelectorAll:()=>Object.values(nodes)},pairingModal:{modal:{contains:()=>false}},receivingPanel:null,pairingPromise:Promise.resolve({settings:async()=>({...stored}),saveSettings:async value=>{if(!value.token)await new Promise(resolve=>releaseSave=resolve);stored={...value};}}),syncClient:{pair:async()=>{claims++;return new Promise(resolve=>releaseClaim=()=>resolve({token:'single-use-token'}));},configure(){}},window:{navigator:{}},URL,validateSyncSettings:(url,token)=>({url,token}),unpairedBanner:{},onboarding:{},syncLocal:nodes['sync-local'],settingsPanel:{},closeSettings(){},message(){},idleMessage:()=>'',synchronize:async()=>{}};
+ vm.runInNewContext(ui.slice(ui.indexOf(' let pendingPairSettings;'),ui.indexOf(' let leaseTimer,'))+ui.split('\n').find(line=>line.includes(' function controls()'))+ui.slice(ui.indexOf(' async function run(task)'),ui.indexOf(' const bytes='))+ui.split('\n').filter(line=>line.includes("$('sync-save').onclick=")||line.includes("$('sync-local').onclick=")).join('\n'),context);
+ const saving=nodes[action].onclick();
+ while(!releaseSave)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(nodes['pair-submit'].disabled,true);
+ await nodes['pair-submit'].onclick();assert.equal(claims,0);
+ releaseSave();await saving;
+ assert.equal(nodes['pair-submit'].disabled,false);
+ const pairing=nodes['pair-submit'].onclick();
+ while(!releaseClaim)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(context.busy,true);assert.equal(nodes[action].disabled,true);
+ await nodes[action].onclick();
+ releaseClaim();await pairing;
+ assert.equal(stored.token,'single-use-token');assert.equal(context.busy,false);assert.equal(nodes['pair-submit'].disabled,false);
+});
+
+test('settings pairing releases the shared busy lock after a failed claim',async()=>{
+ const context={busy:false,pairSubmit:{disabled:false},pairFeedback:{},controls(){context.pairSubmit.disabled=context.busy;},pairingPromise:Promise.resolve({settings:async()=>({})}),$:()=>({value:''}),syncClient:{pair:async()=>{throw Error('Offline');}},window:{navigator:{}}};
+ vm.runInNewContext(ui.slice(ui.indexOf(' let pendingPairSettings;'),ui.indexOf(' let leaseTimer,')),context);
+ await context.pairSubmit.onclick();
+ assert.equal(context.busy,false);assert.equal(context.pairSubmit.disabled,false);assert.equal(context.pairFeedback.textContent,'Offline');
+});

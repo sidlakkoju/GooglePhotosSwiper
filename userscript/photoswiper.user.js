@@ -1168,8 +1168,8 @@ function mountPhotosSwipe(environment) {
  pairAgain.onclick=()=>{openSettings();settingsPanel.open=true;pairingPanel.open=true;$('pair-code').focus();};dismissUnpaired.onclick=()=>{unpairedBanner.hidden=true;};pairedNotice.onclick=()=>{openSettings();settingsPanel.open=true;devicesPanel.open=true;return run(showDevices);};
  let pendingPairSettings;
  pairSubmit.onclick=async()=>{
-  if(pairSubmit.disabled){pairFeedback.textContent='Pairing is already in progress.';return;}
-  pairSubmit.disabled=true;pairFeedback.textContent='Pairing\u2026';
+  if(busy||pairSubmit.disabled){pairFeedback.textContent='Pairing is already in progress.';return;}
+  busy=true;controls();pairFeedback.textContent='Pairing\u2026';
   try{
    if(!pendingPairSettings){
     const previous=await (await pairingPromise).settings(),url=$('sync-url').value.trim()||previous.url||'https://photoswiper-sync.sidlakkoju.workers.dev',code=$('pair-code').value.replace(/\s/g,''),name=$('pair-name').value.trim()||'New browser';
@@ -1183,8 +1183,8 @@ function mountPhotosSwipe(environment) {
    $('sync-url').value=settings.url;$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;unpairedBanner.hidden=true;
    message(idleMessage());
    pairFeedback.textContent='Device paired. Sync will resume when this tab can access local progress.';
-   if(!busy&&!leaseError&&lockedAccount)await synchronize();
-  }catch(error){pairFeedback.textContent=pendingPairSettings?`${error.message}. Device claimed; choose Pair and sync to retry saving.`:error.message;}finally{pairSubmit.disabled=false;}
+   if(!leaseError&&lockedAccount)await synchronize();
+  }catch(error){pairFeedback.textContent=pendingPairSettings?`${error.message}. Device claimed; choose Pair and sync to retry saving.`:error.message;}finally{busy=false;controls();}
  };
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null;
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
@@ -1247,7 +1247,7 @@ function mountPhotosSwipe(environment) {
   if(!lockedAccount||lockedAccount!==identity?.account)throw Error('Session changed. Close and reopen Photos Swipe.');
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer)return;
   leaseTimer=setInterval(()=>{refreshLease();},20000);
