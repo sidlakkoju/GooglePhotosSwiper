@@ -153,6 +153,48 @@ test('built userscript metadata, page isolation, privileged pairing storage and 
  vm.runInNewContext(source,mounted.environment);assert.equal(mounted.hosts.length,1);
  const result=spawnSync(process.execPath,['scripts/build-userscript.mjs','--check'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
 });
+test('first launcher activation after reload stays isolated from page input handlers',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ for(const input of [['pointerdown','mousedown','pointerup','mouseup','click'],['touchstart','touchend','mousedown','mouseup','click']]){
+  const mounted=bundleEnvironment();
+  vm.runInNewContext(source,mounted.environment);
+  const launcher=mounted.nodes.get('launcher'),overlay=mounted.nodes.get('overlay');
+  assert.equal(overlay.hidden,true);
+  let pageEvents=0,opening;
+  for(const type of input){
+   let stopped=false;
+   const event={type,target:launcher,stopPropagation(){stopped=true;}};
+   launcher.listeners[type]?.(event);
+   if(type==='click')opening=launcher.onclick(event);
+   if(!stopped)pageEvents++;
+  }
+  await opening;
+  assert.equal(pageEvents,0,`${input[0]} must not reach Google Photos page handlers`);
+  assert.equal(overlay.hidden,false);
+  assert.equal(launcher.hidden,true);
+  await mounted.nodes.get('close').onclick();
+ }
+});
+test('page keyboard shortcuts remain available when close restores launcher focus',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const mounted=bundleEnvironment();
+ vm.runInNewContext(source,mounted.environment);
+ const launcher=mounted.nodes.get('launcher'),overlay=mounted.nodes.get('overlay');
+ await launcher.onclick();
+ for(const type of ['keydown','keyup','keypress']){
+  let stopped=false;
+  overlay.listeners[type]({stopPropagation(){stopped=true;}});
+  assert.equal(stopped,true);
+ }
+ await mounted.nodes.get('close').onclick();
+ assert.equal(overlay.hidden,true);
+ assert.equal(mounted.root.activeElement,launcher);
+ for(const type of ['keydown','keyup','keypress']){
+  let stopped=false;
+  launcher.listeners[type]?.({type,key:'ArrowRight',target:launcher,stopPropagation(){stopped=true;},preventDefault(){assert.fail('Page shortcuts must retain browser defaults');}});
+  assert.equal(stopped,false,`${type} must reach page keyboard handlers after closing`);
+ }
+});
 test('rebuilt panel version follows a metadata version bump',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'photos-version-'));
  try{
