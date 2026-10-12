@@ -11,6 +11,8 @@ if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
 fi
 
 node "$repository_root/scripts/build-userscript.mjs"
+node --check "$repository_root/userscript/photoswiper-app.user.js"
+node "$repository_root/scripts/build-userscript.mjs" --check
 node "$repository_root/scripts/sign-release.mjs"
 cd "$repository_root/worker"
 database_list="$(npx --yes wrangler@4 d1 list --json)"

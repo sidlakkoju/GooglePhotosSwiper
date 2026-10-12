@@ -28,7 +28,7 @@ test('buffered photos paint below 100ms p95 over twenty Fast 3G swipes',{timeout
    const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('photos-swipe-userscript',2);request.onupgradeneeded=()=>{for(const name of ['accounts','leases','settings'])request.result.createObjectStore(name);};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
    await new Promise((resolve,reject)=>{const tx=db.transaction('accounts','readwrite');tx.objectStore('accounts').put(state,account);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
   },state);
-  const source=(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8')).replace('mountPhotosSwipe({window,document,location,fetch:',"mountPhotosSwipe({window,document,location:{origin:'https://photos.google.com',pathname:'/u/0/'},fetch:");
+  const source=(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8')).replace('mountPhotosSwipe({window,document,location,fetch:',"mountPhotosSwipe({window,document,location:{origin:'https://photos.google.com',pathname:'/u/0/'},fetch:");
   await page.addScriptTag({content:source});
   await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick());
   await page.waitForFunction(()=>{const image=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelector('img');return image?.complete&&image.naturalWidth;});

@@ -64,7 +64,7 @@ test('legacy GM APIs and no Trusted Types are supported',async()=>{
  assert.equal(await startLoader(env,key),true);assert.equal(env.window.appRuns,1);assert.equal(scripts.length,0);
 });
 test('full app skips when the shared app marker is set',async()=>{
- const code=await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8');
+ const code=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  vm.runInNewContext(code,{document:{documentElement:{dataset:{psLoaded:'1'}}}});
  assert.match(code,/if\(document.documentElement.dataset.psLoaded\)return;/);
 });

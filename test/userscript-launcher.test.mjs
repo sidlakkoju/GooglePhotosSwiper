@@ -7,7 +7,7 @@ test('first launcher click and tap after reload opens without reaching the under
  try{({chromium}=await import('playwright'));}catch{t.skip('Playwright is unavailable');return;}
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try{
-  const source=(await readFile(new URL('../userscript/photoswiper.user.js',import.meta.url),'utf8')).replace('window:pageWindow,document,location,GM:',"photosCall:async()=>({ok:true,data:{account:'synthetic-account',label:'Synthetic account'}}),window:pageWindow,document,location:{origin:'https://photos.google.com',pathname:'/'},GM:");
+  const source=(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8')).replace('window:pageWindow,document,location,GM:',"photosCall:async()=>({ok:true,data:{account:'synthetic-account',label:'Synthetic account'}}),window:pageWindow,document,location:{origin:'https://photos.google.com',pathname:'/'},GM:");
   for(const mobile of [false,true]){
    const page=await browser.newPage({viewport:mobile?{width:393,height:852}:{width:1280,height:800},isMobile:mobile,hasTouch:mobile});
    await page.route('**/*',route=>new URL(route.request().url()).hostname==='photos-swipe.test'?route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'}):route.abort());

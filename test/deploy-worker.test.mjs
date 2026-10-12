@@ -36,6 +36,8 @@ fi
    assert.equal(result.status,supplied||present?0:1,result.stderr);
    const commands=readFileSync(log,'utf8');
    assert.ok(commands.indexOf('build-userscript.mjs')<commands.indexOf('sign-release.mjs'));
+   assert.match(commands,/--check/);
+
    assert.ok(commands.indexOf('sign-release.mjs')<commands.indexOf('d1 list'));
    assert.match(commands,/d1 migrations apply/);
    assert.match(commands,/secret list --config/);
