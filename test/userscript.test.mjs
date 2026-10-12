@@ -2530,7 +2530,7 @@ test('mounted settings close by Escape or Done blocks typing spillover before sh
   const press=key=>mounted.environment.window.listeners.keydown({key,preventDefault(){},stopImmediatePropagation(){}});
   mounted.nodes.get('settings').onclick();mounted.nodes.get('pair-code').focus();
   press('ArrowLeft');press('ArrowRight');
-  if(method==='escape')press('Escape');else mounted.nodes.get('settings-sheet').childNodes[0].onclick();
+  if(method==='escape')press('Escape');else mounted.nodes.get('settings-sheet').querySelector('header').querySelector('button').onclick();
   assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
   assert.equal(mounted.root.activeElement,mounted.nodes.get('settings'));
   const space=async type=>{
