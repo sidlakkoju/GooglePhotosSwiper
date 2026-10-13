@@ -3450,15 +3450,23 @@ test('order capsule cycles approved names, pins the card, opens its menu and res
  const restored=bundleEnvironment();restored.environment.window.indexedDB=indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),restored.environment);await restored.nodes.get('launcher').onclick();assert.match(restored.nodes.get('order-switcher').childNodes[0].textContent,/Flashbacks/);assert.equal(restored.nodes.get('caption').textContent,resumed);await restored.nodes.get('close').onclick();
 });
 
-test('Flashbacks memory label includes the full date and appears only at memory starts',async()=>{
- const date='2020-06-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-memory-first',{date}),item('synthetic-memory-next',{date:'2020-06-17T12:01:00.000Z'})]),label=mounted.nodes.get('card').querySelector('.memory-label');
- assert.equal(label.hidden,false);
- assert.equal(label.textContent,new Date(date).toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'}));
+for(const location of ['Paris',null,{name:'Paris'},[48.86,2.35]])test(`Flashbacks memory label advances and restores with location ${JSON.stringify(location)}`,async()=>{
+ const date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-memory-first',{date,location}),item('synthetic-memory-next',{date:'2025-02-17T12:01:00.000Z',location})]),label=mounted.nodes.get('card').querySelector('.memory-label');
+ const text=()=>label.childNodes.map(node=>node.textContent).join(''),month=new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'}),place=location&&!Array.isArray(location)?' · Paris':'';
+ assert.equal(label.hidden,false);assert.equal(text(),`${month}${place} · 1 of 2`);
  mounted.nodes.get('order-menu').childNodes[1].onclick();assert.equal(label.hidden,true);
  mounted.nodes.get('order-menu').childNodes[0].onclick();assert.equal(label.hidden,false);
- await mounted.click('keep');assert.equal(label.hidden,true);
- await mounted.click('undo');assert.equal(label.hidden,false);
- assert.equal(label.textContent,new Date(date).toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'}));
+ await mounted.click('keep');assert.equal(label.hidden,false);assert.equal(text(),`${month}${place} · 2 of 2`);
+ await mounted.click('undo');assert.equal(label.hidden,false);assert.equal(text(),`${month}${place} · 1 of 2`);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('Flashbacks single-item memory keeps long place text in a shrinking ellipsis segment',async()=>{
+ const place='Synthetic city with a very long location name',date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-single-memory',{date,location:place})]),label=mounted.nodes.get('card').querySelector('.memory-label');
+ assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${place} · 1 of 1`);
+ assert.equal(label.querySelector('.memory-place').title,place);
+ const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('');
+ assert.match(styles,/max-width:calc\(100% - 32px\)/);assert.match(styles,/memory-place\{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis/);
  await mounted.nodes.get('close').onclick();
 });
 
