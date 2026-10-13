@@ -3110,7 +3110,8 @@ test('chained review undo uploads valid history and progress without remaining d
   fetch:async(url,options)=>{
    const path=new URL(url).pathname,value=options.body?JSON.parse(options.body):null;
    if(path==='/api/undo'&&options.method==='PUT'){
-    assert.ok(value.history.every(entry=>Object.keys(entry).every(key=>['key','previous','decision','revision'].includes(key))));
+    assert.ok(value.history.every(entry=>Object.keys(entry).every(key=>['key','previous','decision','revision','cooldown'].includes(key))));
+    for(const entry of value.history)if(entry.cooldown)assert.ok(Object.entries(entry.cooldown).every(([key,value])=>['lastDecisionAt','lastDecisionSwipe','keepCount'].includes(key)&&(value===null||Number.isSafeInteger(value)&&value>=0)));
    }
    if(path==='/api/decisions'&&value)remote.decisions=value.decisions.filter(entry=>entry.decision!==null);
    if(path==='/api/undo'&&value)remote.history=value.history;
