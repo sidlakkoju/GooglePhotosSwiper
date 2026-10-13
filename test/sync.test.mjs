@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage,reviewQueue,reviewTrashCandidates,sendReviewAlbum} from '../lib/userscript-core.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
-import {createSyncClient,markSyncChanges,validateSyncSettings,reviewSyncProgress,rebuildSyncedReview} from '../lib/userscript-sync.mjs';
+import {createSyncClient,markSyncChanges,reviewSyncProgress,rebuildSyncedReview} from '../lib/userscript-sync.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
@@ -47,7 +47,7 @@ test('sync uses authenticated page fetch, merges remote IDs, and retries local o
  await call(e,'decisions/remote?scope=account','PUT',{decision:'remove'});
  let offline=true;
  const client=createSyncClient({status:value=>statuses.push(value),fetch:async(url,options)=>{requests.push({url,options});if(offline)throw Error('Offline');return syncRequest(new Request(url,{...options,headers:{...options.headers,Origin:'https://photos.google.com'}}),e);}});
- client.configure(validateSyncSettings('https://sync.example','test-secret'));
+ client.configure({url:'https://sync.example',token:'test-secret'});
  let state={revision:0,started:true,history:[],items:[{mediaKey:'local',decision:null,thumbUrl:'secret-image'},{mediaKey:'remote',decision:null}]};
  state=markSyncChanges(state,{...state,items:state.items.map(item=>item.mediaKey==='local'?{...item,decision:'keep'}:item)});
  const save=async value=>({...value,revision:value.revision+1});
@@ -124,8 +124,6 @@ test('HTTP rejection preserves pending changes and settings reject insecure or c
  const state={items:[],history:[],syncPending:{item:'remove'},syncDirty:true};
  assert.equal(await client.sync('account',state,()=>{throw Error('Unexpected save');}),state);
  assert.equal(statuses.at(-1),'This device was unpaired.');
- for(const url of ['http://sync.example','https://user:pass@sync.example','https://sync.example/api/','https://sync.example/?token=secret'])assert.throws(()=>validateSyncSettings(url,'secret'));
- assert.deepEqual(validateSyncSettings('',''),{url:'',token:''});
 });
 
 test('first sync backfills decisions after unrelated saves and preserves pending overrides',async()=>{

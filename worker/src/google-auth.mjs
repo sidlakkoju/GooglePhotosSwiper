@@ -34,34 +34,45 @@ export async function googleAuthRequest(request,env){
  if(!db)return json({error:'Database unavailable'},500);
  if(url.pathname==='/auth/session'&&request.method==='POST'){
   const value=await request.json();if(!/^[A-Za-z0-9_-]{43}$/.test(value.state)||typeof value.name!=='string'||value.name.length>40||typeof value.platform!=='string'||value.platform.length>40)return json({error:'Invalid session'},400);
+  if(value.claimSecret!==undefined&&(value.automatic!==true||!/^[A-Za-z0-9_-]{43}$/.test(value.claimSecret)))return json({error:'Invalid claim proof'},400);
   const device=await authenticate(request,env);if(request.headers.has('Authorization')&&!device)return json({error:'Unauthorized'},401);
   const mapping=device?await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(device.id).first():null;
   await db.prepare('DELETE FROM google_pending WHERE expires_at <= ?').bind(now).run();
-  const nonce=random();await db.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,space,name,platform,login_hint,source_scope,source_device) VALUES (?,?,?,?,?,?,?,?,?)').bind(await hash(value.state),nonce,now+300,device?(mapping?.space||'legacy'):null,value.name,value.platform,typeof value.loginHint==='string'&&value.loginHint.length<=254?value.loginHint:null,typeof value.sourceScope==='string'&&/^[A-Za-z0-9_-]{1,256}$/.test(value.sourceScope)?value.sourceScope:'default',device?.id||null).run();
+  const nonce=random();await db.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,space,name,platform,login_hint,source_scope,source_device,state_claim,private_claim_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(await hash(value.state),nonce,now+300,device?(mapping?.space||'legacy'):null,value.name,value.platform,typeof value.loginHint==='string'&&value.loginHint.length<=254?value.loginHint:null,typeof value.sourceScope==='string'&&/^[A-Za-z0-9_-]{1,256}$/.test(value.sourceScope)?value.sourceScope:'default',device?.id||null,value.automatic===true?1:0,value.claimSecret?await hash(value.claimSecret):null).run();
   return json({url:syncOrigin+'/auth/start?state='+value.state});
  }
+ const browserSecret=request.headers.get('Cookie')?.match(/(?:^|;\s*)photos-swipe-browser=([A-Za-z0-9_-]{43})(?:;|$)/)?.[1];
+ const browserMatches=async pending=>{if(!browserSecret||!pending.browser_hash)return false;const digest=await hash(browserSecret);return digest.length===pending.browser_hash.length&&digest.every((byte,index)=>byte===pending.browser_hash[index]);};
  const state=url.searchParams.get('state');
+ if(url.pathname==='/auth/return'&&request.method==='GET'){
+  const pending=await db.prepare('SELECT return_url,browser_hash FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at >= 0 AND claimed_at IS NULL').bind(await hash(state||''),now).first();
+  if(!pending?.return_url||!await browserMatches(pending))return json({error:'Invalid or expired sign-in'},400);
+  return new Response(null,{status:302,headers:{Location:pending.return_url,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+ }
  if(url.pathname==='/auth/start'&&request.method==='GET'){
   let returnURL=null;
   if(url.searchParams.has('return')){
    try{const target=new URL(url.searchParams.get('return'));if(target.origin!=='https://photos.google.com'||target.username||target.password)throw Error();returnURL=target.href;}catch{return json({error:'Invalid return URL'},400);}
   }
   const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(await hash(state||''),now).first();if(!pending)return json({error:'Invalid state'},400);
-  const script=`google.accounts.id.initialize({client_id:${inlineJSON(googleClientId)},nonce:${inlineJSON(pending.nonce)},login_hint:${inlineJSON(pending.login_hint)},auto_select:false,callback:async result=>{const status=document.getElementById('status');try{const response=await fetch('/auth/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:${inlineJSON(state)},credential:result.credential})});if(!response.ok)throw Error('Sign-in failed. Please return to Google Photos and try again.');status.textContent="You're signed in. Return to Google Photos.";const {code}=await response.json();const message={type:'photos-swipe-google-sign-in',state:${inlineJSON(state)},code};try{const channel=new BroadcastChannel('photos-swipe-google-sign-in');channel.postMessage({type:message.type});channel.close();}catch{}try{window.opener?.postMessage(message,'https://photos.google.com');}catch{}if(${inlineJSON(returnURL)}){const target=new URL(${inlineJSON(returnURL)});target.hash=new URLSearchParams({'photos-swipe-state':message.state,'photos-swipe-code':code,'photos-swipe-return-hash':target.hash}).toString();window.location.replace(target.href);return;}try{window.close();}catch{}}catch(error){status.textContent=error.message||'Sign-in failed. Please return to Google Photos and try again.';}}});google.accounts.id.renderButton(document.getElementById('button'),{theme:'outline',size:'large'});`;
+  const secret=random();
+  await db.prepare('UPDATE google_pending SET return_url = ?, browser_hash = ? WHERE state_hash = ? AND completed_at IS NULL').bind(returnURL,await hash(secret),await hash(state)).run();
+  const script=`google.accounts.id.initialize({client_id:${inlineJSON(googleClientId)},nonce:${inlineJSON(pending.nonce)},login_hint:${inlineJSON(pending.login_hint)},auto_select:false,callback:async result=>{const status=document.getElementById('status');try{const response=await fetch('/auth/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:${inlineJSON(state)},credential:result.credential})});if(!response.ok)throw Error('Sign-in failed. Please return to Google Photos and try again.');status.textContent="You're signed in. Return to Google Photos.";const {code}=await response.json();const message={type:'photos-swipe-google-sign-in',state:${inlineJSON(state)},code};try{const channel=new BroadcastChannel('photos-swipe-google-sign-in');channel.postMessage({type:message.type});channel.close();}catch{}try{window.opener?.postMessage(message,'https://photos.google.com');}catch{}if(${inlineJSON(returnURL)}){const target=new URL(${inlineJSON(returnURL)});const fragment=new URLSearchParams({'photos-swipe-state':message.state,'photos-swipe-code':code,'photos-swipe-return-hash':target.hash.slice(1)});target.hash=fragment.toString();window.location.replace(target.href);return;}try{window.close();}catch{}}catch(error){status.textContent=error.message||'Sign-in failed. Please return to Google Photos and try again.';}}});google.accounts.id.renderButton(document.getElementById('button'),{theme:'outline',size:'large'});`;
   const style=`*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font:18px/1.5 system-ui,sans-serif;color:#202124;background:#f8f9fa}main{width:100%;max-width:560px;text-align:center}h1{font-size:1.75rem}#button{display:flex;justify-content:center}`;
   const contentHash=async value=>btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))));
-  return new Response(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin"><title>Photos Swipe sign-in</title><style>${style}</style></head><body><main><h1>Sign in with Google</h1><div id="button"></div><p id="status" role="status" aria-live="polite"></p><script src="https://accounts.google.com/gsi/client"></script><script>${script}</script></main></body></html>`,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'strict-origin-when-cross-origin','Content-Security-Policy':`default-src 'none'; script-src https://accounts.google.com 'sha256-${await contentHash(script)}'; frame-src https://accounts.google.com; connect-src 'self' https://accounts.google.com; style-src https://accounts.google.com/gsi/style 'unsafe-inline'; style-src-elem https://accounts.google.com/gsi/style 'unsafe-inline'; style-src-attr 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'`}});
+  return new Response(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin"><title>Photos Swipe sign-in</title><style>${style}</style></head><body><main><h1>Sign in with Google</h1><div id="button"></div><p id="status" role="status" aria-live="polite"></p><script src="https://accounts.google.com/gsi/client"></script><script>${script}</script></main></body></html>`,{headers:{'Set-Cookie':`photos-swipe-browser=${secret}; Path=/auth; Secure; HttpOnly; SameSite=None; Max-Age=300`,'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'strict-origin-when-cross-origin','Content-Security-Policy':`default-src 'none'; script-src https://accounts.google.com 'sha256-${await contentHash(script)}'; frame-src https://accounts.google.com; connect-src 'self' https://accounts.google.com; style-src https://accounts.google.com/gsi/style 'unsafe-inline'; style-src-elem https://accounts.google.com/gsi/style 'unsafe-inline'; style-src-attr 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'`}});
  }
  if(url.pathname==='/auth/complete'&&request.method==='POST'){
   if(request.headers.get('Origin')!==syncOrigin)return json({error:'Forbidden'},403);
   const value=await request.json(),digest=await hash(value.state||'');
   const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(digest,now).first();if(!pending)return json({error:'Invalid state'},400);
+  if(pending.state_claim===1&&!await browserMatches(pending))return json({error:'Unauthorized'},401);
   let claims;
   try{claims=await verifyGoogleToken(value.credential,pending.nonce,env.GOOGLE_FETCH||fetch);}catch(error){if(!(error instanceof InvalidGoogleToken))return json({error:'Google sign-in is temporarily unavailable. Please try again.'},503);await db.prepare('UPDATE google_pending SET completed_at = -2 WHERE state_hash = ? AND completed_at IS NULL').bind(digest).run();return json({error:'Google sign-in failed. Please try again.'},400);}
   const code=random();
   const accountSpace=crypto.randomUUID();
   const results=await db.batch([
-   db.prepare('UPDATE google_pending SET completed_at = ?, sub = ?, email = ?, claim_hash = ? WHERE state_hash = ? AND completed_at IS NULL AND expires_at > ? RETURNING state_hash').bind(-1,claims.sub,claims.email||null,await hash(code),digest,now),
+   db.prepare('UPDATE google_pending SET completed_at = ?, sub = ?, email = ?, claim_hash = ? WHERE state_hash = ? AND completed_at IS NULL AND expires_at > ? AND (? = 0 OR browser_hash = ?) RETURNING state_hash').bind(-1,claims.sub,claims.email||null,await hash(code),digest,now,pending.state_claim,await hash(browserSecret||'')),
    db.prepare('INSERT OR IGNORE INTO google_accounts (sub,space,email) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM google_pending WHERE state_hash = ? AND sub = ?)').bind(claims.sub,accountSpace,claims.email||null,digest,claims.sub)
   ]);
   if(!results[0].results.length)return json({error:'State used'},400);
@@ -81,8 +92,15 @@ export async function googleAuthRequest(request,env){
    if(pending.expires_at<=now||pending.claimed_at!==null)return json({status:'expired'});
    if(pending.completed_at===-2)return json({status:'failed',error:'Google sign-in failed. Please try again.'});
    if(pending.completed_at===null||pending.completed_at===-1)return json({status:'pending'});
-   if(value.code===undefined)return json({status:'pending'});
-   if(typeof value.code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.code)||!await db.prepare('SELECT state_hash FROM google_pending WHERE state_hash = ? AND claim_hash = ?').bind(digest,await hash(value.code)).first())throw Error('Invalid code');
+   if(value.code===undefined){
+    if(pending.state_claim!==1)return json({status:'pending'});
+    if(pending.private_claim_hash){
+     const proof=await hash(typeof value.claimSecret==='string'?value.claimSecret:'');
+     if(proof.length!==pending.private_claim_hash.length||!proof.every((byte,index)=>byte===pending.private_claim_hash[index]))return json({error:'Unauthorized'},401);
+    }
+    if(!await browserMatches(pending))return json({error:'Unauthorized'},401);
+   }
+   if(value.code!==undefined&&(typeof value.code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.code)||!await db.prepare('SELECT state_hash FROM google_pending WHERE state_hash = ? AND claim_hash = ?').bind(digest,await hash(value.code)).first()))throw Error('Invalid code');
   }
   const linked=pending.space?await db.prepare('SELECT sub FROM google_accounts WHERE space = ?').bind(pending.space).first():null;
   const account=await db.prepare('SELECT space FROM google_accounts WHERE sub = ?').bind(pending.sub).first();

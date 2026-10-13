@@ -936,18 +936,9 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
    const settings=root.getElementById('sync-settings');settings.open=true;
    const range=doc.createRange(),settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
    const buttons=Array.from(settings.querySelectorAll('button')).filter(button=>button.getClientRects().length);
-   const syncFields=['sync-token'].map(id=>{
-    const input=root.getElementById(id),field=input.parentElement;
-    range.selectNodeContents(field.firstChild);const text=range.getBoundingClientRect(),box=bounds(input),fieldBox=bounds(field);
-    return {id,above:text.bottom<=box.top,leftAligned:Math.abs(text.left-box.left)<=1,fullWidth:Math.abs(box.width-settingsContentWidth)<=1&&Math.abs(fieldBox.width-settingsContentWidth)<=1,clearOfButtons:buttons.every(button=>text.bottom<=bounds(button).top||text.top>=bounds(button).bottom)};
-   });
+   const syncFields=['sync-token','pair-code','pair-another'].map(id=>({id,absent:!root.getElementById(id)}));
    const controlsFit=controls.every(control=>bounds(control).left>=sheetBounds.left&&bounds(control).right<=sheetBounds.right+1);
-   const issuer=root.querySelector('.pairing-issuer');issuer.hidden=false;
-   const pairingTargets=Array.from(issuer.children).slice(1,4);
-   pairingTargets[0].innerHTML='<canvas width=270 height=270></canvas>';pairingTargets[1].textContent='123 456';pairingTargets[2].textContent='01:00';
-   const pairingAboveSettings=Number(doc.defaultView.getComputedStyle(issuer).zIndex)>Number(doc.defaultView.getComputedStyle(sheet).zIndex);
-   const pairingVisible=pairingTargets.every(target=>{const box=bounds(target),hit=root.elementFromPoint(box.left+box.width/2,box.top+box.height/2);return box.width>0&&box.height>0&&(hit===target||target.contains(hit));});
-   results.push({width,height,syncFields,videoChecks,pairingAboveSettings,pairingVisible,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,orderRemoved:root.getElementById('sort').hidden});
+   results.push({width,height,syncFields,videoChecks,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,orderRemoved:root.getElementById('sort').hidden});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -958,8 +949,8 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,6,result.stdout);
   for(const measurement of measurements){
    for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
-   for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
-   for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved','pairingAboveSettings','pairingVisible'])assert.equal(measurement[key],true,JSON.stringify(measurement));
+   for(const field of measurement.syncFields)for(const key of ['absent'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
+   for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(440,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
@@ -1136,7 +1127,7 @@ test('enlarged video owns Space down and up without scrolling, closing or replac
  assert.deepEqual(requests,['VrseUb']);assert.equal((await mounted.read()).items[0].decision,null);
  dispatch('keydown','f');assert.equal(nodes.get('card').classList.contains('expanded'),false);
  for(const extra of [{ctrlKey:true},{altKey:true},{metaKey:true},{isComposing:true}])assert.equal(dispatch('keydown',' ',extra).prevented,false);
- for(const target of [nodes.get('sync-token'),nodes.get('filter'),{tagName:'TEXTAREA'},{tagName:'DIV',isContentEditable:true}]){
+ for(const target of [{tagName:'INPUT'},nodes.get('filter'),{tagName:'TEXTAREA'},{tagName:'DIV',isContentEditable:true}]){
   root.activeElement=target;
   assert.equal(dispatch('keydown',' ').prevented,false);assert.equal(dispatch('keyup',' ').prevented,false);
  }
@@ -1181,7 +1172,7 @@ test('pairing settings failure after sign-in preserves the loaded review session
  assert.match(mounted.nodes.get('caption').textContent,/^synthetic-photo · /);
  assert.equal(mounted.nodes.get('keep').disabled,false);
  assert.equal(mounted.nodes.get('status').textContent,'');
- assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>node.textContent==='Pairing storage unavailable: Synthetic pairing read failure'));
+ assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>node.textContent==='Sync storage unavailable: Synthetic pairing read failure'));
  assert.deepEqual(await db.read(account),saved);
  await mounted.nodes.get('keep').onclick();
  await waitForReview(async()=>(await db.read(account)).items[0].decision==='keep');
@@ -1197,7 +1188,7 @@ test('sync setup lives in the gear sheet and local dismissal survives reopening'
  mounted.nodes.get('settings').onclick();assert.equal(mounted.nodes.get('settings-sheet').hidden,false);
  assert.equal(settings.open,true);
  assert.equal(mounted.nodes.get('pair-onboarding').hidden,false);
- assert.ok(settings.childNodes.some(node=>node.textContent==='Pairing may not persist in this browser'));
+ assert.equal(mounted.nodes.get('google-settings').textContent,'Sign in with Google');
  await mounted.click('sync-local');assert.equal(mounted.nodes.get('settings-sheet').hidden,true);assert.equal(mounted.nodes.get('pair-onboarding').hidden,true);
  await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);
@@ -1206,7 +1197,7 @@ test('sync setup lives in the gear sheet and local dismissal survives reopening'
 });
 
 test('sync setup actions preserve the saved album retry status and job',async()=>{
- for(const action of ['sync-local','sync-save']){
+ for(const action of ['sync-local']){
   const mounted=await mountedReview([item('a',{decision:'remove'})],{fetch:async(url,options)=>({ok:true,json:async()=>options?.method==='PUT'?{items:JSON.parse(options.body).items||[]}:{decisions:[],history:[],progress:{}}})});
   const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
   const db=await openReviewDatabase(mounted.environment.window.indexedDB);
@@ -1216,16 +1207,11 @@ test('sync setup actions preserve the saved album retry status and job',async()=
   mounted.environment.AbortSignal=AbortSignal;
   await mounted.nodes.get('launcher').onclick();
   assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
-  if(action==='sync-save'){
-   mounted.nodes.get('sync-url').value='https://sync.example';
-   mounted.nodes.get('sync-token').value='synthetic-token';
-  }
   await mounted.click(action);
   assert.equal(mounted.nodes.get('status').textContent,'A saved album operation is ready to retry.');
   assert.equal(mounted.nodes.get('send').textContent,'Finish previous transfer');
   assert.deepEqual((await mounted.read()).job,job);
   assert.equal(mounted.nodes.get('sync-settings').open,true);
-  if(action==='sync-save')assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
  }
 });
 
@@ -1249,11 +1235,7 @@ test('sync success stays quiet and errors show a toast and gear dot',async()=>{
  assert.equal(reopened.nodes.get('settings-sheet').hidden,true);
  fail=true;await reopened.nodes.get('launcher').onclick();
  assert.match(reopened.nodes.get('status').textContent,/Synthetic offline.*saved locally/);assert.equal(reopened.nodes.get('settings').classList.contains('gear-error'),true);
- reopened.nodes.get('sync-url').value='';reopened.nodes.get('sync-token').value='';
- reopened.nodes.get('sync-save').onclick();
- await new Promise(resolve=>setTimeout(resolve,10));for(let count=0;count<100&&reopened.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
- assert.equal(reopened.nodes.get('status').textContent,'');
- assert.equal(reopened.nodes.get('sync-status').textContent,'Sync off · saved locally');
+
 });
 
 test('decision history previews the same next Undo and updates after undo and reload',async()=>{
@@ -1957,7 +1939,7 @@ test('privileged bundle keeps sync fetch and saved credentials away from the pag
  let calls=0;
  mounted.environment.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer synthetic-private-token');return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- assert.equal(calls,1);assert.equal(mounted.nodes.get('sync-token').value,'');assert.match(mounted.nodes.get('sync-status').textContent,/Synced/);
+ assert.equal(calls,1);assert.equal(mounted.root.getElementById('sync-token'),null);assert.match(mounted.nodes.get('sync-status').textContent,/Synced/);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.deepEqual(await (await openReviewDatabase(pageWindow.indexedDB)).settings(),{});
  assert.ok(!JSON.stringify(Object.entries(pageWindow).filter(([key])=>key!=='top')).includes('synthetic-private-token'));
 });
@@ -1984,24 +1966,6 @@ test('content-only manager bridges Google operations without passing pairing cre
  assert.equal((await call('unsupported')).ok,false);
 });
 
-test('sync saves reuse tokens for equivalent origins and retain typed tokens after storage failure',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
- const mounted=bundleEnvironment();mounted.environment.AbortSignal=AbortSignal;
- let pairing={url:'https://sync.example',token:'saved-token',deviceId:'device'},fail=false,requests=0;
- mounted.environment.GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(fail)throw Error('Pairing write failed');if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
- mounted.environment.fetch=async()=>{requests++;return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};};
- vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();
- const save=async()=>{mounted.nodes.get('sync-save').onclick();for(let count=0;count<100;count++){await new Promise(resolve=>setTimeout(resolve,1));if(!mounted.nodes.get('keep').disabled)return;}throw Error('UI stayed busy');};
- for(const url of ['https://sync.example/','https://sync.example:443','https://SYNC.EXAMPLE']){
-  mounted.nodes.get('sync-url').value=url;await save();assert.equal(pairing.url,'https://sync.example');assert.equal(pairing.token,'saved-token');assert.match(mounted.nodes.get('sync-status').textContent,/^Synced/);
- }
- assert.equal(requests,4);
- mounted.nodes.get('sync-url').value='https://other.example';await save();assert.equal(pairing.url,'https://sync.example');assert.equal(requests,4);
- mounted.nodes.get('sync-url').value='https://sync.example/path';await save();assert.equal(requests,4);
- mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='replacement-token';fail=true;await save();
- assert.equal(mounted.nodes.get('sync-token').value,'replacement-token');assert.match(mounted.nodes.get('status').textContent,/Pairing write failed/);assert.equal(pairing.token,'saved-token');
- fail=false;await save();assert.equal(pairing.token,'replacement-token');assert.equal(mounted.nodes.get('sync-token').value,'');
-});
 
 function isolatedPageBridge(mounted,timers={setTimeout,clearTimeout},fetchOverride) {
  const pageWindow=mounted.environment.window,pageListeners=[],contentListeners=[],messages=[];
@@ -2253,37 +2217,6 @@ test('a decision arriving as the save operation finishes remains queued for its 
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','remove',null]);
 });
 
-for(const dismissal of ['Escape','backdrop'])test(`pairing dialog blocks viewer shortcuts and ${dismissal} burns the code`,async()=>{
- const calls=[];
- const mounted=await mountedReview([item('photo')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({id:'pair-id',code:'abcdefghijklmnopqrstuv',short:'123456',expiresAt:Date.now()+60000})};}});
- mounted.environment.AbortSignal=AbortSignal;
- const {nodes,root}=mounted;
- const dialog=(node)=>node['aria-label']==='Pair another device'?node:node.childNodes?.map(dialog).find(Boolean);
- const pairingPanel= root.childNodes.map(dialog).find(Boolean);
- assert.ok(pairingPanel);
- assert.equal(pairingPanel.className,'pairing-issuer settings-sheet');
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
- const db=await openReviewDatabase(mounted.environment.window.indexedDB);
- await db.saveSettings({url:'https://worker.example',token:'secret-token'});
- nodes.get('settings').onclick();
- assert.equal(nodes.get('settings-sheet').hidden,false);
- await nodes.get('pair-another').onclick();
- assert.equal(pairingPanel.hidden,false);
- assert.equal(pairingPanel.style.cssText,'z-index:9;pointer-events:auto');
- assert.equal(nodes.get('settings-sheet').hidden,false);
- const before=await mounted.read();
- for(const key of ['ArrowLeft','ArrowRight','z','f',' ']){
-  const event={type:'keydown',key,preventDefault(){throw Error('Pairing key swallowed');},stopImmediatePropagation(){throw Error('Pairing key stopped');}};
-  mounted.environment.window.listeners.keydown(event);
- }
- assert.deepEqual(await mounted.read(),before);assert.equal(nodes.get('overlay').hidden,false);assert.equal(nodes.get('card').classList.contains('expanded'),false);
- if(dismissal==='Escape')mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
- else await nodes.get('overlay').listeners.click({target:nodes.get('overlay')});
- await new Promise(resolve=>setImmediate(resolve));assert.equal(pairingPanel.hidden,true);assert.equal(nodes.get('overlay').hidden,false);
- assert.equal(calls.at(-2).options.method,'DELETE');assert.equal(calls.at(-2).options.body,JSON.stringify({id:'pair-id'}));
- await nodes.get('close').onclick();await nodes.get('launcher').onclick();assert.equal(pairingPanel.hidden,true);
- await nodes.get('close').onclick();
-});
 test('userscript cancels the live snap-back before a filter renders another photo',async()=>{
  const mounted=await mountedReview([item('a'),item('b',{type:'video'})]);
  const card=mounted.nodes.get('card').childNodes.find(node=>node.class==='top-card'),media=mounted.nodes.get('media');
@@ -2331,11 +2264,11 @@ test('ahead video completion does not write leases during an active sync',async(
  await db.save(account,{...await db.read(account),items:[item('first'),item('next'),item('ahead',{type:'video'})]});
  await mounted.nodes.get('launcher').onclick();
  mounted.environment.AbortSignal=AbortSignal;
- mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
- mounted.nodes.get('sync-save').onclick();await started.promise;
+
+ const syncing=enableSyntheticSync(mounted);await started.promise;
  const before=fault.leaseWrites;
  response.resolve();await new Promise(resolve=>setImmediate(resolve));
- try{assert.equal(fault.leaseWrites,before);}finally{sync.resolve();}
+ try{assert.equal(fault.leaseWrites,before);}finally{sync.resolve();await syncing;}
  for(let count=0;count<100&&mounted.nodes.get('keep').disabled;count++)await new Promise(resolve=>setTimeout(resolve,1));
  await mounted.nodes.get('close').onclick();await db.lease(account,'other-tab');await db.lease(account,'other-tab',true);
 });
@@ -2350,8 +2283,8 @@ test('resize and enlarge preserve the next media node while a decision awaits sy
   });
   await new Promise(resolve=>setImmediate(resolve));
   mounted.environment.AbortSignal=AbortSignal;
-  mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
-  await mounted.click('sync-save');
+
+  await enableSyntheticSync(mounted);
   holdSync=true;
   const media=mounted.nodes.get('media');
   const deciding=mounted.click('keep');await deciding;mounted.environment.window.dispatchEvent(new Event('focus'));await started.promise;
@@ -2472,62 +2405,12 @@ test('revoked userscript shows recovery, keeps local swipes and clears credentia
  const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;reopened.environment.AbortSignal=AbortSignal;
  let requests=0;reopened.environment.window.fetch=async()=>{requests++;return new Response('{}',{status:401});};
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);
- await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);assert.equal((await db.settings()).token,'');
+ await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('google-settings').textContent,'Sign in with Google');assert.equal((await db.settings()).token,'');
  reopened.nodes.get('keep').onclick();await waitForReview(async()=>(await mounted.read()).items[0].decision==='keep');
  const saved=await mounted.read();assert.equal(saved.items[0].decision,'keep');assert.equal(saved.syncPending.synthetic,'keep');assert.equal(requests,1);
- reopened.nodes.get('pair-again').onclick();assert.equal(reopened.nodes.get('enter-pairing-code').open,true);
- reopened.nodes.get('dismiss-unpaired').onclick();assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);
+
 });
 
-
-test('paired devices render names safely and inline rename and confirmed revoke refresh server state',async()=>{
- const requests=[],prompts=[];let name='<synthetic>',active=true;
- const mounted=await mountedReview([], {confirm:prompt=>{prompts.push(prompt);return true;},fetch:async(url,options)=>{
-  const path=new URL(url).pathname;requests.push([path,options.method]);
-  if(path==='/api/devices/qa'&&options.method==='PATCH')name=JSON.parse(options.body).name;
-  if(path==='/api/devices/qa'&&options.method==='DELETE')active=false;
-  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:active?[{id:'qa',name,platform:'Browser',created_at:1,last_seen_at:1,revoked_at:null,is_legacy:1}]:[]}:{decisions:[],history:[],progress:{}}};
- }});
- mounted.environment.AbortSignal=AbortSignal;mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';await mounted.click('sync-save');await mounted.click('refresh-devices');
- const list=mounted.nodes.get('devices-list'),row=list.childNodes[0];assert.match(row.childNodes[0].textContent,/<synthetic>.*Legacy shared token/);
- row.childNodes[1].onclick();row.childNodes[3].value='  QA phone  ';await row.childNodes[4].onclick();assert.equal(name,'QA phone');
- await list.childNodes[0].childNodes[2].onclick();assert.equal(list.childNodes.length,0);assert.equal(prompts[0],'Revoke QA phone? It will stop syncing immediately.');
- assert.ok(requests.some(([path,method])=>path==='/api/devices/qa'&&method==='PATCH'));
-});
-
-test('paired notice lives in Sync and opens the device list',async()=>{
- const requests=[];
- const mounted=await mountedReview([], {fetch:async url=>{
-  const path=new URL(url).pathname;requests.push(path);
-  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:[]}:{decisions:[],history:[],progress:{},suggestRevokeLegacy:true}};
- }});
- mounted.environment.AbortSignal=AbortSignal;
- mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
- await mounted.click('sync-save');
- const notice=mounted.nodes.get('paired-notice'),settings=mounted.nodes.get('sync-settings');
- assert.equal(settings.open,true);assert.equal(notice.hidden,false);
- assert.ok(settings.childNodes.includes(notice));
- await mounted.click('paired-notice');
- assert.equal(settings.open,true);assert.equal(mounted.nodes.get('paired-devices').open,true);
- assert.ok(requests.includes('/api/devices'));
-});
-
-test('device actions are disabled before configuration and after revoking this device',async()=>{
- const requests=[];
- const mounted=await mountedReview([], {confirm:()=>true,fetch:async(url,options)=>{
-  const path=new URL(url).pathname;requests.push([path,options.method]);
-  return {ok:true,json:async()=>path==='/api/devices'?{deviceId:'caller',devices:[{id:'caller',name:'This browser',platform:'Browser',created_at:1,last_seen_at:1,revoked_at:null}]}:{decisions:[],history:[],progress:{}}};
- }});
- for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
- assert.equal(requests.length,0);
- mounted.environment.AbortSignal=AbortSignal;
- mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';await mounted.click('sync-save');
- for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,false);
- await mounted.click('refresh-devices');await mounted.nodes.get('devices-list').childNodes[0].childNodes[2].onclick();
- for(const id of ['refresh-devices','revoke-other-devices'])assert.equal(mounted.nodes.get(id).disabled,true);
- assert.equal(mounted.nodes.get('devices-list').childNodes.length,0);
- assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
-});
 
 const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
 
@@ -2585,24 +2468,6 @@ test('late expired preview responses cannot replace a newly selected card',async
  assert.match(mounted.nodes.get('caption').textContent,/^next/);
 });
 
-test('durable unpair preserves settings on reopen and saving a new token clears recovery',async()=>{
- const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
- const first=bundleEnvironment(),indexedDB=first.environment.window.indexedDB;
- let pairing={url:'https://sync.example',token:'synthetic-revoked-token',deviceId:'synthetic-device',deviceName:'Synthetic phone'},reject=true;
- const GM={getValue:async key=>key==='photos-swipe-pairing'?pairing:undefined,setValue:async(key,value)=>{if(key==='photos-swipe-pairing')pairing=value;},deleteValue:async key=>{if(key==='photos-swipe-pairing')pairing=undefined;}};
- const mount=async()=>{
-  const mounted=bundleEnvironment();mounted.environment.window.indexedDB=indexedDB;mounted.environment.GM=GM;mounted.environment.AbortSignal=AbortSignal;
-  mounted.environment.window.fetch=async()=>reject?new Response('{}',{status:401}):new Response(JSON.stringify({decisions:[],history:[],progress:{}}));
-  vm.runInNewContext(source,mounted.environment);await mounted.nodes.get('launcher').onclick();return mounted;
- };
- const revoked=await mount();assert.equal(pairing,undefined);assert.equal(revoked.nodes.get('unpaired-banner').hidden,false);await revoked.nodes.get('close').onclick();
- const reopened=await mount();assert.equal(reopened.nodes.get('sync-url').value,'https://sync.example');assert.equal(reopened.nodes.get('unpaired-banner').hidden,false);
- reject=false;reopened.nodes.get('sync-token').value='synthetic-new-token';reopened.nodes.get('sync-save').onclick();await waitForReview(()=>reopened.nodes.get('overlay')['aria-busy']==='false');
- assert.equal(pairing.token,'synthetic-new-token');assert.equal(pairing.deviceId,'synthetic-device');assert.equal(pairing.deviceName,'Synthetic phone');assert.equal(reopened.nodes.get('unpaired-banner').hidden,true);assert.match(reopened.nodes.get('sync-status').textContent,/Synced/);
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');assert.equal((await (await openReviewDatabase(indexedDB)).settings()).unpaired,undefined);
- await reopened.nodes.get('close').onclick();const repaired=await mount();assert.equal(repaired.nodes.get('unpaired-banner').hidden,true);assert.match(repaired.nodes.get('sync-status').textContent,/Synced/);
-});
-
 test('mixed decisions and Undo retain input order across a delayed save',async()=>{
  const fault={},mounted=await mountedReview([item('a'),item('b'),item('c')],{},fault);
  let release;fault.saveGate=new Promise(resolve=>{release=resolve;});
@@ -2612,7 +2477,7 @@ test('mixed decisions and Undo retain input order across a delayed save',async()
   pressReviewKey(mounted,'ArrowLeft');
   pressReviewKey(mounted,'ArrowRight');
  }finally{fault.saveGate=null;release();}
- await mounted.settle();
+ await waitForReview(async()=>(await mounted.read()).history.length===2);
  const state=await mounted.read();
  assert.deepEqual(state.items.map(row=>row.decision),['remove','keep',null]);
  assert.deepEqual(state.history.map(entry=>[entry.key,entry.decision]),[['a','remove'],['b','keep']]);
@@ -2869,8 +2734,8 @@ test('resume stays on an uncommitted item and advances after persistence before 
 test('failed sync remains visible alongside keep, queue and undo confirmations',async()=>{
  const mounted=await mountedReview([item('a'),item('b')],{fetch:async()=>new Response('{}',{status:503})});
  mounted.environment.AbortSignal=AbortSignal;
- mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
- await mounted.click('sync-save');
+
+ await enableSyntheticSync(mounted);
  for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Last swipe undone for b\./]]){
   await mounted.click(action);
   assert.match(mounted.nodes.get('status').textContent,confirmation);
@@ -2928,7 +2793,7 @@ test('mounted settings close by Escape or Done blocks typing spillover before sh
   class ReviewDate extends Date {static now(){return time;}}
   const mounted=await mountedReview([item('keyboard-first'),item('keyboard-second')],{},undefined,{Date:ReviewDate});
   const press=key=>mounted.environment.window.listeners.keydown({key,preventDefault(){},stopImmediatePropagation(){}});
-  mounted.nodes.get('settings').onclick();mounted.nodes.get('pair-code').focus();
+  mounted.nodes.get('settings').onclick();mounted.nodes.get('google-settings').focus();
   press('ArrowLeft');press('ArrowRight');
   if(method==='escape')press('Escape');else mounted.nodes.get('settings-sheet').querySelector('header').querySelector('button').onclick();
   assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
@@ -3137,148 +3002,13 @@ test('chained review undo uploads valid history and progress without remaining d
  await mounted.nodes.get('close').onclick();
 });
 
-test('unpaired launcher shows the receiver with another Photos tab open',async()=>{
- const first=await mountedReview([item('a')]);
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
- const db=await openReviewDatabase(first.environment.window.indexedDB);await db.saveSettings({});
+test('Google sign-in remains available when another Photos tab owns local progress',async()=>{
+ const first=await mountedReview([item('synthetic')]);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(first.environment.window.indexedDB);await db.saveSettings({});
  const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
- await second.nodes.get('launcher').onclick();
- second.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
- const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
- assert.ok(receiver);assert.equal(receiver.hidden,false);assert.ok(second.nodes.get('pairing-short-code'));
- const code=second.nodes.get('pairing-short-code');assert.equal(second.root.activeElement,code);
- for(const key of '123456'){
-  let prevented=false;second.environment.window.listeners.keydown({key,preventDefault(){prevented=true;},stopImmediatePropagation(){}});
-  assert.equal(prevented,false);assert.equal(second.root.activeElement,code);code.value+=key;code.oninput();
- }
- assert.equal(code.value,'123456');
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);await second.nodes.get('launcher').onclick();
+ assert.equal(second.nodes.get('google-settings').textContent,'Sign in with Google');assert.ok(!second.nodes.get('google-settings').disabled);assert.equal(second.root.getElementById('pair-code'),null);
  await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
-});
-
-test('unpaired script opens the receiver despite a paired script dismissing shared onboarding',async()=>{
- const credentials={url:'https://worker.example',token:'paired-script-token',onboardingDismissed:true};
- const first=await mountedReview([item('a')],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})},credentials,{GM:{getValue:async()=>credentials,setValue:async()=>{},deleteValue:async()=>{}}});
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
- const db=await openReviewDatabase(first.environment.window.indexedDB);
- assert.deepEqual(await db.settings(),{onboardingDismissed:true});
- assert.equal(first.root.childNodes.some(node=>node.className==='pairing-receiver settings-sheet'&&!node.hidden),false);
- const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;
- second.environment.GM={getValue:async()=>undefined,setValue:async()=>{},deleteValue:async()=>{}};
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
- try{
-  await second.nodes.get('launcher').onclick();
-  second.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
- const receiver=second.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
-  assert.ok(receiver);assert.equal(receiver.hidden,false);
-  assert.equal(second.root.activeElement,second.nodes.get('pairing-short-code'));
-  await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();
-  await second.nodes.get('launcher').onclick();
-  second.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
-  assert.equal(second.root.childNodes.findLast(node=>node.className==='pairing-receiver settings-sheet').hidden,false);
-  assert.deepEqual(await db.settings(),{onboardingDismissed:true});
- }finally{await second.nodes.get('close').onclick();await first.nodes.get('close').onclick();}
-});
-
-test('Settings pairing sends six digits and preserves credentials on failure',async()=>{
- const calls=[],mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{calls.push({url,options});return {ok:false,status:400};}});
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
- const db=await openReviewDatabase(mounted.environment.window.indexedDB);
- const saved={url:'https://worker.example',token:'existing-token'};await db.saveSettings(saved);
- mounted.environment.window.fetch=async(url,options)=>{calls.push({url,options});return {ok:false,status:400};};
- mounted.nodes.get('sync-url').value='';mounted.nodes.get('pair-code').value='123 456';
- await mounted.nodes.get('pair-submit').onclick();
- assert.equal(calls[0].url,'https://worker.example/api/pair/claim');assert.equal(JSON.parse(calls[0].options.body).short,'123456');
- assert.deepEqual(await db.settings(),saved);
- const feedback=mounted.nodes.get('enter-pairing-code').childNodes.at(-1);
- assert.match(feedback.textContent,/Code expired or unavailable/);assert.equal(mounted.nodes.get('pair-submit').disabled,false);
- mounted.nodes.get('sync-url').value='invalid';await mounted.nodes.get('pair-submit').onclick();
- assert.match(feedback.textContent,/valid HTTPS Worker origin/);assert.equal(calls.length,1);assert.deepEqual(await db.settings(),saved);
- await mounted.nodes.get('close').onclick();
-});
-
-
-test('Settings pairing fills a blank Sync URL and keeps the claimed token on Save and sync',async()=>{
- for(const previous of [{},{url:'https://worker.example',token:'old-token'}]){
-  const calls=[],mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
-   calls.push({url,options});
-   return {ok:true,json:async()=>url.endsWith('/api/pair/claim')?{token:'claimed-token'}:{decisions:[],history:[],progress:{}}};
-  }});
-  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
-  const db=await openReviewDatabase(mounted.environment.window.indexedDB);await db.saveSettings(previous);
-  try{
-   mounted.nodes.get('sync-url').value='';mounted.nodes.get('pair-code').value='123456';
-   await mounted.nodes.get('pair-submit').onclick();
-   const origin=previous.url||'https://photoswiper-sync.sidlakkoju.workers.dev';
-   assert.equal(mounted.nodes.get('sync-url').value,origin);assert.equal(mounted.nodes.get('sync-token').value,'');
-   await mounted.click('sync-save');
-   assert.deepEqual(await db.settings(),{url:origin,token:'claimed-token',onboardingDismissed:true});
-   assert.ok(calls.some(({url,options})=>new URL(url).pathname==='/api/state'&&options.headers.Authorization==='Bearer claimed-token'));
-  }finally{await mounted.nodes.get('close').onclick();}
- }
-});
-
-test('receiver claim during session opening activates the saved pairing after lease acquisition',async()=>{
- const fault={},mounted=bundleEnvironment(fault),calls=[];
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
- const db=await openReviewDatabase(mounted.environment.window.indexedDB);await db.saveSettings({});
- mounted.environment.window.fetch=async(url,options)=>{
-  calls.push({url,options});
-  return {ok:true,json:async()=>url.endsWith('/api/pair/claim')?{token:'receiver-token'}:{decisions:[],history:[],progress:{}}};
- };
- let release;fault.leaseGate=new Promise(resolve=>{release=resolve;});
- vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
- const opening=mounted.nodes.get('launcher').onclick();let claiming;
- try{
-  await waitForReview(()=>fault.leaseWrites>0);
-  mounted.nodes.get('pair-onboarding').childNodes.find(node=>node.textContent==='Enter a code from another device').onclick();
-  const receiver=mounted.root.childNodes.find(node=>node.className==='pairing-receiver settings-sheet');
-  mounted.nodes.get('pairing-short-code').value='123456';
-  claiming=receiver.childNodes.find(node=>node.className==='toolbar').childNodes[0].onclick();
-  await waitForReview(async()=>(await db.settings()).token==='receiver-token');
-  assert.equal(mounted.nodes.get('overlay')['aria-busy'],'true');
-  fault.leaseGate=null;release();await opening;await claiming;
-  assert.equal(mounted.nodes.get('pair-onboarding').hidden,true);
-  assert.equal(mounted.nodes.get('sync-url').value,'https://photoswiper-sync.sidlakkoju.workers.dev');
-  assert.ok(calls.some(({url,options})=>new URL(url).pathname==='/api/state'&&options.headers.Authorization==='Bearer receiver-token'));
- }finally{fault.leaseGate=null;release();await opening;await claiming;await mounted.nodes.get('close').onclick();}
-});
-
-
-for(const failSave of [false,true])test(`Settings pairing retains the claimed token after an in-flight 401${failSave?' and a failed save':''}`,async()=>{
- let release,started=false,claimed=false,rejectOld=false,claims=0,stored,fail=failSave;
- const values=new Map();
- const GM={getValue:async key=>values.get(key),setValue:async(key,value)=>{if(fail&&value.token==='claimed-token')throw Error('Synthetic pairing save failure');values.set(key,value);if(key==='photos-swipe-pairing')stored=value;},deleteValue:async key=>{values.delete(key);if(key==='photos-swipe-pairing')stored=undefined;}};
- const mounted=await mountedReview([item('a')],{fetch:async(url,options)=>{
-  if(url.endsWith('/api/pair/claim')){claims++;claimed=true;return {ok:true,json:async()=>({token:'claimed-token'})};}
-  if(rejectOld&&options.headers.Authorization==='Bearer old-token'){started=true;return new Promise(resolve=>{release=()=>resolve({ok:false,status:401});});}
-  return {ok:true,json:async()=>({decisions:[],history:[],progress:{},items:[{mediaKey:'a'}]})};
- }},{url:'https://worker.example',token:'old-token'},failSave?{GM}:{});
- const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
- const db=await openReviewDatabase(mounted.environment.window.indexedDB);
- rejectOld=true;await mounted.click('keep');let pairing;
- try{
-  await waitForReview(()=>started);
-  mounted.nodes.get('pair-code').value='123456';pairing=mounted.nodes.get('pair-submit').onclick();
-  await waitForReview(()=>claimed);
-  await new Promise(resolve=>setTimeout(resolve,10));
-  release();await pairing;
-  if(failSave){
-   assert.equal(stored,undefined);
-   assert.equal(mounted.nodes.get('unpaired-banner').hidden,false);
-   assert.match(mounted.nodes.get('enter-pairing-code').childNodes.at(-1).textContent,/Device claimed.*retry saving/);
-   fail=false;await mounted.nodes.get('pair-submit').onclick();
-   assert.equal(stored.token,'claimed-token');
-   assert.deepEqual(await db.settings(),{onboardingDismissed:true});
-  }else assert.deepEqual(await db.settings(),{url:'https://worker.example',token:'claimed-token',onboardingDismissed:true});
-  assert.equal(claims,1);
-  mounted.nodes.get('settings').onclick();
-  mounted.nodes.get('settings-sheet').querySelector('header').childNodes.find(node=>node.textContent==='Done').onclick();
-  assert.equal(mounted.nodes.get('settings-sheet').hidden,true);
-  assert.doesNotMatch(mounted.nodes.get('status').textContent,/unpaired/i);
-  assert.equal(mounted.nodes.get('unpaired-banner').hidden,true);
-  assert.match(mounted.nodes.get('enter-pairing-code').childNodes.at(-1).textContent,/Device paired/);
- }finally{release?.();await pairing;await mounted.nodes.get('close').onclick();}
 });
 
 test('onboarding dismissal belongs to the GM installation and survives reopening',async()=>{
@@ -3531,8 +3261,8 @@ for(const foreignOwner of [false,true])test(`resume during an in-flight sync rel
   return {ok:true,json:async()=>({decisions:[],history:[],progress:{}})};
  }});
  mounted.environment.AbortSignal=AbortSignal;
- mounted.nodes.get('sync-url').value='https://sync.example';mounted.nodes.get('sync-token').value='synthetic-token';
- await mounted.click('sync-save');
+
+ await enableSyntheticSync(mounted);
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
  hold=true;
@@ -3738,4 +3468,118 @@ test('mounted Flashbacks switch keeps the held card and advances forward within 
  assert.match(mounted.nodes.get('caption').textContent,/^p2 · /);
  await mounted.click('keep');
  assert.match(mounted.nodes.get('caption').textContent,/^p3 · /);
+});
+
+async function enableSyntheticSync(mounted){
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ await db.saveSettings({url:'https://sync.example',token:'synthetic-token'});
+ await mounted.nodes.get('launcher').onclick();
+}
+
+for(const signedIn of [false,true])test(`Sync renders only Google controls with signedIn ${signedIn}`,async()=>{
+ const settings=signedIn?{url:'https://sync.example',token:'synthetic-token',email:'synthetic@example.test'}:{onboardingDismissed:false};
+ const mounted=await mountedReview([item('synthetic')],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})},settings,{AbortSignal});
+ const section=mounted.nodes.get('sync-settings');
+ const text=node=>[node.textContent||'',...(node.childNodes||[]).map(text)].join(' ');
+ for(const target of [section,mounted.nodes.get('pair-onboarding')])assert.doesNotMatch(text(target),/Sync token|Save and sync|Pair a device|Enter pairing code|Pair this device|6-digit/);
+ for(const id of ['sync-token','sync-save','sync-url','pair-another','pair-code','pair-submit','enter-pairing-code'])assert.equal(mounted.root.getElementById(id),null);
+ assert.equal(mounted.nodes.get('google-settings').textContent,signedIn?'Switch account':'Sign in with Google');
+ assert.equal(mounted.nodes.get('google-sign-out').hidden,!signedIn);assert.equal(mounted.nodes.get('sync-local').hidden,signedIn);
+ if(signedIn)assert.match(text(section),/Sync account: synthetic@example.test/);
+ assert.match(text(section),/Google account email and Google account ID/);assert.match(text(section),/No photos or videos/);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('legacy sync retains progress and prompts for Google sign-in',async()=>{
+ const requests=[],mounted=await mountedReview([item('synthetic',{decision:'keep'})],{fetch:async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({decisions:[{id:'synthetic',decision:'keep'}],history:[],progress:{}})};}},{url:'https://sync.example',token:'synthetic-legacy-token'},{AbortSignal});
+ assert.equal((await mounted.read()).items[0].decision,'keep');assert.ok(requests.length>0);assert.ok(requests.every(({options})=>options.headers.Authorization==='Bearer synthetic-legacy-token'));
+ assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>/Sign in with Google to link your existing sync progress/.test(node.textContent)));
+ await mounted.nodes.get('close').onclick();
+});
+
+test('Google sign out retains decisions, queue and undo history locally',async()=>{
+ const mounted=await mountedReview([item('synthetic'),item('next')],{fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})})},{url:'https://sync.example',token:'synthetic-token',email:'synthetic@example.test'},{AbortSignal});
+ await mounted.click('keep');const previous=await mounted.read();
+ await mounted.click('google-sign-out');const next=await mounted.read();assert.deepEqual(next.items,previous.items);assert.deepEqual(next.history,previous.history);
+ assert.equal(mounted.nodes.get('google-settings').textContent,'Sign in with Google');assert.equal(mounted.nodes.get('sync-local').hidden,false);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);assert.equal((await db.settings()).token,'');
+ await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();assert.deepEqual((await mounted.read()).history,previous.history);await mounted.nodes.get('close').onclick();
+});
+
+for(const hash of ['#photos', '#pswipe-pair=synthetic-legacy-pair'])test(`hash changes preserve local review progress for ${hash}`,async()=>{
+ const mounted=await mountedReview([item('synthetic'),item('next')]);
+ await mounted.click('keep');const before=await mounted.read();
+ mounted.environment.location.hash=hash;
+ assert.doesNotThrow(()=>mounted.environment.window.listeners.hashchange?.({type:'hashchange'}));
+ assert.deepEqual(await mounted.read(),before);
+ await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('opening during claim on load syncs only the replacement token and preserves local decisions',async()=>{
+ const mounted=bundleEnvironment(),values=new Map([
+  ['photos-swipe-google-state','r'.repeat(43)],
+  ['photos-swipe-google-claim-secret','p'.repeat(43)],
+  ['photos-swipe-pairing',{url:'https://sync.example',token:'legacy-token',deviceId:'same-device'}]
+ ]),requests=[];
+ let poll;
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('saved',{decision:'keep'})]});
+ mounted.environment.location.href='https://photos.google.com/u/2/';
+ mounted.environment.GM={getValue:async key=>values.get(key),setValue:async(key,value)=>values.set(key,value),deleteValue:async key=>values.delete(key),xmlHttpRequest:request=>{
+  if(request.url.endsWith('/auth/poll')){poll=request;return;}
+  requests.push(request.headers.Authorization);
+  request.onload({status:request.headers.Authorization==='Bearer legacy-token'?401:200,responseText:JSON.stringify({decisions:[],history:[],progress:{}})});
+ }};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
+ await waitForReview(()=>!!poll);
+ const opening=mounted.nodes.get('launcher').onclick();
+ try{
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(mounted.nodes.get('overlay').hidden,false);
+  assert.equal(mounted.nodes.get('launcher').hidden,true);
+  const requestsBeforeClaim=requests.slice();
+  poll.onload({status:200,responseText:JSON.stringify({status:'done',token:'google-token',deviceId:'same-device',email:'one@example.test'})});
+  await opening;
+  assert.deepEqual(requestsBeforeClaim,[]);assert.equal(JSON.parse(poll.data).claimSecret,'p'.repeat(43));
+  assert.ok(requests.length>0);assert.ok(requests.every(token=>token==='Bearer google-token'));
+  assert.equal(values.get('photos-swipe-pairing').token,'google-token');
+  assert.equal((await db.read(account)).items[0].decision,'keep');
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('backing out of same-tab sign-in leaves the viewer and Cancel accessible',async()=>{
+ const mounted=bundleEnvironment(),values=new Map([
+  ['photos-swipe-google-state','r'.repeat(43)],
+  ['photos-swipe-google-claim-secret','p'.repeat(43)],
+  ['photos-swipe-pairing',{url:'https://sync.example',token:'legacy-token',deviceId:'same-device'}]
+ ]),requests=[];
+ let poll;
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('saved',{decision:'keep'})]});
+ mounted.environment.location.href='https://photos.google.com/u/2/';
+ mounted.environment.GM={getValue:async key=>values.get(key),setValue:async(key,value)=>values.set(key,value),deleteValue:async key=>values.delete(key),xmlHttpRequest:request=>{
+  if(request.url.endsWith('/auth/poll')){poll=request;return;}
+  requests.push(request.headers.Authorization);
+  request.onload({status:request.headers.Authorization==='Bearer legacy-token'?401:200,responseText:JSON.stringify({decisions:[],history:[],progress:{}})});
+ }};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
+ await waitForReview(()=>!!poll);
+ const opening=mounted.nodes.get('launcher').onclick();
+ try{
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(mounted.nodes.get('overlay').hidden,false);
+  assert.equal(mounted.nodes.get('launcher').hidden,true);
+  const requestsBeforeClaim=requests.slice();
+  const cancel=mounted.root.getElementById('google-sign-in-cancel');
+  assert.ok(cancel);assert.equal(cancel.hidden,false);cancel.onclick();
+  await opening;
+  assert.equal(values.has('photos-swipe-google-state'),false);
+  assert.equal(mounted.nodes.get('google-settings').disabled,false);
+  assert.equal(mounted.nodes.get('google-sign-in').disabled,false);
+  assert.equal((await db.read(account)).items[0].decision,'keep');
+ }finally{await mounted.nodes.get('close').onclick();}
 });

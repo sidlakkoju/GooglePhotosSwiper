@@ -82,17 +82,14 @@ test('loader watchdog falls back when the GM request never calls back',async()=>
  assert.equal(await startLoader(env,key),true);assert.equal(delay,1500);assert.equal(env.window.appRuns,1);assert.equal(scripts.length,0);
 });
 
-test('verified loader pairing stays in its GM store and restores server state after claiming',async()=>{
- const modules=await Promise.all(['core','settings','pairing','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
+test('verified loader Google credentials stay in GM storage and restore server state',async()=>{
+ const modules=await Promise.all(['core','settings','sync'].map(name=>readFile(new URL(`../lib/userscript-${name}.mjs`,import.meta.url),'utf8')));
  const code=modules.map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n')+`
  window.completed=(async()=>{
   const store=await createPairingStore({GM,database:window.database,crypto:window.crypto});
-  const panel=receivePairingLink({document,parent:window.parent,location:{hash:''},window,fetch,manual:true,saveSettings:store.saveSettings,onPaired:async()=>{
-   const client=createSyncClient({fetch});client.configure(await store.settings());
-   window.restored=await client.sync('synthetic-account',{items:[],history:[]},async value=>value);
-  }});
-  const nodes=node=>node.children.flatMap(child=>[child,...nodes(child)]);
-  nodes(panel).find(node=>node.id==='pairing-short-code').value='123456';await nodes(panel).find(node=>node.tag==='button'&&node.textContent==='Pair this device').onclick();
+  await store.saveSettings({url:'https://worker.example',token:'loader-private-token',email:'synthetic@example.test'});
+  const client=createSyncClient({fetch});client.configure(await store.settings());
+  window.restored=await client.sync('synthetic-account',{items:[],history:[]},async value=>value);
  })();`;
  const {env,scripts}=environment(null,signed('1.2.3',code));
  const storage=new Map(),pageWorld={localStorage:{},indexedDB:{}},persisted=[];
@@ -107,7 +104,7 @@ test('verified loader pairing stays in its GM store and restores server state af
  assert.equal(await startLoader(env,key),true);await env.window.completed;
  assert.equal(storage.get('photos-swipe-pairing').token,'loader-private-token');
  assert.deepEqual(env.window.restored.history,remote.history);assert.deepEqual(env.window.restored.syncProgress,remote.progress);assert.deepEqual(env.window.restored.syncDecisions,{photo:'keep'});
- assert.equal(calls.length,2);assert.match(calls[1].url,/\/api\/state\?scope=synthetic-account$/);assert.equal(calls[1].options.headers.Authorization,'Bearer loader-private-token');
+ assert.equal(calls.length,1);assert.match(calls[0].url,/\/api\/state\?scope=synthetic-account$/);assert.equal(calls[0].options.headers.Authorization,'Bearer loader-private-token');
  for(const value of [pageWorld,env.document.documentElement,env.window.parent,persisted])assert.ok(!JSON.stringify(value).includes('loader-private-token'));
  assert.equal(scripts.length,0);
  const {createPairingStore}=await import('../lib/userscript-settings.mjs');
