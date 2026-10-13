@@ -3476,7 +3476,7 @@ test('Flashbacks single-item memory keeps long place text in a shrinking ellipsi
  assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${place} · 1 of 1`);
  assert.equal(label.querySelector('.memory-place').title,place);
  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('');
- assert.match(styles,/max-width:calc\(100% - 32px\)/);assert.match(styles,/memory-place\{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis/);
+ assert.match(styles,/max-width:calc\(100% - 72px\)/);assert.match(styles,/memory-place\{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis/);
  await mounted.nodes.get('close').onclick();
 });
 
