@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.59
+// @version 1.2.60
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -698,7 +698,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
  for(const target of targets){
   let suppressClick=false;
   target.addEventListener('pointerdown',event=>{
-   if(gesture||dismissing||!canSwipe()||event.isPrimary===false||event.button!==0)return;
+   if(event.target.closest?.('[data-video-control]')||gesture||dismissing||!canSwipe()||event.isPrimary===false||event.button!==0)return;
    suppressClick=false;animation?.cancel();animation=null;
    cardWidth=card.getBoundingClientRect?.().width||card.offsetWidth||300;
    gesture={id:event.pointerId,x:event.clientX,y:event.clientY,dx:0,dy:0,samples:Number.isFinite(event.timeStamp)?[{dx:0,time:event.timeStamp}]:[],velocity:0,width:cardWidth,target,suppressClick:()=>{suppressClick=true;},video:event.target.tagName==='VIDEO'?event.target:null,locked:false};
@@ -711,7 +711,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   target.addEventListener('lostpointercapture',event=>{if(event.target===target&&gesture?.id===event.pointerId){suppressClick=true;reset();}});
   target.addEventListener('click',event=>{
    if(suppressClick){event.preventDefault();event.stopImmediatePropagation();suppressClick=false;return;}
-   if(event.target.closest?.('button'))return;
+   if(event.target.closest?.('button, [data-video-control]'))return;
    const video=playbackOnClick&&target.querySelector?.('video');
    if(video&&!video.controls){if(video.paused)video.play().catch(()=>{});else video.pause();}
   });
@@ -1013,6 +1013,32 @@ const TURN=550;
  },reset(){stop();current=target=from=0;chip.classList.remove('go');render();this.update(0);}};
 }
 
+function restoreVideoTime(video,savedTime){
+ if(video.dataset.resumeReady!=='pending')return;
+ if(Number.isFinite(savedTime))video.currentTime=Math.max(0,Math.min(savedTime,Number.isFinite(video.duration)?video.duration:savedTime));
+ video.dataset.resumeReady='ready';
+}
+function createVideoTimeline({document,video,onSeek}){
+ const timeline=document.createElement('input'),label=document.createElement('span');
+ timeline.type='range';timeline.min='0';timeline.max='1';timeline.step='any';timeline.value='0';timeline.dataset.videoControl='seek';
+ timeline.setAttribute('aria-label','Video timeline');
+ timeline.style.cssText='position:absolute;bottom:52px;left:12px;width:calc(100% - 24px);height:32px;touch-action:none;z-index:2';
+ label.dataset.videoControl='time';label.style.cssText='position:absolute;bottom:22px;left:50%;transform:translateX(-50%);pointer-events:none';
+ const format=time=>{const seconds=Math.floor(Number.isFinite(time)?Math.max(0,time):0);return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;};
+ const update=()=>{timeline.value=String(Number.isFinite(video.duration)&&video.duration>0?video.currentTime/video.duration:0);label.textContent=`${format(video.currentTime)} / ${format(video.duration)}`;};
+ const seek=fraction=>{if(!Number.isFinite(video.duration)||video.duration<=0)return;video.currentTime=Math.max(0,Math.min(1,fraction))*video.duration;video.dataset.resumeReady='ready';update();onSeek();};
+ const seekAt=event=>{const rect=timeline.getBoundingClientRect();if(rect.width>0)seek((event.clientX-rect.left)/rect.width);};
+ let pointer=null;
+ timeline.addEventListener('pointerdown',event=>{event.stopPropagation();if(event.isPrimary===false||event.button!==0)return;event.preventDefault();pointer=event.pointerId;timeline.setPointerCapture?.(pointer);seekAt(event);});
+ timeline.addEventListener('pointermove',event=>{event.stopPropagation();if(event.pointerId===pointer){event.preventDefault();seekAt(event);}});
+ timeline.addEventListener('pointerup',event=>{event.stopPropagation();if(event.pointerId!==pointer)return;seekAt(event);pointer=null;if(timeline.hasPointerCapture?.(event.pointerId))timeline.releasePointerCapture(event.pointerId);});
+ for(const type of ['pointercancel','lostpointercapture'])timeline.addEventListener(type,event=>{event.stopPropagation();pointer=null;});
+ timeline.addEventListener('click',event=>{event.stopPropagation();seekAt(event);});
+ for(const type of ['touchstart','touchmove','touchend'])timeline.addEventListener(type,event=>event.stopPropagation());
+ timeline.addEventListener('input',()=>seek(Number(timeline.value)));
+ for(const type of ['timeupdate','loadedmetadata','durationchange','seeked'])video.addEventListener(type,update);
+ update();return [timeline,label];
+}
 function mountPhotosSwipe(environment) {
  if(typeof environment.GM?.xmlHttpRequest==='function')environment.syncFetch=privateSyncFetch(environment.GM);
  const {window,document,location}=environment;
@@ -1071,7 +1097,7 @@ function mountPhotosSwipe(environment) {
  const underCard=document.createElement('div');underCard.setAttribute('id','next-card');underCard.setAttribute('class','media under-card');underCard.setAttribute('aria-hidden','true');underCard.hidden=true;
  cardElement.insertBefore(underCard,topCard);
  const stamps=['KEEP','REMOVE'].map(label=>{const stamp=document.createElement('span');stamp.setAttribute('class',`swipe-stamp stamp-${label.toLowerCase()}`);stamp.textContent=label;stamp.setAttribute('aria-hidden','true');topCard.append(stamp);return stamp;});
- const feedbackStyles=document.createElement('style');feedbackStyles.textContent='.card{overflow:hidden}.top-card{position:relative;z-index:1;background:var(--ps-surface-solid)}.media{position:relative;z-index:1;background:var(--ps-surface-solid);border-radius:var(--ps-r-lg);-webkit-user-select:none;-webkit-touch-callout:none}.media:has(>[data-video-control]:not([hidden])){padding-bottom:68px}.media .video-poster{width:100%;height:100%;min-width:0;min-height:0;object-fit:contain}.under-card{position:absolute;inset:0 0 auto;z-index:0;pointer-events:none;transform:scale(.94)}.swipe-stamp{position:absolute;top:24px;z-index:2;padding:8px 14px;border:4px solid currentColor;border-radius:8px;font-size:28px;font-weight:800;opacity:0;pointer-events:none}.stamp-keep{left:24px;color:var(--ps-accent);transform:rotate(-12deg)}.stamp-remove{right:24px;color:var(--ps-destructive);transform:rotate(12deg)}';root.append(feedbackStyles);
+ const feedbackStyles=document.createElement('style');feedbackStyles.textContent='.card{overflow:hidden}.top-card{position:relative;z-index:1;background:var(--ps-surface-solid)}.media{position:relative;z-index:1;background:var(--ps-surface-solid);border-radius:var(--ps-r-lg);-webkit-user-select:none;-webkit-touch-callout:none}.media:has(>[data-video-control]:not([hidden])){padding-bottom:96px}.media .video-poster{width:100%;height:100%;min-width:0;min-height:0;object-fit:contain}.under-card{position:absolute;inset:0 0 auto;z-index:0;pointer-events:none;transform:scale(.94)}.swipe-stamp{position:absolute;top:24px;z-index:2;padding:8px 14px;border:4px solid currentColor;border-radius:8px;font-size:28px;font-weight:800;opacity:0;pointer-events:none}.stamp-keep{left:24px;color:var(--ps-accent);transform:rotate(-12deg)}.stamp-remove{right:24px;color:var(--ps-destructive);transform:rotate(12deg)}';root.append(feedbackStyles);
  const swipeElement=document.createElement('div');
  swipeElement.setAttribute("class","swipe");
  swipeElement.setAttribute("id","swipe");
@@ -1666,8 +1692,8 @@ function mountPhotosSwipe(environment) {
    }
    const source=previewSource(item.thumbUrl);const buffered=!retried&&!forceRefresh?buffer.take(item.mediaKey):null;const cached=!retried&&!forceRefresh?(reusablePreview(buffered,source)||reusablePreview(preloaded,source)||preloader.take(item.mediaKey,source)):null;const media=item.type==='video'?(warmedKey===item.mediaKey&&!retried&&!forceRefresh?warmedVideo:document.createElement('video')):(cached||previewImage());if(cached||media===warmedVideo)metrics.hits++;else metrics.misses++;if(media===warmedVideo){warmedVideo=null;warmedKey=null;}
    media.onerror=failed;
-   if(item.type==='video'){const savedTime=resume.video?.key===item.mediaKey?resume.video.time:0;media.dataset.resumeReady='pending';media.addEventListener('loadedmetadata',()=>{if(token!==generation)return;if(Number.isFinite(savedTime))media.currentTime=Math.max(0,Math.min(savedTime,Number.isFinite(media.duration)?media.duration:savedTime));media.dataset.resumeReady='ready';});media.addEventListener('timeupdate',()=>{if(Date.now()-videoSavedAt>=1000){videoSavedAt=Date.now();captureVideo();}});media.addEventListener('pause',captureVideo);
-    media.controls=$('card').classList.contains('expanded');media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=previewSource(item.thumbUrl);
+   if(item.type==='video'){const savedTime=resume.video?.key===item.mediaKey?resume.video.time:0;media.dataset.resumeReady='pending';media.addEventListener('loadedmetadata',()=>{if(token!==generation)return;restoreVideoTime(media,savedTime);});media.addEventListener('timeupdate',()=>{if(Date.now()-videoSavedAt>=1000){videoSavedAt=Date.now();captureVideo();}});media.addEventListener('pause',captureVideo);
+    media.controls=false;media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=previewSource(item.thumbUrl);
     const poster=cached||previewImage();poster.alt=item.name;poster.setAttribute('class','video-poster');poster.style.width='';poster.style.maxWidth='100%';poster.style.maxHeight='100%';
     poster.onload=()=>painted(poster,token);if(!cached)poster.src=media.poster;
     media.hidden=true;$('media').replaceChildren(poster,media);addVideoControls(media);$('media').setAttribute('aria-busy','true');
@@ -1688,8 +1714,8 @@ function mountPhotosSwipe(environment) {
  }
  function updateVideoControls(){
   const video=mediaElement.querySelector('video');
-  if(video)video.controls=$('card').classList.contains('expanded');
-  for(const button of mediaElement.childNodes)if(button.dataset?.videoControl)button.hidden=$('card').classList.contains('expanded');
+  if(video)video.controls=false;
+  for(const button of mediaElement.childNodes)if(button.dataset?.videoControl)button.hidden=false;
  }
  function addVideoControls(video){
   for(const action of ['play','mute']){
@@ -1701,6 +1727,7 @@ function mountPhotosSwipe(environment) {
    if(action==='play')for(const type of ['play','pause'])video.addEventListener(type,()=>{button.textContent=video.paused?'Play':'Pause';});
    mediaElement.append(button);
   }
+  for(const control of createVideoTimeline({document,video,onSeek:captureVideo}))mediaElement.append(control);
   updateVideoControls();
  }
  let renderedHistory='';
@@ -1976,7 +2003,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.59":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.60":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
