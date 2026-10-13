@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {createLocalThumbnails} from '../lib/userscript-thumbnails.mjs';
 import {cardPreviewURL,previewURL} from '../lib/userscript-performance.mjs';
 
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
@@ -43,4 +44,34 @@ test('queue pill does not reuse a loaded source belonging to an old thumbnail UR
  const f=fixture(1);f.context.photo=item('old');
  f.run('const image=previewImage();image.src=previewSource(photo.thumbUrl);image.load();');
  assert.match(render(f,[{...item('new'),mediaKey:'old'}])[0],/\/new=w96-h96-k-no/);
+});
+
+
+test('queue strip remembers dead fresh URLs across repeated desktop and iPhone renders',async()=>{
+ for(const dpr of [1,3]){
+  const f=fixture(dpr),requests=[],lookups=[],bindings=[],items=['QA0000','QA0001','QA0002'].map(key=>({...item(key),urlFetchedAt:1}));
+  const fetch=async url=>{requests.push(url);return {ok:false,status:403};};
+  const thumbnails=createLocalThumbnails({stale:()=>false,refresh:async value=>{lookups.push(value.mediaKey);return {...value,thumbUrl:`https://fixture.googleusercontent.com/fresh-${value.mediaKey}=w1024-h1024`};},placeholder:image=>{image.onerror=null;image.placeholder=true;delete image.src;}});
+  f.context.queueImage=(image,value)=>{
+   Object.defineProperty(image,'src',{configurable:true,set(url){this.request=fetch(url);},get(){return undefined;}});
+   bindings.push(thumbnails.bind(image,value,f.context.queueThumbnailSource));
+  };
+  for(let pass=0;pass<10;pass++){
+   f.queueThumbs.children=[];
+   render(f,items);
+   await Promise.all(bindings.splice(0));
+   for(const image of f.queueThumbs.children){
+    if(image.request){assert.equal((await image.request).status,403);await image.onerror();assert.equal((await image.request).status,403);await image.onerror();}
+    assert.equal(image.placeholder,true);
+    assert.equal(image.onerror,null);
+   }
+  }
+  assert.deepEqual(lookups,items.map(value=>value.mediaKey));
+  assert.equal(requests.length,6);
+  for(const value of items){
+   assert.equal(requests.filter(url=>url.includes(`/${value.mediaKey}=`)).length,1);
+   assert.equal(requests.filter(url=>url.includes(`/fresh-${value.mediaKey}=`)).length,1);
+  }
+  for(const url of requests)assert.match(url,new RegExp(`=w${96*dpr}-h${96*dpr}-k-no`));
+ }
 });

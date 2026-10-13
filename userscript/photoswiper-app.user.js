@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.63
+// @version 1.2.64
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -851,26 +851,37 @@ function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
 }
 
 function createLocalThumbnails({refresh,stale,scope=()=>'',placeholder}) {
- const cache=new Map(),pending=new Map();
+ const cache=new Map(),pending=new Map(),retriedKeys=new Set(),failedKeys=new Map();
  async function resolve(item,force=false) {
-  const key=`${scope()}:${item.mediaKey}`,local=cache.get(key);
+  const key=`${scope()}:${item.mediaKey}`;
+  const failure=failedKeys.get(key);
+  if(failure&&item.thumbUrl&&item.thumbUrl!==failure.thumbUrl&&item.thumbUrl!==failure.originalUrl&&!stale(item)){failedKeys.delete(key);retriedKeys.delete(key);cache.delete(key);}
+  else if(failure)throw Error('Thumbnail unavailable');
+  const local=cache.get(key);
+  if(pending.has(key)){const active=pending.get(key);if(!force&&item.thumbUrl&&item.thumbUrl!==active.item.thumbUrl&&!stale(item)){retriedKeys.delete(key);cache.set(key,item);return item;}return active.request;}
   if(!force&&local&&!stale(local))return local;
   if(!force&&!stale(item)&&item.thumbUrl){cache.set(key,item);if(cache.size>512)cache.delete(cache.keys().next().value);return item;}
-  if(pending.has(key))return pending.get(key);
-  const request=Promise.resolve().then(()=>refresh(item)).then(fresh=>{cache.delete(key);cache.set(key,fresh);if(cache.size>512)cache.delete(cache.keys().next().value);return fresh;});
-  pending.set(key,request);
+  if(force)retriedKeys.add(key);
+  const request=Promise.resolve().then(()=>refresh(item)).then(fresh=>{if(cache.has(key)&&cache.get(key)!==local)return cache.get(key);cache.delete(key);cache.set(key,fresh);if(cache.size>512)cache.delete(cache.keys().next().value);return fresh;},error=>{if(!cache.has(key)||cache.get(key)===local)retriedKeys.delete(key);throw error;});
+  pending.set(key,{request,item});
   try{return await request;}finally{pending.delete(key);}
  }
  function bind(image,item,source) {
-  let retried=false,refreshing=false,failed=false,currentSource;
-  const fail=()=>{if(failed)return;failed=true;image.onerror=null;placeholder(image,item);};
+  const key=`${scope()}:${item.mediaKey}`;
+  let refreshing=false,failed=false,currentSource,currentItem;
+  const fail=(remember=true)=>{if(failed)return;failed=true;if(remember&&currentItem&&cache.get(key)?.thumbUrl===currentItem.thumbUrl)failedKeys.set(key,{thumbUrl:currentItem.thumbUrl,originalUrl:item.thumbUrl});image.onerror=null;placeholder(image,item);};
   image.onerror=async()=>{
    if(failed||refreshing)return;
-   if(retried){fail();return;}
-   retried=true;refreshing=true;
-   try{const fresh=await resolve(item,true);if(!failed){const nextSource=source(fresh);if(nextSource===currentSource)fail();else{currentSource=nextSource;image.src=nextSource;}}}catch{fail();}finally{refreshing=false;}
+   if(retriedKeys.has(key)&&!pending.has(key)){
+    const fresh=cache.get(key),nextSource=fresh&&source(fresh);
+    if(failedKeys.has(key)||!nextSource||nextSource===currentSource)fail();
+    else{currentItem=fresh;currentSource=nextSource;image.src=nextSource;}
+    return;
+   }
+   refreshing=true;
+   try{const fresh=await resolve(item,true);if(!failed){const nextSource=source(fresh);if(nextSource===currentSource)fail();else{currentItem=fresh;currentSource=nextSource;image.src=nextSource;}}}catch{fail(false);}finally{refreshing=false;}
   };
-  const ready=resolve(item).then(fresh=>{if(!failed){currentSource=source(fresh);image.src=currentSource;}},fail);
+  const ready=resolve(item).then(fresh=>{if(failedKeys.has(key)){fail();return;}if(!failed){currentItem=fresh;currentSource=source(fresh);image.src=currentSource;}},()=>fail(false));
   return ready;
  }
  return {resolve,bind};
@@ -1925,7 +1936,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.63":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.64":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

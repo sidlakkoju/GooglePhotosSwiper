@@ -58,3 +58,160 @@ test('failed retry lookup produces the filename fallback',async()=>{
  const f=fixture(true),image={};await f.thumbnails.bind(image,{...item,urlFetchedAt:1},value=>value.thumbUrl);
  await image.onerror();assert.deepEqual(f.calls,[item.mediaKey]);assert.deepEqual(f.placeholders,['Fixture.jpg']);assert.equal(image.onerror,null);
 });
+test('a dead initially refreshed URL stays a placeholder on later binds',async()=>{
+ const f=fixture(),image={};await f.thumbnails.bind(image,item,value=>value.thumbUrl);
+ await image.onerror();
+ for(let pass=0;pass<5;pass++){
+  const next={};await f.thumbnails.bind(next,item,value=>value.thumbUrl);
+  assert.equal(next.src,null);assert.equal(next.onerror,null);
+ }
+ assert.deepEqual(f.calls,[item.mediaKey,item.mediaKey]);assert.equal(f.placeholders.length,6);
+});
+test('failed thumbnails are isolated by account scope',async()=>{
+ let account='synthetic-account-a';const calls=[];
+ const thumbnails=createLocalThumbnails({scope:()=>account,stale:()=>false,refresh:async value=>{calls.push(account);return {...value,thumbUrl:'https://fixture.invalid/fresh'};},placeholder:image=>{image.src=null;}});
+ const first={};await thumbnails.bind(first,item,value=>value.thumbUrl);await first.onerror();await first.onerror();
+ const failed={};await thumbnails.bind(failed,item,value=>value.thumbUrl);assert.equal(failed.src,null);
+ account='synthetic-account-b';
+ const second={};await thumbnails.bind(second,item,value=>value.thumbUrl);assert.equal(second.src,item.thumbUrl);
+ await second.onerror();assert.deepEqual(calls,['synthetic-account-a','synthetic-account-b']);
+});
+
+test('binds during a refresh wait for the fresh URL without requesting the cached URL',async()=>{
+ let finishRefresh;const calls=[],requests=[];
+ const refreshed=new Promise(resolve=>{finishRefresh=resolve;});
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:value=>{calls.push(value.mediaKey);return refreshed;},placeholder:image=>{image.placeholder=true;}});
+ const first={},second={set src(value){requests.push(value);}};
+ await thumbnails.bind(first,item,value=>value.thumbUrl);
+ const retry=first.onerror();
+ const binding=thumbnails.bind(second,item,value=>value.thumbUrl);
+ await Promise.resolve();
+ assert.deepEqual(requests,[]);
+ finishRefresh({...item,thumbUrl:'https://fixture.invalid/fresh'});
+ await Promise.all([retry,binding]);
+ assert.deepEqual(requests,['https://fixture.invalid/fresh']);
+ assert.deepEqual(calls,[item.mediaKey]);
+});
+test('a late error on the old URL adopts the cached refresh without poisoning later binds',async()=>{
+ const calls=[],placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:async value=>{calls.push(value.mediaKey);return {...value,thumbUrl:'https://fixture.invalid/fresh'};},placeholder:image=>{image.src=null;placeholders.push(image);}});
+ const first={},second={};
+ await Promise.all([thumbnails.bind(first,item,value=>value.thumbUrl),thumbnails.bind(second,item,value=>value.thumbUrl)]);
+ await first.onerror();
+ assert.equal(first.src,'https://fixture.invalid/fresh');
+ assert.equal(second.src,item.thumbUrl);
+ await second.onerror();
+ assert.equal(second.src,first.src);
+ const later={};await thumbnails.bind(later,item,value=>value.thumbUrl);
+ assert.equal(later.src,first.src);
+ assert.deepEqual(placeholders,[]);
+ assert.deepEqual(calls,[item.mediaKey]);
+ await second.onerror();
+ const failed={};await thumbnails.bind(failed,item,value=>value.thumbUrl);
+ assert.equal(failed.src,null);
+ assert.deepEqual(placeholders,[second,failed]);
+ assert.deepEqual(calls,[item.mediaKey]);
+});
+
+for(const proactive of [false,true])test(`${proactive?'poster resolve':'stale bind'} preserves the image error retry`,async()=>{
+ const calls=[],placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:async value=>{calls.push(value.mediaKey);return {...value,thumbUrl:`https://fixture.invalid/fresh-${calls.length}`,urlFetchedAt:1};},placeholder:image=>{image.src=null;placeholders.push(image);}});
+ if(proactive)await thumbnails.resolve(item);
+ const image={};await thumbnails.bind(image,item,value=>value.thumbUrl);
+ assert.equal(image.src,'https://fixture.invalid/fresh-1');
+ await image.onerror();
+ assert.equal(image.src,'https://fixture.invalid/fresh-2');
+ assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+ assert.deepEqual(placeholders,[]);
+ await image.onerror();
+ const later={};await thumbnails.bind(later,item,value=>value.thumbUrl);
+ assert.equal(later.src,null);
+ assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+});
+test('a newer saved thumbnail recovers failed queue and grid binds and gets its own retry',async()=>{
+ const calls=[],placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:async value=>{calls.push(value.thumbUrl);return {...value,thumbUrl:calls.length===1?'https://fixture.invalid/dead-refresh':value.thumbUrl};},placeholder:image=>{image.src=null;placeholders.push(image);}});
+ const original={...item,urlFetchedAt:1},first={};
+ await thumbnails.bind(first,original,value=>value.thumbUrl);
+ await first.onerror();
+ await first.onerror();
+ const failed={};await thumbnails.bind(failed,original,value=>value.thumbUrl);
+ assert.equal(failed.src,null);
+ const updated={...original,thumbUrl:'https://fixture.invalid/newer',urlFetchedAt:2};
+ const queue={},grid={};
+ await Promise.all([thumbnails.bind(queue,updated,value=>value.thumbUrl),thumbnails.bind(grid,updated,value=>`${value.thumbUrl}=w100`)]);
+ assert.equal(queue.src,updated.thumbUrl);
+ assert.equal(grid.src,`${updated.thumbUrl}=w100`);
+ assert.deepEqual(placeholders,[first,failed]);
+ await queue.onerror();
+ assert.deepEqual(calls,[original.thumbUrl,updated.thumbUrl]);
+});
+
+for(const outcome of ['reject','dead'])test(`a newer saved URL arriving during a refresh survives a ${outcome} refresh`,async()=>{
+ let finishRefresh,rejectRefresh;
+ const pending=new Promise((resolve,reject)=>{finishRefresh=resolve;rejectRefresh=reject;});
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:()=>pending,placeholder:image=>{image.src=null;}});
+ const original={},updated={...item,thumbUrl:'https://fixture.invalid/newer'},queue={},grid={};
+ await thumbnails.bind(original,item,value=>value.thumbUrl);
+ const retry=original.onerror();
+ await Promise.all([thumbnails.bind(queue,updated,value=>value.thumbUrl),thumbnails.bind(grid,updated,value=>`${value.thumbUrl}=w100`)]);
+ assert.equal(queue.src,updated.thumbUrl);
+ assert.equal(grid.src,`${updated.thumbUrl}=w100`);
+ if(outcome==='reject')rejectRefresh(Error('Temporary lookup failure'));
+ else finishRefresh({...item,thumbUrl:'https://fixture.invalid/dead'});
+ await retry;
+ if(outcome==='dead'){
+  assert.equal(original.src,updated.thumbUrl);
+ }
+ const later={};await thumbnails.bind(later,updated,value=>value.thumbUrl);
+ assert.equal(later.src,updated.thumbUrl);
+});
+
+for(const staleInitially of [false,true])test(`a transient ${staleInitially?'initial':'retry'} lookup failure allows later queue and grid recovery`,async()=>{
+ const calls=[],original={...item,urlFetchedAt:staleInitially?0:1};
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:async value=>{calls.push(value.mediaKey);if(calls.length===1)throw Error('Temporary lookup failure');return {...value,thumbUrl:'https://fixture.invalid/recovered',urlFetchedAt:2};},placeholder:image=>{image.src=null;}});
+ const first={};await thumbnails.bind(first,original,value=>value.thumbUrl);
+ if(!staleInitially)await first.onerror();
+ assert.equal(first.src,null);
+ const queue={},grid={};
+ await Promise.all([thumbnails.bind(queue,original,value=>value.thumbUrl),thumbnails.bind(grid,original,value=>`${value.thumbUrl}=w100`)]);
+ if(!staleInitially)await queue.onerror();
+ assert.equal(queue.src,'https://fixture.invalid/recovered');
+ if(!staleInitially)await grid.onerror();
+ assert.equal(grid.src,'https://fixture.invalid/recovered=w100');
+ assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+});
+
+for(const outcome of ['reject','dead'])test(`cache eviction during a ${outcome} retry preserves recovery and failure caching`,async()=>{
+ let finishRefresh,rejectRefresh;
+ const pending=new Promise((resolve,reject)=>{finishRefresh=resolve;rejectRefresh=reject;});
+ const calls=[],original={...item,urlFetchedAt:1};
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:value=>{calls.push(value.mediaKey);return calls.length===1?pending:Promise.resolve({...value,thumbUrl:'https://fixture.invalid/recovered',urlFetchedAt:2});},placeholder:image=>{image.src=null;}});
+ const first={};await thumbnails.bind(first,original,value=>value.thumbUrl);
+ const retry=first.onerror();
+ await Promise.resolve();
+ for(let index=0;index<512;index++)await thumbnails.resolve({...original,mediaKey:`eviction-${index}`});
+ if(outcome==='reject')rejectRefresh(Error('Temporary lookup failure'));
+ else finishRefresh({...original,thumbUrl:'https://fixture.invalid/dead',urlFetchedAt:2});
+ await retry;
+ if(outcome==='reject'){
+  assert.equal(first.src,null);
+  const queue={},grid={};
+  await Promise.all([thumbnails.bind(queue,original,value=>value.thumbUrl),thumbnails.bind(grid,original,value=>`${value.thumbUrl}=w100`)]);
+  await queue.onerror();
+  await grid.onerror();
+  assert.equal(queue.src,'https://fixture.invalid/recovered');
+  assert.equal(grid.src,'https://fixture.invalid/recovered=w100');
+  assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+ }else{
+  assert.equal(first.src,'https://fixture.invalid/dead');
+  await first.onerror();
+  assert.equal(first.src,null);
+  for(let pass=0;pass<3;pass++){
+   const later={};await thumbnails.bind(later,original,value=>value.thumbUrl);
+   assert.equal(later.src,null);
+   assert.equal(later.onerror,null);
+  }
+  assert.deepEqual(calls,[item.mediaKey]);
+ }
+});
