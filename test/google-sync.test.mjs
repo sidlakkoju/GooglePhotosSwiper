@@ -15,7 +15,7 @@ const keys=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLeng
 const jwk={...await crypto.subtle.exportKey('jwk',keys.publicKey),kid:'test'};
 const fetchKeys=async url=>{assert.equal(url,'https://www.googleapis.com/oauth2/v3/certs');return Response.json({keys:[jwk]});};
 const encode=value=>Buffer.from(typeof value==='string'?value:JSON.stringify(value)).toString('base64url');
-async function token(nonce,overrides={},key=keys.privateKey){const message=encode({alg:'RS256',kid:'test'})+'.'+encode({sub:'account-one',aud:googleClientId,iss:'https://accounts.google.com',exp:Math.floor(Date.now()/1000)+300,nonce,email:'one@example.test',...overrides});return message+'.'+Buffer.from(await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,new TextEncoder().encode(message))).toString('base64url');}
+async function token(nonce,overrides={},key=keys.privateKey,kid='test'){const message=encode({alg:'RS256',kid})+'.'+encode({sub:'account-one',aud:googleClientId,iss:'https://accounts.google.com',exp:Math.floor(Date.now()/1000)+300,nonce,email:'one@example.test',...overrides});return message+'.'+Buffer.from(await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,new TextEncoder().encode(message))).toString('base64url');}
 const request=(env,path,value,bearer)=>googleAuthRequest(new Request(syncOrigin+path,{method:'POST',headers:{Origin:syncOrigin,...(bearer?{Authorization:'Bearer '+bearer}:{})},body:JSON.stringify(value)}),env);
 async function signIn(env,state,bearer,sub='account-one'){
  assert.equal((await request(env,'/auth/session',{state,name:'Test device',platform:'test'},bearer)).status,200);
@@ -301,4 +301,33 @@ test('auth start allowlists Photos return URLs and redirects after success',asyn
  for(const target of ['https://evil.test','https://photos.google.com.evil.test/','http://photos.google.com/','https://user@photos.google.com/','javascript:alert(1)','/relative'])assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,400);
  const target='https://photos.google.com/u/0/?test=1#album',response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);assert.equal(response.status,200);
  const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},fetch:async()=>({ok:true}),window:{location:{replace:value=>returned=value}}});await callback({credential:'test'});assert.equal(returned,target);
+});
+
+for(const outcome of ['rotated','unavailable','missing'])test(`Google missing cached kid refresh handles ${outcome} keys`,async()=>{
+ let calls=0;
+ const rolloverFetch=async()=>{
+  calls++;
+  if(calls===2&&outcome==='unavailable')return new Response('',{status:503});
+  const kid=calls===1||outcome==='missing'?'old':'test';
+  return Response.json({keys:[{...jwk,kid}]},{headers:{'Cache-Control':'max-age=3600'}});
+ };
+ await verifyGoogleToken(await token('warm',{},keys.privateKey,'old'),'warm',rolloverFetch);
+ const env={DB:new D1(),GOOGLE_FETCH:rolloverFetch},state='v'.repeat(43);
+ await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ const credential=await token(pending.nonce);
+ const completion=await request(env,'/auth/complete',{state,credential});
+ assert.equal(calls,2);
+ assert.equal(completion.status,outcome==='rotated'?200:outcome==='unavailable'?503:400);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,outcome==='rotated'?'done':outcome==='unavailable'?'pending':'failed');
+ if(outcome==='unavailable'){
+  assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
+  assert.equal(calls,3);
+  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
+ }
+ if(outcome!=='missing'){
+  const fetched=calls;
+  assert.equal((await verifyGoogleToken(await token('next'),'next',rolloverFetch)).sub,'account-one');
+  assert.equal(calls,fetched);
+ }
 });

@@ -13,11 +13,14 @@ export async function verifyGoogleToken(token,nonce,fetchKeys=fetch){
  try{header=JSON.parse(new TextDecoder().decode(decode(parts[0])));claims=JSON.parse(new TextDecoder().decode(decode(parts[1])));signature=decode(parts[2]);if(!header||!claims)throw Error();}catch{throw new InvalidGoogleToken('Invalid token');}
  if(header.alg!=='RS256'||typeof header.kid!=='string'||claims.aud!==googleClientId||!['accounts.google.com','https://accounts.google.com'].includes(claims.iss)||!Number.isFinite(claims.exp)||claims.exp<=Date.now()/1000||claims.nonce!==nonce||typeof claims.sub!=='string'||!claims.sub||claims.sub.length>256)throw new InvalidGoogleToken('Invalid token');
  let cached=jwksCache.get(fetchKeys);
- if(!cached||cached.expires<Date.now()){
+ const refreshKeys=async()=>{
   const response=await fetchKeys('https://www.googleapis.com/oauth2/v3/certs');if(!response.ok)throw Error('Invalid keys');
   cached={keys:(await response.json()).keys,expires:Date.now()+Math.min(3600,Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1]||300))*1000};if(!Array.isArray(cached.keys))throw Error('Invalid keys');jwksCache.set(fetchKeys,cached);
- }
- const jwk=cached.keys.find(key=>key.kid===header.kid&&key.kty==='RSA');if(!jwk)throw new InvalidGoogleToken('Invalid token');
+ };
+ if(!cached||cached.expires<Date.now())await refreshKeys();
+ let jwk=cached.keys.find(key=>key.kid===header.kid&&key.kty==='RSA');
+ if(!jwk){await refreshKeys();jwk=cached.keys.find(key=>key.kid===header.kid&&key.kty==='RSA');}
+ if(!jwk)throw new InvalidGoogleToken('Invalid token');
  let key;
  try{key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);}catch(error){jwksCache.delete(fetchKeys);throw error;}
  if(!await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,signature,new TextEncoder().encode(parts.slice(0,2).join('.'))))throw new InvalidGoogleToken('Invalid token');
