@@ -323,7 +323,7 @@ async function googleFixture(outcome='done',options={}){
  return {context,requests,timers,notice,button,settingsButton,pending,tick,flush,popup,deliverCode,get saved(){return saved;},get opened(){return opened;},get closed(){return closed;}};
 }
 for(const ios of [false])test(`Google poll done signs in automatically (${ios?'iOS tab':'desktop popup'})`,async()=>{
- const f=await googleFixture('done',{ios});assert.equal(f.opened.url,'about:blank');assert.equal(f.opened.features,ios?'':'popup,width=560,height=700');assert.equal(f.popup.location.href,'https://worker.example/auth/start?return=https%3A%2F%2Fphotos.google.com%2Fu%2F0%2F');assert.match(f.notice.textContent,/Waiting for Google sign-in/);assert.equal(f.notice.children[0].textContent,'Cancel');
+ const f=await googleFixture('done',{ios});assert.equal(f.opened.url,'about:blank');assert.equal(f.opened.features,ios?'':'popup,width=560,height=700');assert.equal(f.popup.location.href,'https://worker.example/auth/start');assert.match(f.notice.textContent,/Waiting for Google sign-in/);assert.equal(f.notice.children[0].textContent,'Cancel');
  await f.tick(2000);await f.pending;assert.equal(f.saved.token,'new-token');assert.equal(f.context.configured.token,'new-token');assert.equal(f.context.onboarding.hidden,true);assert.equal(f.requests[1].headers.Authorization,'Bearer previous-token');assert.equal(JSON.parse(f.requests[1].data).code,'c'.repeat(43));assert.ok(f.requests[1].url.endsWith('/poll'));assert.equal(f.button.disabled,false);assert.equal(f.settingsButton.disabled,false);assert.equal(f.timers.size,0);
 });
 for(const outcome of ['cancel','close','timeout','failed','expired','session','cleanup','inflight'])test(`Google sign-in ${outcome} stops and restores both buttons`,async()=>{
@@ -385,6 +385,22 @@ for(const options of [{missingFragment:true},{mismatchedState:true}])test(`Googl
 test('Google return removes the completion code and restores the Photos fragment',async()=>{
  const f=await googleFixture('done',{resume:true});await f.pending;assert.equal(f.context.restoredURL,'https://photos.google.com/u/0/#album');assert.equal(JSON.parse(f.requests[0].data).code,'c'.repeat(43));
 });
-test('blocked Google popup opens a tab with an allowlisted return for code delivery',async()=>{
- const f=await googleFixture('pending',{blockedPopup:true,withholdCode:true});assert.equal(f.opened,'https://worker.example/auth/start?return=https%3A%2F%2Fphotos.google.com%2Fu%2F0%2F');f.notice.children[0].onclick();await f.pending;
+test('blocked Google popup opens a sign-in tab without a return claimant',async()=>{
+ const f=await googleFixture('pending',{blockedPopup:true,withholdCode:true});assert.equal(f.opened,'https://worker.example/auth/start');f.notice.children[0].onclick();await f.pending;
+});
+
+for(const blockedPopup of [false,true])for(const firstClaimant of ['return','opener'])test(`Google sign-in has one claimant with ${blockedPopup?'fallback tab':'popup'} and ${firstClaimant} first`,async()=>{
+ let claimed=false;const claimants=[];
+ const redeem=claimant=>{claimants.push(claimant);if(claimed)return {status:'expired'};claimed=true;return {status:'done',token:'new-token',deviceId:'same-device'};};
+ const f=await googleFixture('done',{blockedPopup,withholdCode:true,pollResponses:[request=>{
+  assert.equal(JSON.parse(request.data).code,blockedPopup?undefined:'c'.repeat(43));
+  request.onload({status:200,responseText:JSON.stringify(redeem('opener'))});
+ }]});
+ const target=new URL(blockedPopup?f.opened:f.popup.location.href);
+ const returnClaim=()=>{if(target.searchParams.has('return'))redeem('return');};
+ if(firstClaimant==='return')returnClaim();
+ if(!blockedPopup)f.deliverCode();
+ await f.tick(2000);await f.pending;
+ if(firstClaimant==='opener')returnClaim();
+ assert.deepEqual(claimants,['opener']);assert.equal(f.saved.token,'new-token');assert.equal(f.context.configured.token,'new-token');assert.doesNotMatch(f.notice.textContent,/timed out/);
 });
