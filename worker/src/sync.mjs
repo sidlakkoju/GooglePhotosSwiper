@@ -43,7 +43,7 @@ export async function syncRequest(request,env={}) {
   const historyScope=scope+':device:'+device.id;
   await db.prepare("INSERT OR IGNORE INTO review_state (scope,progress,history) SELECT ?, '{}', '[]' FROM review_state WHERE scope = ?").bind(historyScope,scope).run();
   const decisionStatements=(id,value,updatedAt=Date.now(),undo=false)=>{
-   const owned="(NOT EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ?) OR EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ?))";
+   const owned="(NOT EXISTS (SELECT 1 FROM decisions WHERE scope = ? AND id = ?) OR EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ?))";
    const ownerArgs=[scope,id,scope,id,device.id];
    const notTrashed="NOT EXISTS (SELECT 1 FROM review_items WHERE scope = ? AND id = ? AND json_extract(data, '$.state') = 'in_trash')";
    if(value===null)return [
@@ -52,8 +52,9 @@ export async function syncRequest(request,env={}) {
    ];
    const statements=[];
    if(value==='keep')statements.push(db.prepare('INSERT INTO decision_keeps (scope,id,updated_at) VALUES (?,?,?) ON CONFLICT(scope,id) DO UPDATE SET updated_at = MAX(decision_keeps.updated_at, excluded.updated_at)').bind(scope,id,updatedAt));
+   const insertWins=decisionWins('(SELECT decision FROM decisions WHERE scope = ? AND id = ?)','?','(SELECT updated_at FROM decision_versions WHERE scope = ? AND id = ?)','?');
    const wins=decisionWins('(SELECT decision FROM decisions WHERE scope = ? AND id = ?)','?','decision_versions.updated_at','excluded.updated_at');
-   statements.push(db.prepare(`INSERT INTO decision_versions (scope,id,device_id,updated_at) SELECT ?,?,?,? WHERE ${notTrashed}${undo?` AND ${owned}`:''} ON CONFLICT(scope,id) DO UPDATE SET device_id = excluded.device_id, updated_at = excluded.updated_at WHERE ${undo?'decision_versions.device_id = excluded.device_id AND excluded.updated_at >= decision_versions.updated_at':wins}`).bind(scope,id,device.id,updatedAt,scope,id,...(undo?[...ownerArgs]:[scope,id,value])));
+   statements.push(db.prepare(`INSERT INTO decision_versions (scope,id,device_id,updated_at) SELECT ?,?,?,? WHERE ${notTrashed} AND ${undo?owned:insertWins} ON CONFLICT(scope,id) DO UPDATE SET device_id = excluded.device_id, updated_at = excluded.updated_at WHERE ${undo?'decision_versions.device_id = excluded.device_id AND excluded.updated_at >= decision_versions.updated_at':wins}`).bind(scope,id,device.id,updatedAt,scope,id,...(undo?ownerArgs:[scope,id,value,scope,id,updatedAt]),...(undo?[]:[scope,id,value])));
    statements.push(db.prepare(`INSERT INTO decisions (scope,id,decision) SELECT ?,?,? WHERE ${notTrashed} AND EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ? AND updated_at = ?)${undo?'':" AND (? = 'remove' OR NOT EXISTS (SELECT 1 FROM decisions WHERE scope = ? AND id = ? AND decision = 'remove'))"} ON CONFLICT(scope,id) DO UPDATE SET decision = excluded.decision`).bind(scope,id,value,scope,id,scope,id,device.id,updatedAt,...(undo?[]:[value,scope,id])));
    return statements;
   };

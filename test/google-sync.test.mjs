@@ -121,7 +121,8 @@ test('linking a hashed Photos scope preserves shared and per-device undo and per
  env.DB.sqlite.prepare('INSERT INTO decisions VALUES (?,?,?)').run(scope,'old','remove');
  env.DB.sqlite.prepare('INSERT INTO decisions VALUES (?,?,?)').run(scope,'clear-before-link','remove');
  assert.equal((await api('legacy-test','decisions/clear-before-link','DELETE')).status,200);
- assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions WHERE id = ?').get('clear-before-link').n,0);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions WHERE id = ?').get('clear-before-link').n,1);
+ env.DB.sqlite.prepare('DELETE FROM decisions WHERE scope = ? AND id = ?').run(scope,'clear-before-link');
  env.DB.sqlite.prepare('INSERT INTO review_state VALUES (?,?,?)').run(scope,JSON.stringify({started:true,reviewed:1}),JSON.stringify([entry]));
  await api('legacy-test','undo','PUT',{history:[entry]});
  assert.deepEqual((await (await api('legacy-test','state')).json()).history,[entry]);
@@ -602,4 +603,43 @@ for(const batch of [false,true])test(`undo-to-keep records trash protection agai
  assert.equal((await (await api(b,'trash-check','POST',{ids:['photo']})).json()).safe,false);
  await decide(b,'remove',350);
  assert.equal((await (await api(b,'trash-check','POST',{ids:['photo']})).json()).safe,true);
+});
+
+for(const batch of [false,true])test(`versionless removes reject keep ownership and undo (${batch?'batch':'single'})`,async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};
+ const a=await signIn(env,'6'.repeat(43)),b=await signIn(env,'7'.repeat(43));
+ const scope=env.DB.sqlite.prepare('SELECT space FROM device_spaces WHERE device_id = ?').get(a.deviceId).space+':shared';
+ const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
+ for(const undo of [false,true]){
+  const id=undo?'undo':'keep';
+  env.DB.sqlite.prepare('INSERT INTO decisions VALUES (?,?,?)').run(scope,id,'remove');
+  for(const device of [a,b]){
+   const value={decision:'keep',updatedAt:30,undo};
+   assert.equal((await api(device,batch?'decisions':'decisions/'+id,'PUT',batch?{decisions:[{id,...value}]}:value)).status,200);
+   assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions WHERE scope = ? AND id = ?').get(scope,id).decision,'remove');
+   assert.equal(env.DB.sqlite.prepare('SELECT * FROM decision_versions WHERE scope = ? AND id = ?').get(scope,id),undefined);
+   assert.equal((await (await api(device,'trash-check','POST',{ids:[id]})).json()).safe,false);
+   assert.equal((await api(device,'decisions/'+id,'DELETE')).status,200);
+   assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions WHERE scope = ? AND id = ?').get(scope,id).decision,'remove');
+  }
+ }
+});
+
+test('space linking preserves versionless target removes against source keeps and later undo',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'synthetic-legacy-token'};
+ const existing=await signIn(env,'8'.repeat(43));
+ const scope=env.DB.sqlite.prepare('SELECT space FROM device_spaces WHERE device_id = ?').get(existing.deviceId).space+':shared';
+ const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
+ const ids=['versioned-source','versionless-source'];
+ for(const id of ids)env.DB.sqlite.prepare('INSERT INTO decisions VALUES (?,?,?)').run(scope,id,'remove');
+ await api('synthetic-legacy-token','decisions','PUT',{decisions:ids.map(id=>({id,decision:'keep',updatedAt:30}))});
+ env.DB.sqlite.prepare('DELETE FROM decision_versions WHERE scope = ? AND id = ?').run('default','versionless-source');
+ const linked=await signIn(env,'9'.repeat(43),'synthetic-legacy-token');
+ for(const id of ids){
+  assert.equal(env.DB.sqlite.prepare('SELECT * FROM decision_versions WHERE scope = ? AND id = ?').get(scope,id),undefined);
+  assert.equal((await (await api(linked.token,'trash-check','POST',{ids:[id]})).json()).safe,false);
+  assert.equal((await api(linked.token,'decisions/'+id,'PUT',{decision:'keep',updatedAt:40,undo:true})).status,200);
+  assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions WHERE scope = ? AND id = ?').get(scope,id).decision,'remove');
+  assert.equal(env.DB.sqlite.prepare('SELECT * FROM decision_versions WHERE scope = ? AND id = ?').get(scope,id),undefined);
+ }
 });
