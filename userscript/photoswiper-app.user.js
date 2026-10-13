@@ -942,15 +942,15 @@ function createLocalThumbnails({refresh,stale,scope=()=>'',placeholder}) {
   try{return await request;}finally{pending.delete(key);}
  }
  function bind(image,item,source) {
-  let retried=false,refreshing=false,failed=false;
+  let retried=false,refreshing=false,failed=false,currentSource;
   const fail=()=>{if(failed)return;failed=true;image.onerror=null;placeholder(image,item);};
   image.onerror=async()=>{
    if(failed||refreshing)return;
    if(retried){fail();return;}
    retried=true;refreshing=true;
-   try{const fresh=await resolve(item,true);if(!failed)image.src=source(fresh);}catch{fail();}finally{refreshing=false;}
+   try{const fresh=await resolve(item,true);if(!failed){const nextSource=source(fresh);if(nextSource===currentSource)fail();else{currentSource=nextSource;image.src=nextSource;}}}catch{fail();}finally{refreshing=false;}
   };
-  const ready=resolve(item).then(fresh=>{if(!failed)image.src=source(fresh);},fail);
+  const ready=resolve(item).then(fresh=>{if(!failed){currentSource=source(fresh);image.src=currentSource;}},fail);
   return ready;
  }
  return {resolve,bind};

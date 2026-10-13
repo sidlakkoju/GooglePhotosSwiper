@@ -29,6 +29,15 @@ test('lookup failure shows a placeholder without trying the foreign URL',async()
  const f=fixture(true),image={};await f.thumbnails.bind(image,item,value=>value.thumbUrl);
  assert.deepEqual(f.calls,[item.mediaKey]);assert.deepEqual(f.placeholders,['Fixture.jpg']);assert.equal(image.src,null);
 });
+test('unchanged retry URL shows the filename placeholder after one image error',async()=>{
+ const f=fixture(),image={},local={...item,thumbUrl:'https://fixture.invalid/local',urlFetchedAt:1};
+ await f.thumbnails.bind(image,local,value=>value.thumbUrl);
+ assert.equal(image.src,local.thumbUrl);
+ const error=image.onerror;await error();
+ assert.deepEqual(f.calls,[item.mediaKey]);assert.deepEqual(f.placeholders,['Fixture.jpg']);assert.equal(image.onerror,null);assert.equal(image.src,null);
+ await error();
+ assert.deepEqual(f.calls,[item.mediaKey]);assert.deepEqual(f.placeholders,['Fixture.jpg']);
+});
 test('refreshed URLs never enter sync progress',()=>{
  const progress=reviewSyncProgress({items:[{...item,urlFetchedAt:1,thumbUrl:'https://fixture.invalid/local'}]});
  assert.equal('thumbUrl' in progress.items[0],false);assert.equal('urlFetchedAt' in progress.items[0],false);
