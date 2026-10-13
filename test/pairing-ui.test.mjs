@@ -150,11 +150,11 @@ test('same-tab return consumes the one-time code without a browser cookie and re
 
 test('pair hand-off uses a hash-bound CSP, never fetches and exposes only valid Safari links',async()=>{for(const code of ['', 'invalid', 'abcdefghijklmnopqrstuv']){const response=await pairPage(new Request('https://worker.example/pair'));const html=await response.text(),script=html.match(/<script>(.*?)<\/script>/s)[1];assert.equal(response.headers.get('Referrer-Policy'),'no-referrer');assert.equal(response.headers.get('Cache-Control'),'no-store');assert.ok(response.headers.get('Content-Security-Policy').includes("script-src 'sha256-"+createHash('sha256').update(script).digest('base64')+"'"));const nodes={open:{hidden:true},copy:{hidden:true},status:{}};vm.runInNewContext(script,{location:{hash:'#'+code,origin:'https://worker.example'},document:{getElementById:id=>nodes[id]},navigator:{clipboard:{writeText:async value=>assert.equal(value,nodes.open.href)}}});assert.equal(nodes.open.hidden,code.length!==22);if(code.length===22){assert.equal(nodes.open.href,'https://photos.google.com/#pswipe-pair='+code+'&origin=https%3A%2F%2Fworker.example');await nodes.copy.onclick();}}});
 
-test('same-tab claim proof stays in private storage and resumes without URL secrets',async()=>{
+test('same-tab claim proof stays in private storage and resumes with the completion code',async()=>{
  const started=await googleFixture('done',{sameTab:true});await started.pending;
  const session=JSON.parse(started.requests[0].data),secret=await started.context.environment.GM.getValue('photos-swipe-google-claim-secret');
  assert.equal(session.automatic,true);assert.match(secret,/^[A-Za-z0-9_-]{43}$/);assert.equal(session.claimSecret,secret);assert.notEqual(secret,session.state);assert.ok(!started.context.window.location.href.includes(secret));
- const returned=await googleFixture('done',{resume:true,withholdCode:true});await returned.pending;
- const poll=JSON.parse(returned.requests[0].data);assert.equal(poll.claimSecret,'p'.repeat(43));assert.equal(poll.code,undefined);assert.equal(returned.requests[0].headers.Cookie,undefined);assert.equal(returned.saved.token,'new-token');
+ const returned=await googleFixture('done',{resume:true,fragment:true,withholdCode:true});await returned.pending;
+ const poll=JSON.parse(returned.requests[0].data);assert.equal(poll.claimSecret,'p'.repeat(43));assert.equal(poll.code,'c'.repeat(43));assert.equal(returned.requests[0].headers.Cookie,undefined);assert.equal(returned.saved.token,'new-token');
  assert.equal(await returned.context.environment.GM.getValue('photos-swipe-google-claim-secret'),undefined);
 });

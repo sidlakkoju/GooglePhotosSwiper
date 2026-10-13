@@ -3538,12 +3538,48 @@ test('opening during claim on load syncs only the replacement token and preserve
  const opening=mounted.nodes.get('launcher').onclick();
  try{
   await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(mounted.nodes.get('overlay').hidden,false);
+  assert.equal(mounted.nodes.get('launcher').hidden,true);
   const requestsBeforeClaim=requests.slice();
   poll.onload({status:200,responseText:JSON.stringify({status:'done',token:'google-token',deviceId:'same-device',email:'one@example.test'})});
   await opening;
   assert.deepEqual(requestsBeforeClaim,[]);assert.equal(JSON.parse(poll.data).claimSecret,'p'.repeat(43));
   assert.ok(requests.length>0);assert.ok(requests.every(token=>token==='Bearer google-token'));
   assert.equal(values.get('photos-swipe-pairing').token,'google-token');
+  assert.equal((await db.read(account)).items[0].decision,'keep');
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('backing out of same-tab sign-in leaves the viewer and Cancel accessible',async()=>{
+ const mounted=bundleEnvironment(),values=new Map([
+  ['photos-swipe-google-state','r'.repeat(43)],
+  ['photos-swipe-google-claim-secret','p'.repeat(43)],
+  ['photos-swipe-pairing',{url:'https://sync.example',token:'legacy-token',deviceId:'same-device'}]
+ ]),requests=[];
+ let poll;
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.save(account,{...emptyReview(),items:[item('saved',{decision:'keep'})]});
+ mounted.environment.location.href='https://photos.google.com/u/2/';
+ mounted.environment.GM={getValue:async key=>values.get(key),setValue:async(key,value)=>values.set(key,value),deleteValue:async key=>values.delete(key),xmlHttpRequest:request=>{
+  if(request.url.endsWith('/auth/poll')){poll=request;return;}
+  requests.push(request.headers.Authorization);
+  request.onload({status:request.headers.Authorization==='Bearer legacy-token'?401:200,responseText:JSON.stringify({decisions:[],history:[],progress:{}})});
+ }};
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),mounted.environment);
+ await waitForReview(()=>!!poll);
+ const opening=mounted.nodes.get('launcher').onclick();
+ try{
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(mounted.nodes.get('overlay').hidden,false);
+  assert.equal(mounted.nodes.get('launcher').hidden,true);
+  const requestsBeforeClaim=requests.slice();
+  const cancel=mounted.root.getElementById('google-sign-in-cancel');
+  assert.ok(cancel);assert.equal(cancel.hidden,false);cancel.onclick();
+  await opening;
+  assert.equal(values.has('photos-swipe-google-state'),false);
+  assert.equal(mounted.nodes.get('google-settings').disabled,false);
+  assert.equal(mounted.nodes.get('google-sign-in').disabled,false);
   assert.equal((await db.read(account)).items[0].decision,'keep');
  }finally{await mounted.nodes.get('close').onclick();}
 });
