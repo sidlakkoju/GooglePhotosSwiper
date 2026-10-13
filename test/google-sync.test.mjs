@@ -342,7 +342,7 @@ for(const outcome of ['rotated','unavailable','missing'])test(`Google missing ca
 
 test('same-tab return redirects with 302 and state-only claim is single-use',async()=>{
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='v'.repeat(43),target='https://photos.google.com/u/2/?test=1#album';
- await request(env,'/auth/session',{state,name:'Synthetic browser',platform:'test'},'legacy-test');
+ await request(env,'/auth/session',{state,automatic:true,name:'Synthetic browser',platform:'test'},'legacy-test');
  assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,200);
  assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/return?state='+state),env)).status,400);
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
@@ -359,7 +359,7 @@ test('same-tab legacy Google claim merges progress into an existing account',asy
  const existing=await signIn(env,'x'.repeat(43));
  const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
  await api('legacy-test','decisions/legacy-synthetic','PUT',{decision:'remove'});await api(existing.token,'decisions/account-synthetic','PUT',{decision:'keep'});
- await request(env,'/auth/session',{state,name:'Synthetic device',platform:'test'},'legacy-test');
+ await request(env,'/auth/session',{state,automatic:true,name:'Synthetic device',platform:'test'},'legacy-test');
  await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent('https://photos.google.com/u/0/')),env);
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
  const linked=await (await request(env,'/auth/poll',{state},'legacy-test')).json();assert.equal(linked.status,'done');
@@ -373,4 +373,19 @@ test('foreground fallback claims automatically without an opener or return URL',
  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'pending');
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'expired');
+});
+
+for(const automatic of [undefined,false])test(`Photos return URL cannot enable state-only claims for automatic=${automatic}`,async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='z'.repeat(43);
+ assert.equal((await request(env,'/auth/session',{state,automatic,name:'Legacy browser',platform:'test'})).status,200);
+ assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent('https://photos.google.com/')),env)).status,200);
+ const pending=await env.DB.prepare('SELECT nonce,state_claim,return_url FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ assert.equal(pending.state_claim,0);assert.equal(pending.return_url,'https://photos.google.com/');
+ const complete=await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});assert.equal(complete.status,200);const {code}=await complete.json();
+ assert.deepEqual(await (await request(env,'/auth/poll',{state})).json(),{status:'pending'});
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,0);
+ assert.equal(env.DB.sqlite.prepare('SELECT claimed_at FROM google_pending').get().claimed_at,null);
+ assert.equal((await request(env,'/auth/poll',{state,code:'x'.repeat(43)})).status,400);
+ const claim=await request(env,'/auth/poll',{state,code});assert.equal(claim.status,200);assert.equal((await claim.json()).status,'done');
+ assert.equal((await (await request(env,'/auth/poll',{state,code})).json()).status,'expired');
 });

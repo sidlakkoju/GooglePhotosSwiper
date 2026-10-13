@@ -87,7 +87,7 @@ export async function googleAuthRequest(request,env){
    if(pending.expires_at<=now||pending.claimed_at!==null)return json({status:'expired'});
    if(pending.completed_at===-2)return json({status:'failed',error:'Google sign-in failed. Please try again.'});
    if(pending.completed_at===null||pending.completed_at===-1)return json({status:'pending'});
-   if(value.code===undefined&&!pending.return_url&&!pending.state_claim)return json({status:'pending'});
+   if(value.code===undefined&&pending.state_claim!==1)return json({status:'pending'});
    if(value.code!==undefined&&(typeof value.code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.code)||!await db.prepare('SELECT state_hash FROM google_pending WHERE state_hash = ? AND claim_hash = ?').bind(digest,await hash(value.code)).first()))throw Error('Invalid code');
   }
   const linked=pending.space?await db.prepare('SELECT sub FROM google_accounts WHERE space = ?').bind(pending.space).first():null;
