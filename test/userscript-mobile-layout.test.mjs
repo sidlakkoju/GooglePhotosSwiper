@@ -238,3 +238,46 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
   }
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('Flashbacks long place leaves the memory count clear of fullscreen on narrow cards',{skip:!chrome||probe.status!==0},async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'userscript-memory-'));
+ try{
+  const page=join(dir,'layout.html');
+  await writeFile(page,`<!doctype html><html><body><script>
+   const environment={version:'test'};
+   const createPairingModal=()=>({open(){}});
+   ${counterSource}
+   ${setup}
+   overlayElement.hidden=false;
+   memoryLabel.hidden=false;
+   memoryDate.textContent='September 2025';
+   memoryPlace.textContent=' · Synthetic city with a very long location name repeated across the card';
+   memoryPosition.textContent=' · 12 of 99';
+   const snapshots=[];
+   for(const expanded of [false,true]){
+    cardElement.classList.toggle('expanded',expanded);
+    const pill=memoryLabel.getBoundingClientRect(),button=enlargeElement.getBoundingClientRect(),place=memoryPlace.getBoundingClientRect();
+    const range=document.createRange();range.selectNodeContents(memoryPosition);
+    const count=range.getBoundingClientRect();
+    snapshots.push({expanded,gap:button.left-pill.right,countInside:count.left>=pill.left&&count.right<=pill.right,countClear:count.right<button.left,placeShrinks:memoryPlace.scrollWidth>memoryPlace.clientWidth,ellipsis:getComputedStyle(memoryPlace).textOverflow,placeWidth:place.width});
+   }
+   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(snapshots)}));
+  </script></body></html>`);
+  for(const width of [320,375,393,1280]){
+   const frame=join(dir,'frame.html');
+   await writeFile(frame,`<!doctype html><iframe style="border:0;width:${width}px;height:852px" src="file://${page}"></iframe><script>document.querySelector('iframe').onload=event=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:event.target.contentDocument.querySelector('pre').textContent}));</script>`);
+   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files','--virtual-time-budget=1000','--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
+   assert.equal(result.status,0,result.stderr);
+   const snapshots=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);
+   for(const snapshot of snapshots){
+    const label=`width=${width}, expanded=${snapshot.expanded}`;
+    assert.ok(snapshot.gap>=8,label+': pill clears fullscreen');
+    assert.equal(snapshot.countInside,true,label+': count inside pill');
+    assert.equal(snapshot.countClear,true,label+': count clears fullscreen');
+    assert.equal(snapshot.placeShrinks,true,label+': long place shrinks');
+    assert.equal(snapshot.ellipsis,'ellipsis',label+': place ellipsizes');
+    assert.ok(snapshot.placeWidth>0,label+': place remains visible');
+   }
+  }
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
