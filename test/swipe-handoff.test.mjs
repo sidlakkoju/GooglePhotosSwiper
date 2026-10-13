@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {recordReviewDecision} from '../lib/userscript-core.mjs';
 import {createWriteQueue} from '../lib/userscript-performance.mjs';
 import {readFile} from 'node:fs/promises';
 import {throwSwipe as throwPublicSwipe} from '../public/swipe.js';
@@ -126,11 +127,12 @@ function userscriptDecisionFixture({busy=false,inspection=false,fail=false,delay
  const decisions=[],writes=[];
  let finish,startTask;
  const waiting=new Promise(resolve=>{finish=resolve;}),taskReady=new Promise(resolve=>{startTask=resolve;});
- const context=vm.createContext({identity:{account:'synthetic'},reviewPanel:{hidden:true},sheet:{hidden:true},$:()=>({hidden:false}),leaseError:null,otherTab:false,busy,inspected:inspection?'first':null,focused:null,previousKey:null,swipeAt:null,window:{performance:{mark(){},now:()=>0}},state:{history:[]},current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({})});
+ const context=vm.createContext({identity:{account:'synthetic'},reviewPanel:{hidden:true},sheet:{hidden:true},$:()=>({hidden:false}),leaseError:null,otherTab:false,busy,inspected:inspection?'first':null,focused:null,previousKey:null,swipeAt:null,window:{performance:{mark(){},now:()=>0}},state:{history:[],items:[{mediaKey:'first',decision:null,revision:0}]},resume:{},readyMessage:()=>'',recordReviewDecision,current:()=>({mediaKey:'first',name:'First',decision:null,revision:0}),swipeFeedback:{dismiss:value=>decisions.push(value)},render(){},message(){},decideReview:()=>({items:[{mediaKey:'first'}]})});
  const queue=createWriteQueue({snapshot:()=>context.state,write:async next=>{if(delayTask)await taskReady;writes.push('save');await waiting;if(fail)throw Error('Save failed');return next;},committed(){}});
  context.apply=next=>{context.state=next;context.render();queue.enqueue();};
  const start=userscriptSource.indexOf(' function decide('),end=userscriptSource.indexOf(' async function undo(',start);
- vm.runInContext(userscriptSource.slice(start,end),context);
+ const helperStart=userscriptSource.indexOf(' function decideWithHistory('),helperEnd=userscriptSource.indexOf(' function selectTrashItem(',helperStart);
+ vm.runInContext(userscriptSource.slice(helperStart,helperEnd)+userscriptSource.slice(start,end),context);
  return {context,decisions,writes,finish,startTask,settle:()=>queue.flush(),pending:()=>queue.pending};
 }
 for(const fail of [false,true])for(const delayTask of [false,true])test(`userscript advances before a ${delayTask?'delayed task and ':''}${fail?'failed':'successful'} save`,async()=>{

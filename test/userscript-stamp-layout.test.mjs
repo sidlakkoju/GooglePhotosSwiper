@@ -4,12 +4,18 @@ import {readFile,mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {Script} from 'node:vm';
 
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
 const counterSource=(await readFile(new URL('../lib/userscript-counter.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const swipeSource=(await readFile(new URL('../lib/userscript-swipe.mjs',import.meta.url),'utf8')).replace(/^export /gm,'');
-const setup=source.slice(source.indexOf(" const host=document.createElement('div');"),source.indexOf(' const $=id=>root.getElementById(id);'));
+const orderSource=(await readFile(new URL('../lib/userscript-order.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
+const setup=orderSource+source.slice(source.indexOf(" const host=document.createElement('div');"),source.indexOf(' const $=id=>root.getElementById(id);'));
 const binding=source.match(/ const swipeFeedback=createSwipeFeedback\([^\n]+/)[0];
+test('stamp layout setup parses as a classic browser script',()=>{
+ assert.doesNotThrow(()=>new Script(counterSource+setup));
+});
+
 const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
 
 for(const reduced of [false,true])for(const theme of ['light','dark'])for(const [width,height,pointerType] of [[1280,900,'mouse'],[393,852,'touch']]){

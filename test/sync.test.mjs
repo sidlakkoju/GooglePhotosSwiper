@@ -720,3 +720,18 @@ test('claim reports pairing misconfiguration when the IP key is unset',async()=>
  assert.equal(e.DB.sqlite.prepare('SELECT count(*) AS n FROM devices WHERE is_legacy = 0').get().n,0);
  assert.equal(e.DB.sqlite.prepare('SELECT used_at FROM pairing_codes WHERE id = ?').get(pairing.id).used_at,null);
 });
+
+test('full cooldown undo history syncs with progress at maximum field sizes',async()=>{
+ const environment=env(),history=Array.from({length:2000},(_,index)=>({key:String(index).padEnd(256,'x'),previous:'keep',decision:'remove',revision:Number.MAX_SAFE_INTEGER,cooldown:{lastDecisionAt:Number.MAX_SAFE_INTEGER,lastDecisionSwipe:Number.MAX_SAFE_INTEGER,keepCount:Number.MAX_SAFE_INTEGER}}));
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),environment)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const state={started:true,items:[{mediaKey:history[0].key,decision:'remove',revision:Number.MAX_SAFE_INTEGER,lastDecisionAt:123,lastDecisionSwipe:2000,keepCount:4,state:'active'}],history,swipeCount:2000,syncDirty:true,syncPending:{},syncDecisions:{[history[0].key]:'remove'}};
+ const saved=await client.sync('default',state,async value=>value);
+ assert.equal(saved.syncDirty,false);
+ const remote=await (await call(environment,'state')).json();
+ assert.deepEqual(remote.history,history);
+ assert.equal(remote.progress.swipeCount,2000);
+ assert.equal(remote.progress.items[0].keepCount,4);
+ assert.equal((await call(environment,'undo','PUT',{history}, {'Content-Length':'1048577'})).status,400);
+ assert.equal((await call(environment,'progress','PUT',{padding:'x'.repeat(262144)})).status,400);
+});

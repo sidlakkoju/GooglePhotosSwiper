@@ -516,13 +516,14 @@ test('Undo after a synced Keep keeps its confirmation through the next sync',asy
  assert.equal((await mounted.read()).items[0].decision,null);
  assert.ok(uploads.some(value=>value.decisions?.some(row=>row.id==='synthetic-undo'&&row.decision===null)));
 });
-test('mounted oldest-first puts missing dates at the epoch before dated media',async()=>{
+test('mounted oldest-first preserves the current card and sorts the remaining deck',async()=>{
  const mounted=await mountedReview([item('dated',{date:'1990-01-01T00:00:00.000Z'}),item('missing')]);
+ const before=mounted.nodes.get('caption').textContent;
  mounted.nodes.get('sort').value='oldest';mounted.nodes.get('sort').onchange();
- assert.match(mounted.nodes.get('caption').textContent,/^missing · Unknown date · Unknown size$/);
+ assert.equal(mounted.nodes.get('caption').textContent,before);
  await mounted.click('keep');
- assert.match(mounted.nodes.get('caption').textContent,/^dated · /);
- assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,'keep']);
+ assert.match(mounted.nodes.get('caption').textContent,before.startsWith('dated')?/^missing · Unknown date · Unknown size$/:/^dated · /);
+ assert.equal((await mounted.read()).items.filter(row=>row.decision==='keep').length,1);
 });
 test('Trash writes require confirmation and bounded valid stable identifiers',async()=>{
  const f=fixture(()=>[]);
@@ -858,7 +859,7 @@ test('card stack clips outgoing cards without a later overflow override',async()
 test('phone decision row has three icons and fullscreen belongs to the photo',async()=>{
  const mounted=await mountedReview([item('a')]),content=mounted.nodes.get('overlay').childNodes[0],actions=content.childNodes.find(node=>node.class==='actions');
  assert.deepEqual(actions.childNodes.filter(node=>node.tagName==='BUTTON').map(node=>node.id),['remove','undo','keep']);assert.equal(mounted.nodes.get('enlarge').parentNode.class,'top-card');assert.equal(mounted.nodes.get('undo').disabled,true);
- assert.ok(mounted.nodes.get('settings-sheet').contains(mounted.nodes.get('filter')));assert.ok(mounted.nodes.get('settings-sheet').contains(mounted.nodes.get('sort')));
+ assert.ok(mounted.nodes.get('settings-sheet').contains(mounted.nodes.get('filter')));assert.equal(mounted.nodes.get('sort').hidden,true);assert.ok(!mounted.nodes.get('settings-sheet').contains(mounted.nodes.get('sort')));
  assert.equal(mounted.nodes.get('review-every').hidden,true);assert.equal(mounted.nodes.get('delete-method').hidden,true);
 });
 test('mounted album send creates a readable title and saves the verified album',async()=>{
@@ -930,7 +931,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     videoChecks.push({loading,background,opaque,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
    }
    sheet.hidden=false;
-   const controls=['filter','sort'].map(id=>root.getElementById(id));
+   const controls=['filter'].map(id=>root.getElementById(id));
    const sheetBounds=bounds(sheet);
    const settings=root.getElementById('sync-settings');settings.open=true;
    const range=doc.createRange(),settingsStyle=doc.defaultView.getComputedStyle(settings),settingsContentWidth=settings.clientWidth-parseFloat(settingsStyle.paddingLeft)-parseFloat(settingsStyle.paddingRight);
@@ -946,7 +947,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
    pairingTargets[0].innerHTML='<canvas width=270 height=270></canvas>';pairingTargets[1].textContent='123 456';pairingTargets[2].textContent='01:00';
    const pairingAboveSettings=Number(doc.defaultView.getComputedStyle(issuer).zIndex)>Number(doc.defaultView.getComputedStyle(sheet).zIndex);
    const pairingVisible=pairingTargets.every(target=>{const box=bounds(target),hit=root.elementFromPoint(box.left+box.width/2,box.top+box.height/2);return box.width>0&&box.height>0&&(hit===target||target.contains(hit));});
-   results.push({width,height,syncFields,videoChecks,pairingAboveSettings,pairingVisible,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,filterBeforeOrder:bounds(controls[0]).top<bounds(controls[1]).top});
+   results.push({width,height,syncFields,videoChecks,pairingAboveSettings,pairingVisible,modalWidth:modal.width,modalFits:modal.left>=0&&modal.right<=width+1&&modal.top>=0&&modal.bottom<=height+1,backdropFits:backdrop.width===width,controlsFit,orderRemoved:root.getElementById('sort').hidden});
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script>`;
@@ -958,7 +959,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   for(const measurement of measurements){
    for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['above','leftAligned','fullWidth','clearOfButtons'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
-   for(const key of ['modalFits','backdropFits','controlsFit','filterBeforeOrder','pairingAboveSettings','pairingVisible'])assert.equal(measurement[key],true,JSON.stringify(measurement));
+   for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved','pairingAboveSettings','pairingVisible'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(440,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
@@ -3109,7 +3110,8 @@ test('chained review undo uploads valid history and progress without remaining d
   fetch:async(url,options)=>{
    const path=new URL(url).pathname,value=options.body?JSON.parse(options.body):null;
    if(path==='/api/undo'&&options.method==='PUT'){
-    assert.ok(value.history.every(entry=>Object.keys(entry).every(key=>['key','previous','decision','revision'].includes(key))));
+    assert.ok(value.history.every(entry=>Object.keys(entry).every(key=>['key','previous','decision','revision','cooldown'].includes(key))));
+    for(const entry of value.history)if(entry.cooldown)assert.ok(Object.entries(entry.cooldown).every(([key,value])=>['lastDecisionAt','lastDecisionSwipe','keepCount'].includes(key)&&(value===null||Number.isSafeInteger(value)&&value>=0)));
    }
    if(path==='/api/decisions'&&value)remote.decisions=value.decisions.filter(entry=>entry.decision!==null);
    if(path==='/api/undo'&&value)remote.history=value.history;
@@ -3697,4 +3699,43 @@ for(const scenario of ['partial batch failure','Check deleted items'])test(`comp
  assert.match(capsule['aria-label'],/^0.00 MB/);
  await mounted.click('trash');assert.match(capsule['aria-label'],/^0.00 MB/);
  await mounted.nodes.get('close').onclick();
+});
+
+test('order capsule cycles approved names, pins the card, opens its menu and restores mid-memory',async()=>{
+ const rows=Array.from({length:320},(_,index)=>item(`synthetic-order-${index}`,{date:new Date(Date.UTC(2000+Math.floor(index/8),1,1,0,index%8)).toISOString()})),indexedDB=fakeIndexedDB(),mounted=await mountedReview(rows,{indexedDB}),button=mounted.nodes.get('order-switcher'),menu=mounted.nodes.get('order-menu');
+ const caption=()=>mounted.nodes.get('caption').textContent;
+ const first=caption();assert.match(button.childNodes[0].textContent,/Flashbacks/);
+ for(const name of ['Timeline','Oldest first','Largest first','Flashbacks']){button.onclick();assert.match(button.childNodes[0].textContent,new RegExp(name));assert.equal(caption(),first);}
+ button.listeners.contextmenu({preventDefault(){}});assert.equal(menu.hidden,false);assert.deepEqual(menu.childNodes.map(node=>node.textContent.replace(/^\S+ /,'')),['Flashbacks','Timeline','Oldest first','Largest first']);assert.equal(menu.childNodes[0]['aria-checked'],'true');
+ menu.childNodes[0].onclick();assert.equal(menu.hidden,true);
+ await mounted.click('keep');await mounted.click('keep');await mounted.click('keep');const resumed=caption();await mounted.nodes.get('close').onclick();
+ const restored=bundleEnvironment();restored.environment.window.indexedDB=indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),restored.environment);await restored.nodes.get('launcher').onclick();assert.match(restored.nodes.get('order-switcher').childNodes[0].textContent,/Flashbacks/);assert.equal(restored.nodes.get('caption').textContent,resumed);await restored.nodes.get('close').onclick();
+});
+
+test('Flashbacks undo restores a card held in the middle after changing order',async()=>{
+ const rows=Array.from({length:320},(_,index)=>item(`undo-order-${index}`,{date:new Date(Date.UTC(2000+Math.floor(index/8),1,1,0,index%8)).toISOString()}));
+ const mounted=await mountedReview(rows),menu=mounted.nodes.get('order-menu');
+ menu.childNodes[1].onclick();
+ await mounted.click('keep');
+ const held=mounted.nodes.get('caption').textContent;
+ menu.childNodes[0].onclick();
+ assert.equal(mounted.nodes.get('caption').textContent,held);
+ await mounted.click('remove');
+ assert.notEqual(mounted.nodes.get('caption').textContent,held);
+ await mounted.click('undo');
+ assert.equal(mounted.nodes.get('caption').textContent,held);
+ assert.equal((await mounted.read()).items.find(row=>held.startsWith(`${row.name} ·`)).decision,null);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('mounted Flashbacks switch keeps the held card and advances forward within its memory',async()=>{
+ const mounted=await mountedReview(Array.from({length:4},(_,index)=>item(`p${index}`,{date:new Date(Date.UTC(2020,0,1,0,index)).toISOString(),size:index===2?100:1})));
+ await mounted.click('keep');
+ mounted.nodes.get('sort').value='largest';mounted.nodes.get('sort').onchange();
+ await mounted.click('keep');
+ assert.match(mounted.nodes.get('caption').textContent,/^p2 · /);
+ mounted.nodes.get('sort').value='flashbacks';mounted.nodes.get('sort').onchange();
+ assert.match(mounted.nodes.get('caption').textContent,/^p2 · /);
+ await mounted.click('keep');
+ assert.match(mounted.nodes.get('caption').textContent,/^p3 · /);
 });
