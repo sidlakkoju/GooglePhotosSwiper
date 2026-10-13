@@ -298,25 +298,31 @@ function keptEligible(item,swipes,now=Date.now()){
  const multiplier=2**Math.max(0,(item.keepCount||1)-1);
  return item.decision==='keep'&&Number.isFinite(item.lastDecisionAt)&&now-item.lastDecisionAt>=30*86400000*multiplier&&swipes-(item.lastDecisionSwipe||0)>=500*multiplier;
 }
-function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null){
- if(state.started&&!state.exhausted)return [];
+function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null,allowPartial=false){
+ if(state.started&&!state.exhausted&&!allowPartial)return [];
  const swipes=reviewSwipeCount(state),eligible=state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,swipes,now))),byKey=new Map(eligible.map(item=>[item.mediaKey,item]));
- saved.seen=(saved.seen||[]).filter(key=>byKey.get(key)?.decision!=='keep');
- let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...(saved.seen||[])]),memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'));
+ const seen=(saved.seen||[]).filter(key=>byKey.get(key)?.decision!=='keep');
+ let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...seen]),memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'));
  const unreviewed=eligible.filter(item=>!item.decision&&!known.has(item.mediaKey)),kept=eligible.filter(item=>item.decision==='keep'&&!known.has(item.mediaKey)).sort((a,b)=>a.lastDecisionAt-b.lastDecisionAt),remainingUnswiped=eligible.filter(item=>!item.decision).length;
  const allowance=remainingUnswiped?Math.max(0,Math.floor(remainingUnswiped/19)-keys.filter(key=>byKey.get(key)?.decision==='keep').length):kept.length;
  const selected=new Set([...unreviewed,...kept.slice(0,allowance)].map(item=>item.mediaKey));
+ saved.seen=(saved.seen||[]).filter(key=>!selected.has(key)||byKey.get(key)?.decision!=='keep');
+ const headMemory=memories.find(group=>group.some(item=>item.mediaKey===keys[0]));
+ const activeMemory=headMemory?.some(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey))?headMemory:null;
  const fresh=memories.map(memory=>memory.filter(item=>selected.has(item.mediaKey))).filter(memory=>memory.length);
  for(let i=fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
  if(!remainingUnswiped&&!keys.length)fresh.sort((a,b)=>Math.min(...a.map(item=>item.lastDecisionAt))-Math.min(...b.map(item=>item.lastDecisionAt)));
- for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else if(fullMemory.some(item=>(saved.seen||[]).includes(item.mediaKey)||(saved.starts||[]).includes(item.mediaKey)&&!!item.decision))keys.unshift(...memory.map(item=>item.mediaKey));else keys.push(...memory.map(item=>item.mediaKey));}
+ for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else keys.push(...memory.map(item=>item.mediaKey));}
 
  for(const group of memories){
-  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=keys.findIndex(key=>members.has(key));
+  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey);
   const playedStart=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
-  if(playedStart)saved.starts=saved.starts.filter(key=>key===playedStart.mediaKey||!members.has(key));
-  if(index<0||!playedStart)continue;
-  keys=[...ordered,...keys.filter(key=>!members.has(key))];
+  const continuation=playedStart&&group.some(item=>!item.decision&&keys.includes(item.mediaKey)&&group.indexOf(item)<group.indexOf(playedStart));
+  if(!continuation)continue;
+  saved.starts=saved.starts.filter(key=>key===playedStart.mediaKey||!members.has(key));
+  const remainder=keys.filter(key=>!members.has(key));
+  const insertion=activeMemory&&activeMemory!==group?remainder.findIndex(key=>!activeMemory.some(item=>item.mediaKey===key)):0;
+  remainder.splice(insertion<0?remainder.length:insertion,0,...ordered);keys=remainder;
  }
  const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
  if(memory&&keys.includes(focused)){
@@ -1521,7 +1527,7 @@ function mountPhotosSwipe(environment) {
  const itemSize=item=>Number.isFinite(item.size)&&item.size>=0?bytes(item.size):'Unknown size';
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
  let deckCache=null,deckItems=null,deckFilter=null,deckSort=null;
- function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;let items=deckSort==='flashbacks'?flashbackDeck(state,resume.flashbacks||={},Math.random,Date.now(),focused):reviewDeck(state);items=items.filter(item=>deckFilter==='all'||item.type===deckFilter);if(deckSort==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if(deckSort==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));const pinned=state.items.find(item=>item.mediaKey===focused&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,reviewSwipeCount(state))));if(pinned&&deckSort!=='flashbacks')items=[pinned,...items.filter(item=>item!==pinned)];deckCache=items;return items;}
+ function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;let items=deckSort==='flashbacks'?flashbackDeck(state,resume.flashbacks||={},Math.random,Date.now(),focused,!!libraryFailure):reviewDeck(state);items=items.filter(item=>deckFilter==='all'||item.type===deckFilter);if(deckSort==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if(deckSort==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));const pinned=state.items.find(item=>item.mediaKey===focused&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,reviewSwipeCount(state))));if(pinned&&deckSort!=='flashbacks')items=[pinned,...items.filter(item=>item!==pinned)];deckCache=items;return items;}
 
  function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):deck().find(item=>item.mediaKey===focused)||deck()[0];}
  function mediaURL(value,video=false,expanded=false) {
@@ -1594,7 +1600,7 @@ function mountPhotosSwipe(environment) {
   let cancel;
   const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
   cancelLibraryLoading=cancel;
-  const loading=load(false,cancelled).catch(error=>{if(token!==leaseGeneration||sessionClosing||!pageVisible())return;libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{if(libraryLoading!==loading)return;libraryLoading=null;cancelLibraryLoading=null;render();});
+  const loading=load(false,cancelled).catch(error=>{if(token!==leaseGeneration||sessionClosing||!pageVisible())return;libraryFailure=error;deckItems=null;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{if(libraryLoading!==loading)return;libraryLoading=null;cancelLibraryLoading=null;render();});
   libraryLoading=loading;
  }
  function refill(){
@@ -1878,9 +1884,10 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   const assertLoadSession=()=>{if(token!==leaseGeneration||(cancelled&&sessionClosing))throw Error('Library loading session changed.');};
   const loadCall=async(operation,args)=>{assertLoadSession();const request=call(operation,args);const result=await (cancelled?Promise.race([request,cancelled]):request);assertLoadSession();return result;};
   buffer.clear();previousKey=null;
-  libraryFailure=null;
+  libraryFailure=null;deckItems=null;
   const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
-  const result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  let result;
+  try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){libraryFailure=error;deckItems=null;}throw error;}
   assertLoadSession();
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }

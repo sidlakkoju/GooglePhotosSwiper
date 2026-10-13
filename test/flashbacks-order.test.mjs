@@ -109,3 +109,24 @@ test('persisted played boundary memories continue before the remaining shuffled 
  assert.deepEqual(saved.starts,[played[0].mediaKey,remaining[0].mediaKey]);
  assert.deepEqual(flashbackDeck(state,JSON.parse(JSON.stringify(saved)),()=>0).map(item=>item.mediaKey),expected);
  });
+
+test('cooldown keeps preserve waiting order and seen entries outside the allowance',()=>{
+ const now=Date.UTC(2026,8,1),newer={...items[8],decision:'keep',lastDecisionAt:now-90*86400000,lastDecisionSwipe:0},older={...items[0],decision:'keep',lastDecisionAt:now-40*86400000,lastDecisionSwipe:0};
+ const saved={keys:[],seen:[older.mediaKey,newer.mediaKey],starts:[older.mediaKey,newer.mediaKey]};
+ assert.deepEqual(flashbackDeck({items:[older,newer],swipeCount:500},structuredClone(saved),()=>0,now),[newer,older]);
+ const unplayed=items.slice(16,35),limited=structuredClone(saved);
+ limited.keys=[...unplayed,older,newer].map(item=>item.mediaKey);
+ assert.deepEqual(flashbackDeck({items:[older,newer,...unplayed],swipeCount:500},limited,()=>0,now),[...unplayed,newer]);
+ assert.deepEqual(limited.seen,[older.mediaKey]);
+ assert.deepEqual(flashbackDeck({items:[older,newer,...unplayed],swipeCount:500},limited,()=>0,now),[...unplayed,newer]);
+});
+
+test('late continuation of another played memory waits for the active memory to finish',()=>{
+ const older=items.slice(0,4),olderPlayed={...items[0],decision:'remove'},newer=items.slice(8,12),newerPlayed={...items[10],decision:'remove'};
+ const state={items:[olderPlayed,...older.slice(1),...newer.slice(0,2),newerPlayed,newer[3]],exhausted:true};
+ const saved={keys:[...older.slice(1),newer[3]].map(item=>item.mediaKey),seen:[olderPlayed.mediaKey,newerPlayed.mediaKey],starts:[olderPlayed.mediaKey,newerPlayed.mediaKey]};
+ const expected=[...older.slice(1),...newer.slice(0,2),newer[3]];
+ assert.deepEqual(flashbackDeck(state,saved,()=>0),expected);
+ assert.deepEqual(flashbackDeck(state,structuredClone(saved),()=>0),expected);
+ assert.deepEqual(saved.starts,[olderPlayed.mediaKey,newerPlayed.mediaKey]);
+});

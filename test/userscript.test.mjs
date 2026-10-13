@@ -3796,3 +3796,23 @@ for(const action of ['load','refresh'])test(`Close cancels an explicit Flashback
  finish();await mounted.settle();
  assert.deepEqual(await mounted.read(),before);
 });
+
+test('Flashbacks exposes saved cards after a preload page fails',async()=>{
+ const cursors=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  cursors.push(args[0]);
+  if(args[0]==='second')throw Error('Synthetic page failure');
+  return {ok:true,text:async()=>envelope(entry[0],[[['saved-photo',['https://lh3.googleusercontent.com/synthetic'],1720000000000,'saved-dedup',0,{}]],'second'])};
+ };
+ const mounted=await mountedReview([],{fetch});
+ await mounted.click('refresh');
+ await mounted.settle();
+ assert.deepEqual(cursors,[null,'second']);
+ assert.equal((await mounted.read()).exhausted,false);
+ assert.match(mounted.nodes.get('caption').textContent,/Memory 7\/3\/2024/);
+ mounted.nodes.get('keep').onclick();
+ await mounted.settle();
+ assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='saved-photo').decision,'keep');
+});
