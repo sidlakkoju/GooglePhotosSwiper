@@ -308,7 +308,7 @@ for(const openerMode of ['absent','present','throws'])test(`auth start allowlist
  const env={DB:new D1()},state='r'.repeat(43);await request(env,'/auth/session',{state,name:'Test',platform:'test'});
  for(const target of ['https://evil.test','https://photos.google.com.evil.test/','http://photos.google.com/','https://user@photos.google.com/','javascript:alert(1)','/relative'])assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,400);
  const target='https://photos.google.com/u/0/?test=1#album',response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);assert.equal(response.status,200);
- const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},URL,URLSearchParams,fetch:async()=>Response.json({code:'c'.repeat(43)}),window:{opener:openerMode==='absent'?null:{postMessage(){if(openerMode==='throws')throw Error('Opener unavailable');}},close:()=>assert.fail('Return flow must keep the tab open'),location:{replace:value=>returned=value}}});await callback({credential:'test'});const destination=new URL(returned),fragment=new URLSearchParams(destination.hash.slice(1));assert.equal(destination.origin,'https://photos.google.com');assert.equal(destination.pathname,'/u/0/');assert.equal(destination.search,'?test=1');assert.equal(fragment.get('photos-swipe-state'),state);assert.equal(fragment.get('photos-swipe-code'),'c'.repeat(43));assert.equal(fragment.get('photos-swipe-return-hash'),'#album');
+ const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},URL,URLSearchParams,fetch:async()=>Response.json({code:'c'.repeat(43)}),window:{opener:openerMode==='absent'?null:{postMessage(){if(openerMode==='throws')throw Error('Opener unavailable');}},close:()=>assert.fail('Return flow must keep the tab open'),location:{replace:value=>returned=value}}});await callback({credential:'test'});assert.equal(returned,'/auth/return?state='+state);
 });
 
 for(const outcome of ['rotated','unavailable','missing'])test(`Google missing cached kid refresh handles ${outcome} keys`,async()=>{
@@ -338,4 +338,39 @@ for(const outcome of ['rotated','unavailable','missing'])test(`Google missing ca
   assert.equal((await verifyGoogleToken(await token('next'),'next',rolloverFetch)).sub,'account-one');
   assert.equal(calls,fetched);
  }
+});
+
+test('same-tab return redirects with 302 and state-only claim is single-use',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='v'.repeat(43),target='https://photos.google.com/u/2/?test=1#album';
+ await request(env,'/auth/session',{state,name:'Synthetic browser',platform:'test'},'legacy-test');
+ assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,200);
+ assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/return?state='+state),env)).status,400);
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
+ const redirect=await googleAuthRequest(new Request(syncOrigin+'/auth/return?state='+state),env);assert.equal(redirect.status,302);assert.equal(redirect.headers.get('Location'),target);assert.equal(redirect.headers.get('Referrer-Policy'),'no-referrer');
+ assert.equal((await request(env,'/auth/poll',{state})).status,401);
+ const claims=await Promise.all([request(env,'/auth/poll',{state},'legacy-test'),request(env,'/auth/poll',{state},'legacy-test')]);
+ assert.equal((await Promise.all(claims.map(response=>response.json()))).filter(value=>value.status==='done').length,1);
+ assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/return?state='+state),env)).status,400);
+});
+
+test('same-tab legacy Google claim merges progress into an existing account',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='w'.repeat(43);
+ const existing=await signIn(env,'x'.repeat(43));
+ const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
+ await api('legacy-test','decisions/legacy-synthetic','PUT',{decision:'remove'});await api(existing.token,'decisions/account-synthetic','PUT',{decision:'keep'});
+ await request(env,'/auth/session',{state,name:'Synthetic device',platform:'test'},'legacy-test');
+ await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent('https://photos.google.com/u/0/')),env);
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
+ const linked=await (await request(env,'/auth/poll',{state},'legacy-test')).json();assert.equal(linked.status,'done');
+ for(const bearer of [linked.token,existing.token,'legacy-test'])assert.deepEqual((await (await api(bearer,'state')).json()).decisions.map(entry=>entry.id).sort(),['account-synthetic','legacy-synthetic']);
+});
+
+test('foreground fallback claims automatically without an opener or return URL',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='y'.repeat(43);
+ await request(env,'/auth/session',{state,automatic:true,name:'Synthetic fallback',platform:'test'});
+ await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'pending');
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'expired');
 });

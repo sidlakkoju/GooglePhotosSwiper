@@ -36,7 +36,7 @@ The **In Trash** running total counter includes saved removal candidates confirm
 
 ## Local state and compatibility
 
-Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. **Sync settings** appears near the top and opens on first use. Choose **Save and sync** with your Worker URL and token, or **Continue locally** to dismiss setup; you can reopen settings anytime. The visible sync status reports success or a failure with local fallback. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes the local review cache, but manager-backed pairing survives. Avoid private browsing if you need durable local progress.
+Account-scoped decisions, imported metadata, pagination, undo history and album checkpoints live in the `photos-swipe-userscript` IndexedDB database on the Google Photos origin. Google authentication tokens and cookies are never stored by this script. No data is sent to the existing local app. **Sync settings** appears near the top and opens on first use. Choose **Sign in with Google** to sync, or **Continue locally** to dismiss setup; you can reopen settings anytime. The visible sync status reports success or a failure with local fallback. Optional Worker sync shares review decisions, counts and undo history between userscript devices; see [sync setup](sync.md). The desktop app remains separate. Clearing website data removes the local review cache, but manager-backed pairing survives. Avoid private browsing if you need durable local progress.
 
 A renewable account lock prevents simultaneous work in multiple tabs. After a tab closes during an operation, a lock can take up to 90 seconds to expire. Account and page-session changes reject requests; close the overlay, reload Google Photos, and reopen it in the intended account.
 
@@ -48,22 +48,22 @@ Automated validation uses synthetic responses only. Physical iPhone/Safari execu
 
 Only the Worker origin, device token, device ID and optional display name are saved in per-script GM storage. On first use with GM available, existing IndexedDB credentials are copied to GM before their old record is deleted. Local onboarding dismissal stays in IndexedDB. A failed GM write leaves the old credentials intact and reports the failure. Existing GM credentials take precedence over any stale IndexedDB credentials. Review data stays in IndexedDB and optional Worker sync.
 
-The saved token is held inside the privileged script closure. It is never filled into the settings form or published to page globals, localStorage or the Google bridge. Enter a token to pair or replace it; leaving the token field blank keeps the existing token when the Worker URL is unchanged. Clear both URL and token and save to disable sync and delete the GM pairing. A token being entered in the form can be observed by page scripts; saved credentials are cleared from the form before saving and syncing.
+The saved device token stays in the privileged script closure. Settings shows your sync account, **Switch account**, and **Sign out**. Signing out keeps local review progress. Existing token and paired devices keep syncing until Google sign-in links their progress; the new client has no token-entry or pairing flow.
 
 If GM storage APIs are unavailable, settings use the original IndexedDB fallback and the settings panel shows **Pairing may not persist in this browser**. This fallback has the original page-storage privacy and eviction limits. GM failures do not silently downgrade durable credentials into page storage.
 
-Reloads, version updates, Google Photos site-data clearing and Safari's origin-storage eviction do not erase manager storage. Reinstall retention depends on the manager and its removal options: keep the same script name/namespace and, for Userscripts, the same filename; avoid any **delete storage** option in Tampermonkey. If uninstalling the script or manager discards its storage, reinstalling cannot recover the token. Re-pair once; synced progress remains on the Worker.
+Reloads, version updates, Google Photos site-data clearing and Safari's origin-storage eviction do not erase manager storage. Reinstall retention depends on the manager and its removal options: keep the same script name/namespace and, for Userscripts, the same filename; avoid any **delete storage** option in Tampermonkey. If uninstalling the script or manager discards its storage, reinstalling cannot recover the token. Sign in with Google again; synced progress remains on the Worker.
 
 ### Manual QA matrix (pending)
 
 No physical manager testing has been performed for this change. Run the following only on QA-DUMMY items in Chrome + Tampermonkey, macOS Safari + Userscripts, and iPhone Safari + Userscripts:
 
-1. Install from the public install link, pair, and confirm **Synced**.
+1. Install from the public install link, sign in with Google, and confirm **Synced**.
 2. Reload, apply a version update, and confirm **Synced** after each step.
-3. Uninstall/reinstall from the public link while retaining manager storage where supported; record the manager version and storage-removal choice. Confirm **Synced**, or document that the manager erased storage and re-pair.
+3. Uninstall/reinstall from the public link while retaining manager storage where supported; record the manager version and storage-removal choice. Confirm **Synced**, or document that the manager erased storage and sign in with Google again.
 4. Clear site data for photos.google.com, reopen and confirm **Synced**. On iPhone, also repeat after more than seven days without visiting Photos.
 5. Confirm library load, album creation/addition/verification, Trash reads and opt-in Move to Trash on QA-DUMMY items.
-6. Inspect page-context globals, localStorage, IndexedDB and the saved token field: none should contain the saved device token with GM enabled. Test GM-disabled fallback separately and confirm the persistence notice.
+6. Inspect page-context globals, localStorage, IndexedDB : none should contain the saved device token with GM enabled. Test GM-disabled fallback separately and confirm the persistence notice.
 
 ## Build and test
 

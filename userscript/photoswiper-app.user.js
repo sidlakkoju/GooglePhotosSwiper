@@ -475,14 +475,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
- return {configure,sync,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST'),async pair(url,code,name,platform){
-  let worker;try{worker=new URL(url);}catch{throw Error('Enter a valid HTTPS Worker origin.');}
-  if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');
-  if(!/^\d{6}$/.test(code))throw Error('Enter a six-digit pairing code.');
-  const response=await fetch(new URL('/api/pair/claim',worker.origin).href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({short:code,name,platform}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
-  if(!response.ok)throw Error(response.status>=500?'Pairing is unavailable on the sync server (server misconfigured)':'Code expired or unavailable. Ask the paired device for a new code.');
-  return response.json();
- }};
+ return {configure,sync,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST')};
 }
 function markSyncChanges(previous,next) {
  const pending={...previous.syncPending};
@@ -494,12 +487,6 @@ function markSyncChanges(previous,next) {
   return item;
  });
  return {...next,items,syncPending:pending,syncDirty:dirty};
-}
-function validateSyncSettings(url,token) {
- if(!url&&!token)return {url:'',token:''};
- const parsed=new URL(url);
- if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash||parsed.pathname!=='/'||token.length>4096||!token||/[\r\n]/.test(token))throw Error('Enter an HTTPS Worker origin and sync token.');
- return {url:parsed.origin,token};
 }
 
 function progressBatches(progress) {
@@ -759,113 +746,6 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
  }
  reset();
  return {reset,dismiss,get finished(){return finished;}};
-}
-
-function pairingQR(value) {
- const bytes=new TextEncoder().encode(value);
- if(bytes.length>84)throw Error('Pairing URL too long');
- const bits=[],push=(value,length)=>{for(let i=length-1;i>=0;i--)bits.push(value>>>i&1);};
- push(4,4);push(bytes.length,8);for(const byte of bytes)push(byte,8);
- push(0,Math.min(4,688-bits.length));while(bits.length%8)bits.push(0);
- const data=[];for(let i=0;i<bits.length;i+=8)data.push(bits.slice(i,i+8).reduce((a,b)=>a*2+b,0));
- while(data.length<86)data.push(data.length%2===Math.ceil(bits.length/8)%2?236:17);
- const multiply=(a,b)=>{let result=0;for(let i=0;i<8;i++){if(b&1)result^=a;b>>>=1;a<<=1;if(a&256)a^=285;}return result;};
- let generator=[1],power=1;
- for(let i=0;i<24;i++){const next=Array(generator.length+1).fill(0);generator.forEach((v,j)=>{next[j]^=v;next[j+1]^=multiply(v,power);});generator=next;power=multiply(power,2);}
- const blocks=[data.slice(0,43),data.slice(43)],parity=blocks.map(block=>{const remainder=[...block,...Array(24).fill(0)];for(let i=0;i<43;i++){const factor=remainder[i];for(let j=0;j<generator.length;j++)remainder[i+j]^=multiply(generator[j],factor);}return remainder.slice(43);});
- const stream=[];for(let i=0;i<43;i++)for(const block of blocks)pushByte(block[i]);for(let i=0;i<24;i++)for(const block of parity)pushByte(block[i]);
- function pushByte(byte){for(let i=7;i>=0;i--)stream.push(byte>>>i&1);}
- const size=37,matrix=Array.from({length:size},()=>Array(size).fill(false)),reserved=Array.from({length:size},()=>Array(size).fill(false));
- const set=(x,y,dark)=>{if(x>=0&&y>=0&&x<size&&y<size){matrix[y][x]=!!dark;reserved[y][x]=true;}};
- for(const [cx,cy] of [[3,3],[33,3],[3,33]])for(let dy=-4;dy<=4;dy++)for(let dx=-4;dx<=4;dx++){const distance=Math.max(Math.abs(dx),Math.abs(dy));set(cx+dx,cy+dy,distance!==2&&distance!==4);}
- for(let i=8;i<size-8;i++){set(i,6,i%2===0);set(6,i,i%2===0);}
- for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)set(30+dx,30+dy,Math.max(Math.abs(dx),Math.abs(dy))!==1);
- const format=0x5412;
- for(let i=0;i<=5;i++)set(8,i,format>>>i&1);
- set(8,7,format>>>6&1);set(8,8,format>>>7&1);set(7,8,format>>>8&1);
- for(let i=9;i<15;i++)set(14-i,8,format>>>i&1);
- for(let i=0;i<8;i++)set(size-1-i,8,format>>>i&1);
- for(let i=8;i<15;i++)set(8,size-15+i,format>>>i&1);
- set(8,size-8,true);
- let index=0,up=true;
- for(let right=size-1;right>=1;right-=2){if(right===6)right=5;for(let vertical=0;vertical<size;vertical++){const y=up?size-1-vertical:vertical;for(let offset=0;offset<2;offset++){const x=right-offset;if(!reserved[y][x])matrix[y][x]=!!((stream[index++]||0)^((x+y)%2===0));}}up=!up;}
- return matrix;
-}
-function renderPairingQR(document,value) {
- const matrix=pairingQR(value),canvas=document.createElement('canvas');canvas.width=canvas.height=270;
- const context=canvas.getContext('2d');context.fillStyle='white';context.fillRect(0,0,270,270);context.fillStyle='black';
- matrix.forEach((row,y)=>row.forEach((dark,x)=>{if(dark)context.fillRect((x+4)*6,(y+4)*6,6,6);}));
- canvas.setAttribute('aria-label','Scan to pair another device');return canvas;
-}
-
-const pairingServerError='Pairing is unavailable on the sync server (server misconfigured)';
-function createPairingModal({document,parent,fetch,settings,setTimeout,clearTimeout,now=Date.now,onClose=()=>{},renderQR=renderPairingQR}) {
- const modal=document.createElement('section');modal.hidden=true;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','Pair another device');modal.className='pairing-issuer settings-sheet';modal.style.cssText='z-index:9;pointer-events:auto';
- const status=document.createElement('p'),qr=document.createElement('div'),short=document.createElement('p'),countdown=document.createElement('p'),cancel=document.createElement('button'),renew=document.createElement('button'),devices=document.createElement('button');
- status.setAttribute('role','status');cancel.textContent='Cancel';renew.textContent='New code';devices.textContent='View devices';modal.append(status,qr,short,countdown,cancel,renew,devices);parent.append(modal);
- let generation=0,current=null,timer=null,credentials=null,nextPollAt=0,polling=false,pendingStatus=null;
- const request=async(path,method='GET',body)=>{
-  const response=await fetch(new URL('/api/'+path,credentials.url).href,{method,headers:{Authorization:`Bearer ${credentials.token}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});
-  if(!response.ok)throw Error(response.status>=500?pairingServerError:response.status===401?'Pair this device first.':`Pairing request failed (${response.status})`);
-  return response.json();
- };
- const reset=()=>{clearTimeout(timer);qr.replaceChildren();short.textContent='';countdown.textContent='';renew.hidden=true;devices.hidden=true;};
- const burn=async id=>{await request('pair/start','DELETE',{id});};
- const showClaim=result=>{reset();modal.hidden=false;status.textContent='New device paired: '+result.name;devices.hidden=false;current=null;};
- const finish=async id=>{
-  const pending=pendingStatus;await burn(id);
-  const previous=await pending?.catch(()=>null);
-  try{const result=await request('pair/status?id='+encodeURIComponent(id));return result.claimed?result:previous;}catch(error){if(previous?.claimed)return previous;throw error;}
- };
- const tick=async version=>{
-  if(version!==generation||modal.hidden||!current)return;
-  const seconds=Math.max(0,Math.ceil((current.expiresAt-now())/1000));countdown.textContent=`${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`;
-  timer=setTimeout(()=>tick(version),250);
-  if(!seconds){const id=current.id,finalVersion=++generation;reset();status.textContent='Code expired';renew.hidden=false;try{const result=await finish(id);if(finalVersion===generation){if(result?.claimed)showClaim(result);else current=null;}}catch(error){if(finalVersion===generation)status.textContent='Code expired. '+error.message;}return;}
-  if(polling)return;
-  try {
-   if(now()>=nextPollAt){polling=true;pendingStatus=request('pair/status?id='+encodeURIComponent(current.id));const result=await pendingStatus;if(version!==generation||!current)return;polling=false;if(result.claimed){showClaim(result);return;}nextPollAt=now()+2500;}
-  }catch(error){if(version!==generation||!current)return;polling=false;nextPollAt=now()+2500;status.textContent=error.message;}
- };
- const open=async()=>{
-  if(!modal.hidden)return;
-  modal.hidden=false;cancel.focus();await start();
- };
- const start=async()=>{
-  const version=++generation;reset();status.textContent='Loading pairing code\u2026';
-  try{
-   credentials=await settings();if(!credentials.url||!credentials.token)throw Error('Pair this device first.');
-   const result=await request('pair/start','POST');
-   if(version!==generation){try{await burn(result.id);}catch(error){current=result;modal.hidden=false;status.textContent='Could not cancel pairing code. '+error.message;cancel.focus();}return;}
-   current=result;polling=false;pendingStatus=null;nextPollAt=now()+2500;qr.append(renderQR(document,new URL('/pair',credentials.url).href+'#'+result.code));short.textContent=result.short.slice(0,3)+' '+result.short.slice(3);status.textContent='Scan this QR or enter the code on your other device.';tick(version);
-  }catch(error){if(version===generation){reset();status.textContent=error.message;renew.hidden=error.message==='Pair this device first.';}}
- };
- const close=async()=>{
-  const version=++generation;reset();const id=current?.id;
-  if(id)try{const result=await finish(id);if(version!==generation)return;if(result?.claimed){showClaim(result);return;}}catch(error){if(version===generation){status.textContent=error.message;renew.hidden=false;}return;}
-  if(version===generation){current=null;modal.hidden=true;onClose();}
- };
- cancel.onclick=close;renew.onclick=start;modal.addEventListener('keydown',event=>{if(event.key==='Escape')close();});
- devices.onclick=async()=>{try{const result=await request('devices');status.textContent='Devices';qr.replaceChildren();for(const device of result.devices.filter(device=>!device.revoked_at)){const row=document.createElement('p');row.textContent=device.name+' ('+device.platform+')';qr.append(row);}}catch(error){status.textContent=error.message;}};
- return {open,close,modal};
-}
-function receivePairingLink({document,parent,location,window,fetch,saveSettings,onPaired,onClose=()=>{},manual=false,url='https://photoswiper-sync.sidlakkoju.workers.dev'}) {
- const match=location.hash?.match(/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/);if(!match&&!manual)return;
- if(match)window.history.replaceState(null,'',location.pathname+location.search);
- const panel=document.createElement('section'),name=document.createElement('input'),button=document.createElement('button'),status=document.createElement('p'),shortCode=document.createElement('input'),origin=document.createElement('input'),cancel=document.createElement('button');
- panel.className='pairing-receiver settings-sheet';
- const title=document.createElement('h2');title.textContent='Pair this device';panel.append(title);
- const field=(input,id,text,parent=panel)=>{const label=document.createElement('label');label.textContent=text;label.setAttribute('for',id);input.setAttribute('id',id);parent.append(label,input);};
- name.value=/iPhone/.test(window.navigator?.userAgent||'')?'iPhone (Safari)':'New browser';field(name,'pairing-device-name','Device name');
- if(manual){
-  field(shortCode,'pairing-short-code','6-digit code from a paired device');shortCode.setAttribute('inputmode','numeric');shortCode.setAttribute('pattern','[0-9]{6}');shortCode.setAttribute('autocomplete','one-time-code');shortCode.oninput=()=>{shortCode.value=shortCode.value.replace(/[^0-9]/g,'').slice(0,6);};
-  const hint=document.createElement('p');hint.setAttribute('id','pairing-code-hint');hint.textContent="Get a code from Settings > Sync on a device that's already paired";shortCode.setAttribute('aria-describedby','pairing-code-hint');panel.append(hint);
-  const advanced=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Advanced';advanced.open=false;advanced.append(summary);origin.type='url';origin.value=url;origin.readOnly=true;advanced.hidden=true;field(origin,'pairing-server','Sync server',advanced);panel.append(advanced);
- }
- const actions=document.createElement('div');actions.className='toolbar';button.textContent='Pair this device';cancel.textContent='Cancel';actions.append(button,cancel);status.setAttribute('role','status');panel.append(actions,status);
- cancel.onclick=()=>{panel.hidden=true;onClose();};panel.onkeydown=event=>{if(event.key==='Escape')cancel.onclick();};panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','Pair this device');parent.append(panel);(manual?shortCode:name).focus();
- button.onclick=async()=>{button.disabled=true;try{const worker=new URL(url);if(worker.protocol!=='https:'||worker.username||worker.password)throw Error('Enter a valid HTTPS Worker origin.');const claimedURL=worker.origin;const response=await fetch(claimedURL+'/api/pair/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...(match?{code:match[1]}:{short:shortCode.value.replace(/\s/g,'')}),name:name.value,platform:window.navigator?.platform||'browser'}),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error(response.status>=500?pairingServerError:'Code expired or unavailable. Ask the paired device for a new code.');const result=await response.json();await saveSettings({url:claimedURL,token:result.token,onboardingDismissed:true});panel.hidden=true;onClose();await onPaired();}catch(error){status.textContent=error.message;button.disabled=false;}};
- return panel;
 }
 
 function reviewPreviewWindow(items,current,compact=false) {
@@ -1306,37 +1186,22 @@ function mountPhotosSwipe(environment) {
  divElement4.append(divElement36);
  divElement36.append(trashLabel,moveTrash);
  const settingsPanel=document.createElement('details');settingsPanel.setAttribute('id','sync-settings');const settingsTitle=document.createElement('summary');settingsTitle.textContent='Sync settings';settingsPanel.append(settingsTitle);
- const syncExplanation=document.createElement('p');syncExplanation.textContent='Optional sync shares decisions and undo history between devices. Enter your Worker URL and token, or continue locally on this browser.';settingsPanel.append(syncExplanation);
+ const syncExplanation=document.createElement('p');syncExplanation.textContent='Sign in with Google to sync your progress across devices.';settingsPanel.append(syncExplanation);
  const onboarding=document.createElement('section');onboarding.setAttribute('id','pair-onboarding');onboarding.hidden=true;
  const onboardingTitle=document.createElement('h2');onboardingTitle.textContent='Sync across devices';
  const onboardingText=document.createElement('p');onboardingText.textContent='Sign in once on each device to sync with your Google account.';
- const onboardPair=document.createElement('button');onboardPair.textContent='Enter a code from another device';onboardPair.onclick=()=>receivePairing(true);onboarding.append(onboardingTitle,onboardingText,onboardPair);divElement4.insertBefore(onboarding,cardElement);
- const syncLocal=document.createElement('button');syncLocal.setAttribute('id','sync-local');syncLocal.textContent='Continue locally';onboarding.append(syncLocal);
- for(const [id,title,type] of [['sync-url','Sync URL','url'],['sync-token','Sync token','password']]){const label=document.createElement('label'),input=document.createElement('input');label.textContent=title+' ';input.setAttribute('id',id);input.type=type;input.autocomplete='off';if(id==='sync-url'){input.value='https://photoswiper-sync.sidlakkoju.workers.dev';input.readOnly=true;label.hidden=true;}label.append(input);settingsPanel.append(label);}
- const syncSave=document.createElement('button');syncSave.setAttribute('id','sync-save');syncSave.textContent='Save and sync';settingsPanel.append(syncSave);
- const pairAnother=document.createElement('button');pairAnother.textContent='Pair a device';pairAnother.setAttribute('id','pair-another');settingsPanel.append(pairAnother);
+ onboarding.append(onboardingTitle,onboardingText);divElement4.insertBefore(onboarding,cardElement);
+ const syncLocal=document.createElement('button');syncLocal.setAttribute('id','sync-local');syncLocal.textContent='Continue locally';settingsPanel.append(syncLocal);
+ const onboardingLocal=document.createElement('button');onboardingLocal.textContent='Continue locally';onboarding.append(onboardingLocal);onboardingLocal.onclick=()=>syncLocal.onclick();
  let viewerShortcutsBlockedUntil=0;
  const suppressViewerShortcuts=()=>{viewerShortcutsBlockedUntil=Date.now()+500;};
- const pairingModal=createPairingModal({document,parent:divElement4,fetch:environment.syncFetch||environment.fetch,settings:async()=>(await pairingPromise).settings(),onClose:suppressViewerShortcuts,setTimeout:environment.setTimeout,clearTimeout:environment.clearTimeout});pairAnother.onclick=pairingModal.open;
  const syncStatus=document.createElement('p');syncStatus.setAttribute('id','sync-status');syncStatus.setAttribute('role','status');divElement4.insertBefore(settingsPanel,cardElement);divElement4.insertBefore(syncStatus,cardElement);
- const unpairedBanner=document.createElement('div');unpairedBanner.setAttribute('id','unpaired-banner');unpairedBanner.setAttribute('role','alert');unpairedBanner.hidden=true;
- const unpairedText=document.createElement('span');unpairedText.textContent='This device was unpaired.';
- const pairAgain=document.createElement('button');pairAgain.setAttribute('id','pair-again');pairAgain.textContent='Pair again';
- const dismissUnpaired=document.createElement('button');dismissUnpaired.setAttribute('id','dismiss-unpaired');dismissUnpaired.textContent='Dismiss';unpairedBanner.append(unpairedText,pairAgain,dismissUnpaired);divElement4.insertBefore(unpairedBanner,cardElement);
- const pairingPanel=document.createElement('details');pairingPanel.setAttribute('id','enter-pairing-code');const pairingTitle=document.createElement('summary');pairingTitle.textContent='Enter pairing code';pairingPanel.append(pairingTitle);
- for(const [id,title] of [['pair-code','Pairing code'],['pair-name','Device name']]){const label=document.createElement('label'),input=document.createElement('input');input.setAttribute('id',id);label.textContent=title;label.append(input);pairingPanel.append(label);}
- const pairSubmit=document.createElement('button');pairSubmit.setAttribute('id','pair-submit');pairSubmit.textContent='Pair and sync';pairingPanel.append(pairSubmit);const pairFeedback=document.createElement('p');pairFeedback.setAttribute('role','status');pairingPanel.append(pairFeedback);settingsPanel.append(pairingPanel);
- const devicesPanel=document.createElement('details');devicesPanel.setAttribute('id','paired-devices');const devicesTitle=document.createElement('summary');devicesTitle.textContent='Paired devices';
- const devicesList=document.createElement('div');devicesList.setAttribute('id','devices-list');const refreshDevices=document.createElement('button');refreshDevices.setAttribute('id','refresh-devices');refreshDevices.textContent='Refresh devices';
- const revokeOthers=document.createElement('button');revokeOthers.setAttribute('id','revoke-other-devices');revokeOthers.textContent='Revoke all other devices';devicesPanel.append(devicesTitle,refreshDevices,devicesList,revokeOthers);settingsPanel.append(devicesPanel);
- const pairedNotice=document.createElement('button');pairedNotice.setAttribute('id','paired-notice');pairedNotice.textContent='New device paired \u00b7 View paired devices';pairedNotice.hidden=true;divElement4.insertBefore(pairedNotice,cardElement);
  const historyPanel=document.createElement('details');historyPanel.setAttribute('id','history-details');
  const historyTitle=document.createElement('summary');historyTitle.textContent='Decision history';
  const undoPreview=document.createElement('p');undoPreview.setAttribute('id','undo-preview');
  const historyList=document.createElement('ol');historyList.setAttribute('id','history-list');
  historyPanel.append(historyTitle,historyList);divElement13.insertBefore(undoPreview,enlargeElement);divElement4.insertBefore(historyPanel,queue_detailsElement);
  const shellStyle=document.createElement('style');shellStyle.textContent='.overlay{scrollbar-gutter:auto;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);padding:24px}.content{display:flex;flex-direction:column;position:relative;width:540px;max-width:100%;max-height:calc(100dvh - 48px);overflow:auto;margin:0;background:var(--ps-bg);border-radius:28px;padding:20px}.content>*{flex-shrink:0}.content .card{display:flex;flex-direction:column;flex-shrink:1;min-height:0;overflow:hidden}.content .top-card{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}.content .media{flex:1 1 auto;min-height:0}.content .caption{flex-shrink:0;margin:0;border-radius:0 0 var(--ps-r-lg) var(--ps-r-lg)}.content .under-card{max-height:100%;overflow:hidden}.content header{flex-wrap:nowrap}.content header button{flex-shrink:0}.content h1{flex-basis:100%;font:var(--ps-t-title)}.content header{flex-wrap:wrap}.version-label{font:var(--ps-t-caption);color:var(--ps-label2)}.media{height:56dvh}.caption{position:relative;overflow-wrap:anywhere;background:var(--ps-surface-solid);pointer-events:none}.actions{display:flex}.actions #remove,.actions #keep{width:72px;height:72px;border-radius:50%;font-size:30px}.actions #undo,.actions #enlarge{border-radius:50%}.settings-sheet{position:absolute;inset:0;z-index:5;overflow:auto;padding:0 20px 20px;background:var(--ps-surface-solid);border-radius:28px}.settings-sheet .settings-header{position:sticky;top:0;z-index:1;flex-wrap:nowrap;margin:0 -20px;padding:20px;background:var(--ps-surface-solid)}.settings-header h2{margin:0}.settings-sheet .group{padding:12px;background:var(--ps-fill);border-radius:16px;margin:12px 0}.settings-sheet label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0}.settings-sheet input{max-width:100%;min-width:0}.settings-sheet #sync-settings{margin:0}.settings-sheet #sync-settings label{display:block}.settings-sheet #sync-settings input{width:100%}.settings-sheet #stats{margin:0}.gear-error::after{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ps-destructive)}#sync-status,#undo-preview,.swipe,.zoom-control{display:none}.counter{font:var(--ps-t-callout);border-radius:999px;background:var(--ps-fill);padding:8px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}.status:empty{visibility:hidden}.status{position:relative;height:60px;min-height:60px;overflow:auto;margin:0;background:var(--ps-surface);border-radius:16px;padding:8px;text-align:center}.review-panel{padding:12px;background:var(--ps-surface-solid);border-radius:16px;margin-top:12px}@supports(backdrop-filter:blur(20px)){.settings-sheet{background:var(--ps-surface);backdrop-filter:blur(20px)}}@media(max-width:599px){.overlay{padding:0}.content{width:100%;max-height:100dvh;border-radius:0;padding:16px}.settings-sheet{border-radius:0}.content h1{position:absolute;width:1px;height:1px;overflow:hidden}.content header{flex-wrap:nowrap;gap:6px}.content header button{padding:10px 12px}.counter{font:var(--ps-t-caption)}.media{height:56dvh}.actions{display:flex}}';root.append(shellStyle);
- const pairingStyle=document.createElement('style');pairingStyle.textContent='.pairing-receiver{position:fixed;inset:0;z-index:6;overflow:auto;pointer-events:auto;background:var(--ps-bg);color:var(--ps-label);padding:var(--ps-s5);border-radius:0}.pairing-receiver label{display:block;margin:var(--ps-s3) 0 var(--ps-s1)}.pairing-receiver input{display:block;width:100%;min-width:0;min-height:44px}.pairing-receiver p{color:var(--ps-label2)}.pairing-receiver summary{cursor:pointer;min-height:44px;padding:var(--ps-s3) 0}.pairing-receiver .toolbar{margin-top:var(--ps-s4)}';root.append(pairingStyle);
  const gear=document.createElement('button');gear.setAttribute('id','settings');gear.textContent='\u2699';gear.setAttribute('aria-label','Settings');gear.setAttribute('aria-haspopup','dialog');headerElement5.insertBefore(gear,closeElement);
  const counter=document.createElement('span');counter.setAttribute('class','counter storage-counter');headerElement5.insertBefore(counter,closeElement);
  const storageSession=createSessionStorageCounter();const storageCapsule=createStorageCapsule({document,window,root,element:counter,isVisible:()=>!overlayElement.hidden});
@@ -1347,7 +1212,7 @@ function mountPhotosSwipe(environment) {
  const sheetClose=document.createElement('button');sheetClose.textContent='Done';sheetClose.setAttribute('aria-label','Close settings');
  const sheetTitle=document.createElement('h2');sheetTitle.textContent='Settings';sheetHeader.append(sheetTitle,sheetClose);divElement4.append(sheet);
  const group=(title,...children)=>{const section=document.createElement('section');section.setAttribute('class','group');const heading=document.createElement('h2');heading.textContent=title;section.append(heading,...children);sheet.append(section);return section;};
- settingsTitle.textContent='Sync';settingsPanel.open=true;settingsPanel.insertBefore(accountElement,syncExplanation);settingsPanel.append(unpairedBanner,pairedNotice);group('Sync',settingsPanel);group('Show',filterElement);sortElement.hidden=true;
+ settingsTitle.textContent='Sync';settingsPanel.open=true;settingsPanel.insertBefore(accountElement,syncExplanation);group('Sync',settingsPanel);group('Show',filterElement);sortElement.hidden=true;
  const reviewEvery=document.createElement('input');reviewEvery.setAttribute('id','review-every');reviewEvery.type='number';reviewEvery.min='1';reviewEvery.max='10000';reviewEvery.value='25';reviewEvery.setAttribute('aria-label','Review every N marked');reviewEvery.hidden=true;
  group('History',historyPanel);
  const deleteMethod=document.createElement('select');deleteMethod.setAttribute('id','delete-method');deleteMethod.setAttribute('aria-label','Delete method');for(const [value,label] of [['trash','Trash']]){const option=document.createElement('option');option.value=value;option.textContent=label;deleteMethod.append(option);}deleteMethod.hidden=true;const lifetime=document.createElement('p');lifetime.setAttribute('id','lifetime-freed');lifetime.hidden=true;statsElement.hidden=true;sheet.append(statsElement);group('Refresh',refreshElement,loadElement,trashElement);group('Previous transfer',sendElement,albumElement).hidden=true;
@@ -1356,7 +1221,7 @@ function mountPhotosSwipe(environment) {
  let cancelGoogleSignIn=null;
  const openSettings=()=>{sheet.hidden=false;settingsPanel.open=true;gear.setAttribute('aria-expanded','true');sheetClose.focus();};const closeSettings=()=>{cancelGoogleSignIn?.();suppressViewerShortcuts();sheet.hidden=true;gear.setAttribute('aria-expanded','false');gear.focus();};gear.onclick=openSettings;sheetClose.onclick=closeSettings;
  const openReview=()=>{swipeFeedback.reset();const video=mediaElement.querySelector('video');if(video&&!video.paused){video.pause();resumeReviewPlayback=true;}reviewItems=reviewTrashCandidates(state).map(item=>({...item,legacy:!!item.queueSent}));previewKey=null;reviewPanel.hidden=false;reviewStatus.textContent='';reviewStatus.hidden=true;renderTrashReview();moveTrash.focus();};reviewButton.onclick=openReview;
- overlayElement.addEventListener('click',event=>{if(event.target===overlayElement){if(!pairingModal.modal.hidden)return pairingModal.close();if(activePairingDialog())return;return close();}});
+ overlayElement.addEventListener('click',event=>{if(event.target===overlayElement){return close();}});
  document.documentElement.append(host);
  const icon=(button,label,paths)=>{button.replaceChildren();button.setAttribute('aria-label',label);const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');for(const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'2','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(key,value);for(const path of paths){const element=document.createElementNS('http://www.w3.org/2000/svg','path');element.setAttribute('d',path);svg.append(element);}button.append(svg);};
  icon(removeElement,'Mark for deletion',['M6 6l12 12M18 6L6 18']);icon(keepElement,'Keep',['M12 21s-10-6-10-12a5 5 0 0 1 10-3 5 5 0 0 1 10 3c0 6-10 12-10 12Z']);icon(undoElement,'Undo',['M9 14L4 9l5-5','M4 9h10.5a5.5 5.5 0 0 1 0 11H11']);icon(enlargeElement,'Fullscreen photo',['M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7']);icon(closeElement,'Close Photos Swipe',['M6 6l12 12M18 6L6 18']);icon(gear,'Settings',['M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2','M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0']);icon(reviewButton,'Going to Trash',['M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13']);
@@ -1398,14 +1263,19 @@ function mountPhotosSwipe(environment) {
  const database=()=>dbPromise||(dbPromise=openReviewDatabase(environment.indexedDB).catch(error=>{dbPromise=null;throw error;}));
  const pairingNotice=document.createElement('p');settingsPanel.append(pairingNotice);
  const pairingPromise=createPairingStore({GM:environment.GM,database,crypto:environment.crypto}).then(async store=>{
-  if(!store.durable)pairingNotice.textContent='Pairing may not persist in this browser';
-  try{await store.settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}
+
+  try{await store.settings();}catch(error){pairingNotice.textContent=`Sync storage unavailable: ${error.message}`;}
   return store;
  });
  const accountMismatch=document.createElement('p');accountMismatch.hidden=true;divElement4.insertBefore(accountMismatch,cardElement);
- const showSyncAccount=settings=>{pairingNotice.textContent=settings.email?'Sync account: '+settings.email:'';accountMismatch.hidden=!settings.email||!identity?.label||identity.label===settings.email.toLowerCase();accountMismatch.textContent=accountMismatch.hidden?'':'This device syncs as '+settings.email+'; Photos is showing '+identity.label+'. Use Sign in with Google / switch account in Settings.';};
- const googleSignIn=document.createElement('button');googleSignIn.id='google-sign-in';googleSignIn.textContent='Sign in with Google';onboarding.insertBefore(googleSignIn,onboardPair);
- const googleSettings=document.createElement('button');googleSettings.id='google-settings';googleSettings.textContent='Sign in with Google / switch account';settingsPanel.append(googleSettings);
+ const googleSignIn=document.createElement('button');googleSignIn.setAttribute('id','google-sign-in');googleSignIn.textContent='Sign in with Google';onboarding.append(googleSignIn);
+ const googleSettings=document.createElement('button');googleSettings.setAttribute('id','google-settings');settingsPanel.append(googleSettings);
+ const googleSignOut=document.createElement('button');googleSignOut.setAttribute('id','google-sign-out');googleSignOut.textContent='Sign out';settingsPanel.append(googleSignOut);
+ const storageDetails=document.createElement('div');const storageTitle=document.createElement('h3');storageTitle.textContent='What we store';storageDetails.append(storageTitle);
+ for(const text of ["Your Google account email and Google account ID, to link your devices to one sync space.","Each Keep/Remove decision, keyed by Google Photos' internal item ID, with when and from which device it was made.","Your review queue and undo history: item IDs plus the details the app already shows (such as dates, type, and Google's own thumbnail link). The link only works for your signed-in Google account.","Each device's name (like \"Chrome on Mac\") and a hashed sign-in token. Pending sign-ins expire after 5 minutes.","No photos or videos, no image files, and no Google password or Google access token are ever stored."]){const paragraph=document.createElement('p');paragraph.textContent=text;storageDetails.append(paragraph);}settingsPanel.append(storageDetails);
+ const showSyncAccount=settings=>{const signedIn=!!(settings.token&&settings.email);pairingNotice.textContent=signedIn?'Sync account: '+settings.email:settings.token?'Sign in with Google to link your existing sync progress.':'';googleSettings.textContent=signedIn?'Switch account':'Sign in with Google';googleSignOut.hidden=!signedIn;syncLocal.hidden=signedIn;accountMismatch.hidden=!signedIn||!identity?.label||identity.label===settings.email.toLowerCase();accountMismatch.textContent=accountMismatch.hidden?'':'This device syncs as '+settings.email+'; Photos is showing '+identity.label+'. Switch account in Settings.';};
+ showSyncAccount({});
+ googleSignOut.onclick=()=>run(async()=>{cancelGoogleSignIn?.();await syncRunning;const store=await pairingPromise,settings=await store.settings();await store.saveSettings({...settings,token:'',email:'',onboardingDismissed:true});syncEnabled=false;syncClient.configure({});showSyncAccount({});message('Signed out \u00b7 progress saved locally');});
  const signInGoogle=async(resumeState)=>{
   if(cancelGoogleSignIn||googleSignIn.disabled||googleSettings.disabled)return;
   openSettings();googleSignIn.disabled=true;googleSettings.disabled=true;
@@ -1421,23 +1291,28 @@ function mountPhotosSwipe(environment) {
   const privateRequest=(path,value,token)=>new Promise((resolve,reject)=>{gm.xmlHttpRequest({method:'POST',url:origin+path,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},data:JSON.stringify(value),timeout:10000,onload:response=>{try{resolve({status:response.status,value:JSON.parse(response.responseText)});}catch(error){reject(error);}},onerror:()=>reject(Error('Sign-in request failed')),ontimeout:()=>reject(Error('Sign-in request timed out'))});});
   const wait=promise=>Promise.race([promise,stopped]);
   try{
-   if(typeof gm?.xmlHttpRequest!=='function'||typeof gm?.openInTab!=='function')throw Error('Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.');
+   if(typeof gm?.xmlHttpRequest!=='function')throw Error('Google sync requires private userscript storage and GM.xmlHttpRequest.');
    const ios=/iPhone|iPad|iPod/.test(window.navigator?.userAgent||'')||(window.navigator?.platform==='MacIntel'&&window.navigator?.maxTouchPoints>1);
-   if(!ios&&!resumeState)popup=window.open?.('about:blank','_blank','popup,width=560,height=700');
-   pairingNotice.textContent=resumeState?'Completing Google sign-in\u2026':ios?'Opening Google sign-in\u2026':'Sign-in page opened in a new tab. Waiting for Google sign-in\u2026';pairingNotice.append(cancel);
+
+   pairingNotice.textContent=resumeState?'Completing Google sign-in\u2026':'Opening Google sign-in\u2026';pairingNotice.append(cancel);
    deadline=environment.setTimeout(()=>stop('Google sign-in timed out. Please try again.'),300000);
    const store=await wait(pairingPromise);
-   if(!store.durable)throw Error('Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.');
+   if(!store.durable)throw Error('Google sync requires private userscript storage and GM.xmlHttpRequest.');
    const state=resumeState?.state||btoa(String.fromCharCode(...environment.crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
    activeState=state;
    await wait(gm.setValue('photos-swipe-google-state',state));
    const previous=await wait(store.settings());
    if(!resumeState){
-    const session=await wait(privateRequest('/auth/session',{state,name:ios?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token));
+    const session=await wait(privateRequest('/auth/session',{state,automatic:true,name:ios?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token));
     if(session.status!==200)throw Error('Could not start Google sign-in');
     const target=new URL(session.value.url);
-    if(ios||!popup){target.searchParams.set('return',location.href);window.location.href=target.href;navigating=true;return;}
-    popup.location.href=target.href;
+    target.searchParams.set('return',location.href);
+    await wait(writes.flush());if(writes.pending)throw Error('Local changes could not be saved. Please retry sign-in after saving.');
+    try{window.location.href=target.href;navigating=true;return;}catch{}
+    target.searchParams.delete('return');
+    popup=window.open?.(target.href,'_blank','popup,width=560,height=700')||gm.openInTab?.(target.href,{active:true});
+    if(!popup)throw Error('Could not open Google sign-in. Please try again.');
+    pairingNotice.textContent='Sign-in page opened. Waiting for Google sign-in\u2026';pairingNotice.append(cancel);
    }
    let claim;
    while(!cancelled){
@@ -1446,11 +1321,13 @@ function mountPhotosSwipe(environment) {
     if(sheet.hidden)throw Error('Sign-in cancelled');
     if(await wait(gm.getValue('photos-swipe-google-state'))!==state)throw Error('Sign-in cancelled');
     try{claim=await wait(privateRequest('/auth/poll',{state,...(claimCode?{code:claimCode}:{})},previous.token));}catch(error){if(cancelled)throw error;continue;}
+    if(claim.status===400||claim.status===401)throw Error('Google sign-in failed. Please try again.');
     if(claim.status!==200)continue;
     if(claim.value.status==='done')break;
     if(claim.value.status!=='pending')throw Error(claim.value.error||(claim.value.status==='expired'?'Google sign-in timed out. Please try again.':'Google sign-in failed. Please try again.'));
    }
    const {status,...credentials}=claim.value;
+   await wait(syncRunning);
    await wait(store.saveSettings({url:origin,...credentials,onboardingDismissed:true}));
    syncClient.configure({url:origin,...credentials});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(credentials);await synchronize();
   }catch(error){pairingNotice.textContent=error.message;}finally{
@@ -1465,47 +1342,12 @@ function mountPhotosSwipe(environment) {
   const target=new URL(location.href),fragment=new URLSearchParams(target.hash.slice(1)),state=fragment.get('photos-swipe-state'),code=fragment.get('photos-swipe-code');
   if(fragment.has('photos-swipe-code')){target.hash=fragment.get('photos-swipe-return-hash')||'';window.history?.replaceState(null,'',target.href);}
   const stored=await environment.GM?.getValue('photos-swipe-google-state');
-  if(state===stored&&/^[A-Za-z0-9_-]{43}$/.test(state||'')&&/^[A-Za-z0-9_-]{43}$/.test(code||''))await signInGoogle({state,code});
+  if(/^[A-Za-z0-9_-]{43}$/.test(stored||''))await signInGoogle({state:stored,...(state===stored&&/^[A-Za-z0-9_-]{43}$/.test(code||'')?{code}:{})});
+  else if(stored){await environment.GM.deleteValue('photos-swipe-google-state');pairingNotice.textContent='Google sign-in failed. Please try again.';}
  }catch(error){pairingNotice.textContent=error.message;}};
- const clearCredentials=async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,token:'',unpaired:true});$('sync-token').value='';syncEnabled=false;unpairedBanner.hidden=false;};
- const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,unpaired:clearCredentials,status:value=>{syncSummary=value;syncStatus.textContent=value;const failed=/saved locally; retry|unpaired/i.test(value);gear.classList.toggle('gear-error',failed);gear.setAttribute('aria-label',failed?'Settings \u00b7 sync error':'Settings');if(failed)message(value);pairedNotice.hidden=!value.includes('Device paired');}});
+ const clearCredentials=async()=>{const store=await pairingPromise,settings=await store.settings();await store.saveSettings({...settings,token:'',email:'',unpaired:true});syncEnabled=false;showSyncAccount({});};
+ const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,unpaired:clearCredentials,status:value=>{syncSummary=value;syncStatus.textContent=value;const failed=/saved locally; retry|unpaired/i.test(value);gear.classList.toggle('gear-error',failed);gear.setAttribute('aria-label',failed?'Settings \u00b7 sync error':'Settings');if(failed)message(value);}});
  void resumeGoogleSignIn();
- async function showDevices(){
-  const result=await syncClient.devices();devicesList.replaceChildren();
-  for(const device of result.devices.filter(device=>device.revoked_at==null).sort((a,b)=>b.created_at-a.created_at)){
-   const row=document.createElement('div'),label=document.createElement('p'),rename=document.createElement('button'),revoke=document.createElement('button');
-   const minutes=Math.max(0,Math.floor((Date.now()/1000-device.last_seen_at)/60));
-   label.textContent=`${device.name} \u00b7 ${device.platform} \u00b7 Paired ${new Date(device.created_at*1000).toLocaleDateString('en-US',{month:'short',day:'numeric'})} \u00b7 Last seen ${minutes<1?'just now':`${minutes} min ago`}${device.id===result.deviceId?' \u00b7 This device':''}${device.is_legacy?' \u00b7 Legacy shared token \u00b7 Shared in chat; revoke once your devices are paired.':''}`;
-   rename.textContent='Rename';rename.onclick=()=>{const input=document.createElement('input'),submit=document.createElement('button');input.value=device.name;input.maxLength=40;input.setAttribute('aria-label','Device name');submit.textContent='Save name';submit.onclick=()=>run(async()=>{const name=input.value.trim();if(!name||name.length>40||/[\p{Cc}\p{Cf}<>]/u.test(name))throw Error('Enter a plain text name of 1\u201340 characters.');await syncClient.rename(device.id,name);await showDevices();});row.append(input,submit);rename.disabled=true;};
-   revoke.textContent='Revoke';revoke.onclick=()=>{if(window.confirm(`Revoke ${device.name}? It will stop syncing immediately.`))return run(async()=>{await syncClient.revoke(device.id);if(device.id===result.deviceId){await clearCredentials();syncClient.configure({});devicesList.replaceChildren();}else await showDevices();});};row.append(label,rename,revoke);devicesList.append(row);
-  }
- }
- refreshDevices.onclick=()=>run(showDevices);devicesPanel.ontoggle=()=>{if(devicesPanel.open&&syncEnabled)return run(showDevices);};
- revokeOthers.onclick=()=>{if(window.confirm('Revoke all other devices? They will stop syncing immediately, including the legacy shared token.'))return run(async()=>{await syncClient.revokeOthers();await showDevices();});};
- pairAgain.onclick=()=>{openSettings();settingsPanel.open=true;pairingPanel.open=true;$('pair-code').focus();};dismissUnpaired.onclick=()=>{unpairedBanner.hidden=true;};pairedNotice.onclick=()=>{openSettings();settingsPanel.open=true;devicesPanel.open=true;return run(showDevices);};
- let pendingPairSettings;
- pairSubmit.onclick=async()=>{
-  if(busy||pairSubmit.disabled){pairFeedback.textContent='Pairing is already in progress.';return;}
-  busy=true;controls();pairFeedback.textContent='Pairing\u2026';
-  activeOperation=(async()=>{
-  try{
-   if(!pendingPairSettings){
-    const previous=await (await pairingPromise).settings(),url=$('sync-url').value.trim()||previous.url||'https://photoswiper-sync.sidlakkoju.workers.dev',code=$('pair-code').value.replace(/\s/g,''),name=$('pair-name').value.trim()||'New browser';
-    const result=await syncClient.pair(url,code,name,window.navigator?.platform||'Browser');
-    pendingPairSettings={url:new URL(url).origin,token:result.token,onboardingDismissed:true};
-   }
-   await syncRunning;
-   const settings=pendingPairSettings,wasSyncEnabled=syncEnabled;syncEnabled=false;
-   try{await (await pairingPromise).saveSettings(settings);}catch(error){syncEnabled=wasSyncEnabled;throw error;}
-   pendingPairSettings=null;
-   $('sync-url').value=settings.url;$('sync-token').value='';$('sync-token').placeholder='Leave blank to keep saved token';syncClient.configure(settings);syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;unpairedBanner.hidden=true;
-   message(idleMessage());
-   pairFeedback.textContent='Device paired. Sync will resume when this tab can access local progress.';
-   if(!leaseError&&lockedAccount)await synchronize();
-  }catch(error){pairFeedback.textContent=pendingPairSettings?`${error.message}. Device claimed; choose Pair and sync to retry saving.`:error.message;}finally{busy=false;controls();}
-  })();
-  await activeOperation;activeOperation=null;
- };
  let pageActive=true,suspendingPromise=null,resumeOpening=false;
  let sessionClosing=false;
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false;
@@ -1584,7 +1426,7 @@ function mountPhotosSwipe(environment) {
   assertLockedAccount();
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit','google-sign-in','google-settings','google-sign-in-cancel'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit','google-sign-in','google-settings','google-sign-in-cancel'].includes(button.id))button.disabled=busy||!identity||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer||sessionClosing||!pageVisible()||$('overlay').hidden)return;
   leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
@@ -1930,18 +1772,17 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
     inspected=null;focused=null;clearMedia();videoURLs.clear();previousKey=null;
    }
    identity=result.data;$('account').textContent=identity.label;db=await database();
-   let settings={};try{settings=await (await pairingPromise).settings();}catch(error){pairingNotice.textContent=`Pairing storage unavailable: ${error.message}`;}unpairedBanner.hidden=!settings.unpaired;
-   $('sync-url').value=settings.url||'';$('sync-token').value='';$('sync-token').placeholder=settings.token?'Leave blank to keep saved token':'Enter sync token';
+   let settings={},settingsError;try{settings=await (await pairingPromise).settings();}catch(error){settingsError=error;}
    syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
-   settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;syncLocal.hidden=syncEnabled;
-   if(settings.email)showSyncAccount(settings);
+   settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;
+   showSyncAccount(settings);if(settingsError)pairingNotice.textContent=`Sync storage unavailable: ${settingsError.message}`;
    if(!await renewLease(true,claim))return;
    const sessionGeneration=leaseGeneration;
    if(!changed){
     await writes.flush();
     if(writes.pending){if(!writeConflict)message('Local changes are still pending. Close and reopen to retry saving.');return;}
    }
-   if(!receivingPanel||receivingPanel.hidden)$('close').focus();message('Reading local progress\u2026');
+   $('close').focus();message('Reading local progress\u2026');
    state=await db.read(identity.account);writeRevision=state.revision;persistedItems=state.items;
    resume=await db.resume(identity.account);$('filter').value=resume.filter||'all';$('sort').value=resume.sort||'flashbacks';reviewEvery.value=String(resume.reviewEvery||25);deleteMethod.value='trash';trashOptIn.checked=true;focused=resume.currentId||null;inspected=resume.inspected&&state.items.some(item=>item.mediaKey===focused)?focused:null;const missing=focused&&!state.items.some(item=>item.mediaKey===focused&&item.state==='active');if(missing){focused=null;inspected=null;}
    if(syncEnabled)await synchronize();
@@ -2006,11 +1847,8 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  function toggleEnlarge(){swipeFeedback.reset();const before=$('card').getBoundingClientRect?.();const expanded=$('card').classList.toggle('expanded');updateVideoControls();if($('enlarge').setAttribute)$('enlarge').setAttribute('aria-label',expanded?'Exit fullscreen':'Fullscreen photo');if($('card').animate&&!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)$('card').animate([{transform:before?`translate(${before.left-$('card').getBoundingClientRect().left}px,${before.top-$('card').getBoundingClientRect().top}px) scale(${before.width/$('card').getBoundingClientRect().width},${before.height/$('card').getBoundingClientRect().height})`:'scale(.92)',transformOrigin:'top left'},{transform:'none',transformOrigin:'top left'}],{duration:350,easing:'cubic-bezier(.34,1.56,.64,1)'});refreshPreviews();}
  function refreshPreviews(){const next=underCard.querySelector('img'),candidate=state.items.find(item=>item.mediaKey===next?.dataset?.key);if(candidate)next.src=previewSource(candidate.thumbUrl);if($('overlay').hidden)return;const item=current(),media=$('media').querySelector('img')||$('media').querySelector('video');if(item&&item.mediaKey===shown&&media?.tagName===(item.type==='video'?'VIDEO':'IMG')){const url=previewSource(item.thumbUrl);if(item.type==='video')media.poster=url;else media.src=url;}preloadReview(item);}
  window.addEventListener('resize',refreshPreviews);
- $('sync-save').onclick=()=>run(async()=>{const previous=await (await pairingPromise).settings();const url=$('sync-url').value.trim();const normalized=url?new URL(url).origin:'';const settings={...previous,...validateSyncSettings(url,$('sync-token').value||(normalized===previous.url?previous.token||'':''))};if(settings.token)delete settings.unpaired;await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});$('sync-token').value='';if(settings.token)unpairedBanner.hidden=true;syncEnabled=!!(settings.url&&settings.token);onboarding.hidden=true;syncLocal.hidden=syncEnabled;syncClient.configure(settings);await synchronize();settingsPanel.open=true;message(idleMessage());});
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
- let receivingPanel;
- const receivePairing=manual=>{if(!manual&&/^#pswipe-pair=([A-Za-z0-9_-]{22})(?:&origin=([^&]+))?$/.test(location.hash||'')){receivingPanel?.remove();receivingPanel=null;}else if(!manual)return;if(receivingPanel){receivingPanel.hidden=false;(receivingPanel.querySelector('#pairing-short-code')||receivingPanel.querySelector('input')).focus();return receivingPanel;}return receivingPanel=receivePairingLink({document,parent:root,location:manual?{...location,hash:''}:location,window,fetch:environment.syncFetch||environment.fetch,saveSettings:async settings=>{await (await pairingPromise).saveSettings(settings);},onPaired:async()=>{await openingPromise;await open();},onClose:suppressViewerShortcuts,manual,url:$('sync-url').value.trim()||undefined});};
- const pairThis=document.createElement('button');pairThis.textContent='Pair this device';settingsPanel.append(pairThis);pairThis.onclick=onboardPair.onclick;receivePairing(false);
+
  window.addEventListener('hashchange',()=>receivePairing(false));
  $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
@@ -2051,7 +1889,6 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  window.addEventListener('focus',async()=>{if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){await refreshLease();if(!otherTab)await synchronize();}});
  document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();clearPreviewWindow();dropWarmVideo();}else{pageActive=true;if(openingPromise&&!$('overlay').hidden)resumeOpening=true;else if(leaseRecoveryPending&&!identity&&!$('overlay').hidden&&!closingPromise)open();if(identity&&!$('overlay').hidden)resumeLease();}});
  window.addEventListener('pageshow',()=>{pageActive=true;if(!document.hidden&&!$('overlay').hidden){if(openingPromise)resumeOpening=true;return open();}});
- const activePairingDialog=()=>!pairingModal.modal.hidden?pairingModal.modal:receivingPanel&&!receivingPanel.hidden?receivingPanel:null;
  function editingFieldFocused(event){
   const editable=element=>['INPUT','SELECT','TEXTAREA'].includes(element?.tagName)||element?.isContentEditable;
   const focused=[document.activeElement,root.activeElement];
@@ -2059,7 +1896,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   return [...focused,event.target,...(event.composedPath?.()||[])].some(editable);
  }
  function handleViewerSpace(event){
-  if(activePairingDialog()||!sheet.hidden||!reviewPanel.hidden)return false;
+  if(!sheet.hidden||!reviewPanel.hidden)return false;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
   if(editingFieldFocused(event))return false;
   event.preventDefault();event.stopImmediatePropagation();
@@ -2070,8 +1907,6 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  window.addEventListener('keyup',handleViewerSpace,true);
  window.addEventListener('keydown',event=>{
-  const dialog=activePairingDialog();
-  if(dialog){if(event.key==='Tab'){const focusable=[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled)')].filter(element=>element.getClientRects().length);const index=focusable.indexOf(root.activeElement),next=event.shiftKey?(index<=0?focusable.length-1:index-1):(index+1)%focusable.length;event.preventDefault();event.stopImmediatePropagation();focusable[next]?.focus();}else if(!dialog.contains(root.activeElement)){event.preventDefault();event.stopImmediatePropagation();dialog.querySelector('button:not(:disabled),input:not(:disabled)')?.focus();}if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();if(dialog===pairingModal.modal)pairingModal.close();else dialog.onkeydown(event);}return;}
   if(event.key==='Escape'&&!$('overlay').hidden){event.preventDefault();event.stopImmediatePropagation();if(!sheet.hidden)closeSettings();else if(!reviewPanel.hidden){if(previewKey){previewKey=null;renderTrashReview();}else{reviewPanel.hidden=true;renderTrashReview();reviewButton.focus();}}else if($('card').classList.contains('expanded'))toggleEnlarge();else close();return;}
   if((!sheet.hidden||!reviewPanel.hidden)&&event.key!=='Tab'){event.stopImmediatePropagation();return;}
   if(handleViewerSpace(event))return;
