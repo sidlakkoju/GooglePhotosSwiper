@@ -445,3 +445,25 @@ for(const openerMode of ['same-tab','opener-less tab'])test(`userscript ${opener
  const claim=await privateRequest({state,code});assert.equal(claim.status,200);assert.equal((await claim.json()).status,'done');
  assert.equal((await (await privateRequest({state,code})).json()).status,'expired');
 });
+
+for(const bearer of [undefined,'legacy-test'])test(`automatic return keeps secrets off Photos and claims privately without cookies (${bearer||'new device'})`,async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='P'.repeat(43),claimSecret='K'.repeat(43),target='https://photos.google.com/u/2/?test=1#album';
+ assert.equal((await request(env,'/auth/session',{state,automatic:true,claimSecret,name:'Safari',platform:'iPhone'},bearer)).status,200);
+ const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);
+ const html=await response.text(),script=html.match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;
+ assert.ok(!html.includes(claimSecret));
+ runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},fetch:async(path,options)=>request(env,path,JSON.parse(options.body)),encodeURIComponent,window:{opener:null,location:{replace:value=>returned=value}}});
+ const pending=await env.DB.prepare('SELECT nonce,private_claim_hash FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ assert.deepEqual(new Uint8Array(pending.private_claim_hash),await hash(claimSecret));
+ await callback({credential:await token(pending.nonce)});
+ assert.equal(returned,'/auth/return?state='+state);
+ const redirect=await googleAuthRequest(new Request(syncOrigin+returned),env);assert.equal(redirect.status,302);assert.equal(redirect.headers.get('Location'),target);
+ const deviceCount=env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n;
+ const poll=value=>handleGoogleAuthRequest(new Request(syncOrigin+'/auth/poll',{method:'POST',headers:bearer?{Authorization:'Bearer '+bearer}:{},body:JSON.stringify({state,...value})}),env);
+ for(const value of [{},{claimSecret:'X'.repeat(43)},{claimSecret:state}])assert.equal((await poll(value)).status,401);
+ assert.equal((await request(env,'/auth/poll',{state},bearer)).status,401);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,deviceCount);
+ const responses=await Promise.all([poll({claimSecret}),poll({claimSecret})]);
+ const claims=await Promise.all(responses.map(response=>response.json()));assert.equal(claims.filter(value=>value.status==='done').length,1);
+ assert.equal((await (await poll({claimSecret})).json()).status,'expired');
+});

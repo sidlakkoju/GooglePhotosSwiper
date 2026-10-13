@@ -34,10 +34,11 @@ export async function googleAuthRequest(request,env){
  if(!db)return json({error:'Database unavailable'},500);
  if(url.pathname==='/auth/session'&&request.method==='POST'){
   const value=await request.json();if(!/^[A-Za-z0-9_-]{43}$/.test(value.state)||typeof value.name!=='string'||value.name.length>40||typeof value.platform!=='string'||value.platform.length>40)return json({error:'Invalid session'},400);
+  if(value.claimSecret!==undefined&&(value.automatic!==true||!/^[A-Za-z0-9_-]{43}$/.test(value.claimSecret)))return json({error:'Invalid claim proof'},400);
   const device=await authenticate(request,env);if(request.headers.has('Authorization')&&!device)return json({error:'Unauthorized'},401);
   const mapping=device?await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(device.id).first():null;
   await db.prepare('DELETE FROM google_pending WHERE expires_at <= ?').bind(now).run();
-  const nonce=random();await db.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,space,name,platform,login_hint,source_scope,source_device,state_claim) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(await hash(value.state),nonce,now+300,device?(mapping?.space||'legacy'):null,value.name,value.platform,typeof value.loginHint==='string'&&value.loginHint.length<=254?value.loginHint:null,typeof value.sourceScope==='string'&&/^[A-Za-z0-9_-]{1,256}$/.test(value.sourceScope)?value.sourceScope:'default',device?.id||null,value.automatic===true?1:0).run();
+  const nonce=random();await db.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,space,name,platform,login_hint,source_scope,source_device,state_claim,private_claim_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(await hash(value.state),nonce,now+300,device?(mapping?.space||'legacy'):null,value.name,value.platform,typeof value.loginHint==='string'&&value.loginHint.length<=254?value.loginHint:null,typeof value.sourceScope==='string'&&/^[A-Za-z0-9_-]{1,256}$/.test(value.sourceScope)?value.sourceScope:'default',device?.id||null,value.automatic===true?1:0,value.claimSecret?await hash(value.claimSecret):null).run();
   return json({url:syncOrigin+'/auth/start?state='+value.state});
  }
  const browserSecret=request.headers.get('Cookie')?.match(/(?:^|;\s*)photos-swipe-browser=([A-Za-z0-9_-]{43})(?:;|$)/)?.[1];
@@ -91,7 +92,13 @@ export async function googleAuthRequest(request,env){
    if(pending.expires_at<=now||pending.claimed_at!==null)return json({status:'expired'});
    if(pending.completed_at===-2)return json({status:'failed',error:'Google sign-in failed. Please try again.'});
    if(pending.completed_at===null||pending.completed_at===-1)return json({status:'pending'});
-   if(value.code===undefined){if(pending.state_claim!==1)return json({status:'pending'});if(!await browserMatches(pending))return json({error:'Unauthorized'},401);}
+   if(value.code===undefined){
+    if(pending.state_claim!==1)return json({status:'pending'});
+    if(pending.private_claim_hash){
+     const proof=await hash(typeof value.claimSecret==='string'?value.claimSecret:'');
+     if(proof.length!==pending.private_claim_hash.length||!proof.every((byte,index)=>byte===pending.private_claim_hash[index]))return json({error:'Unauthorized'},401);
+    }else if(!await browserMatches(pending))return json({error:'Unauthorized'},401);
+   }
    if(value.code!==undefined&&(typeof value.code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.code)||!await db.prepare('SELECT state_hash FROM google_pending WHERE state_hash = ? AND claim_hash = ?').bind(digest,await hash(value.code)).first()))throw Error('Invalid code');
   }
   const linked=pending.space?await db.prepare('SELECT sub FROM google_accounts WHERE space = ?').bind(pending.space).first():null;

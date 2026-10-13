@@ -56,7 +56,7 @@ async function googleFixture(outcome='done',options={}){
  vm.runInNewContext('let cancelGoogleSignIn=null;'+ui.slice(ui.indexOf(' const openSettings='),ui.indexOf(' const openReview='))+ui.slice(start,end),context);
  Object.assign(context,{busy:false,otherTab:false,syncEnabled:false,pairSubmit:{},root:{querySelectorAll:()=>[button,settingsButton,...notice.children]},pairingModal:{modal:{contains:()=>false}},receivingPanel:null,$:()=>({setAttribute(){}})});
  vm.runInNewContext(ui.split('\n').find(line=>line.includes(' function controls()'))+'\nglobalThis.refreshControls=controls;',context);
- if(options.resume){values.set('photos-swipe-google-state','r'.repeat(43));if(options.fragment)context.location.href+='#photos-swipe-state='+ (options.mismatchedState?'s':'r').repeat(43)+'&photos-swipe-code='+ 'c'.repeat(43)+'&photos-swipe-return-hash=album';}
+ if(options.resume){values.set('photos-swipe-google-claim-secret','p'.repeat(43));values.set('photos-swipe-google-state','r'.repeat(43));if(options.fragment)context.location.href+='#photos-swipe-state='+ (options.mismatchedState?'s':'r').repeat(43)+'&photos-swipe-code='+ 'c'.repeat(43)+'&photos-swipe-return-hash=album';}
  const pending=options.resume?vm.runInNewContext('resumeGoogleSignIn()',context):button.onclick();
  const flush=()=>new Promise(resolve=>setImmediate(resolve));await flush();
  const deliverCode=(overrides={})=>{for(const listener of messageListeners)listener({origin:'https://photoswiper-sync.sidlakkoju.workers.dev',source:popup,data:{type:'photos-swipe-google-sign-in',state:values.get('photos-swipe-google-state'),code:'c'.repeat(43)},...overrides});};
@@ -124,7 +124,7 @@ for(const ios of [false,true])test('same-tab sign-in is primary and preserves st
  const f=await googleFixture('done',{ios,sameTab:true});await f.pending;
  assert.equal(f.opened,undefined);assert.equal(f.requests.length,1);assert.equal(f.context.window.location.href,'https://worker.example/auth/start?return=https%3A%2F%2Fphotos.google.com%2Fu%2F0%2F');
  const state=await f.context.environment.GM.getValue('photos-swipe-google-state');assert.equal(state.length,43);
- assert.equal(f.requests[0].headers.Authorization,'Bearer previous-token');assert.equal(JSON.parse(f.requests[0].data).automatic,undefined);
+ assert.equal(f.requests[0].headers.Authorization,'Bearer previous-token');assert.equal(JSON.parse(f.requests[0].data).automatic,true);
  await f.button.onclick();assert.equal(f.requests.length,1);assert.equal(await f.context.environment.GM.getValue('photos-swipe-google-state'),state);
 });
 test('pending state without a return code stays available for retry',async()=>{
@@ -151,3 +151,12 @@ test('same-tab return consumes the one-time code without a browser cookie and re
 });
 
 test('pair hand-off uses a hash-bound CSP, never fetches and exposes only valid Safari links',async()=>{for(const code of ['', 'invalid', 'abcdefghijklmnopqrstuv']){const response=await pairPage(new Request('https://worker.example/pair'));const html=await response.text(),script=html.match(/<script>(.*?)<\/script>/s)[1];assert.equal(response.headers.get('Referrer-Policy'),'no-referrer');assert.equal(response.headers.get('Cache-Control'),'no-store');assert.ok(response.headers.get('Content-Security-Policy').includes("script-src 'sha256-"+createHash('sha256').update(script).digest('base64')+"'"));const nodes={open:{hidden:true},copy:{hidden:true},status:{}};vm.runInNewContext(script,{location:{hash:'#'+code,origin:'https://worker.example'},document:{getElementById:id=>nodes[id]},navigator:{clipboard:{writeText:async value=>assert.equal(value,nodes.open.href)}}});assert.equal(nodes.open.hidden,code.length!==22);if(code.length===22){assert.equal(nodes.open.href,'https://photos.google.com/#pswipe-pair='+code+'&origin=https%3A%2F%2Fworker.example');await nodes.copy.onclick();}}});
+
+test('same-tab claim proof stays in private storage and resumes without cookies or URL secrets',async()=>{
+ const started=await googleFixture('done',{sameTab:true});await started.pending;
+ const session=JSON.parse(started.requests[0].data),secret=await started.context.environment.GM.getValue('photos-swipe-google-claim-secret');
+ assert.equal(session.automatic,true);assert.match(secret,/^[A-Za-z0-9_-]{43}$/);assert.equal(session.claimSecret,secret);assert.notEqual(secret,session.state);assert.ok(!started.context.window.location.href.includes(secret));
+ const returned=await googleFixture('done',{resume:true,withholdCode:true});await returned.pending;
+ const poll=JSON.parse(returned.requests[0].data);assert.equal(poll.claimSecret,'p'.repeat(43));assert.equal(poll.code,undefined);assert.equal(returned.requests[0].headers.Cookie,undefined);assert.equal(returned.saved.token,'new-token');
+ assert.equal(await returned.context.environment.GM.getValue('photos-swipe-google-claim-secret'),undefined);
+});
