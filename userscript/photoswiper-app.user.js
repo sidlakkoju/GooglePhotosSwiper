@@ -1311,6 +1311,7 @@ function mountPhotosSwipe(environment) {
     target.searchParams.set('return',location.href);
     await wait(writes.flush());if(writes.pending)throw Error('Local changes could not be saved. Please retry sign-in after saving.');
     try{window.location.href=target.href;navigating=true;return;}catch{}
+    target.searchParams.delete('return');
     popup=window.open?.(target.href,'_blank','popup,width=560,height=700')||gm.openInTab?.(target.href,{active:true});
     if(!popup)throw Error('Could not open Google sign-in. Please try again.');
     pairingNotice.textContent='Sign-in page opened. Waiting for Google sign-in\u2026';pairingNotice.append(cancel);
@@ -1348,7 +1349,7 @@ function mountPhotosSwipe(environment) {
  }catch(error){pairingNotice.textContent=error.message;}};
  const clearCredentials=async()=>{const store=await pairingPromise,settings=await store.settings();await store.saveSettings({...settings,token:'',email:'',unpaired:true});syncEnabled=false;showSyncAccount({});};
  const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,unpaired:clearCredentials,status:value=>{syncSummary=value;syncStatus.textContent=value;const failed=/saved locally; retry|unpaired/i.test(value);gear.classList.toggle('gear-error',failed);gear.setAttribute('aria-label',failed?'Settings \u00b7 sync error':'Settings');if(failed)message(value);}});
- void resumeGoogleSignIn();
+ const googleSignInResumed=resumeGoogleSignIn();
  let pageActive=true,suspendingPromise=null,resumeOpening=false;
  let sessionClosing=false;
  let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false;
@@ -1755,6 +1756,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   try{await Promise.race([animation.finished,new Promise(resolve=>{timer=window.setTimeout(()=>{animation.finish();resolve();},350);})]);}catch{}finally{window.clearTimeout(timer);}
  }
  async function openSession(claim=false) {
+  await googleSignInResumed;
   const requestedGeneration=leaseGeneration;
   if(closingPromise){await closingPromise;if(requestedGeneration!==leaseGeneration)return;}
   await suspendingPromise;

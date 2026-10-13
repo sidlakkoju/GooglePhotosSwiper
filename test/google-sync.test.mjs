@@ -396,21 +396,21 @@ for(const automatic of [undefined,false])test(`Photos return URL cannot enable s
  assert.equal((await (await request(env,'/auth/poll',{state,code})).json()).status,'expired');
 });
 
-test('a shared automatic sign-in link cannot be claimed by its creator',async()=>{
+for(const claimSecret of [undefined,'K'.repeat(43)])test('a shared automatic sign-in link cannot be claimed by its creator '+!!claimSecret,async()=>{
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='S'.repeat(43);
- await request(env,'/auth/session',{state,automatic:true,name:'Browser',platform:'test'});
+ await request(env,'/auth/session',{state,automatic:true,claimSecret,name:'Browser',platform:'test'});
  await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
  const attackerCookie=env.browserCookie;
  await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
  const credential=await token(pending.nonce);
- const attackerRequest=path=>new Request(syncOrigin+path,{method:'POST',headers:{Origin:syncOrigin,Cookie:attackerCookie},body:JSON.stringify({state,credential})});
+ const attackerRequest=path=>new Request(syncOrigin+path,{method:'POST',headers:{Origin:syncOrigin,Cookie:attackerCookie},body:JSON.stringify({state,credential,claimSecret})});
  assert.equal((await handleGoogleAuthRequest(attackerRequest('/auth/complete'),env)).status,401);
  assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
  assert.equal((await handleGoogleAuthRequest(attackerRequest('/auth/poll'),env)).status,401);
- assert.equal((await handleGoogleAuthRequest(new Request(syncOrigin+'/auth/poll',{method:'POST',body:JSON.stringify({state})}),env)).status,401);
+ assert.equal((await handleGoogleAuthRequest(new Request(syncOrigin+'/auth/poll',{method:'POST',body:JSON.stringify({state,claimSecret})}),env)).status,401);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,0);
- assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
+ assert.equal((await (await request(env,'/auth/poll',{state,claimSecret})).json()).status,'done');
  });
 
 test('changing the browser during Google verification prevents completion',async()=>{
@@ -446,7 +446,7 @@ for(const openerMode of ['same-tab','opener-less tab'])test(`userscript ${opener
  assert.equal((await (await privateRequest({state,code})).json()).status,'expired');
 });
 
-for(const bearer of [undefined,'legacy-test'])test(`automatic return keeps secrets off Photos and claims privately without cookies (${bearer||'new device'})`,async()=>{
+for(const bearer of [undefined,'legacy-test'])test(`automatic return keeps secrets off Photos and requires the completing browser (${bearer||'new device'})`,async()=>{
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'legacy-test'},state='P'.repeat(43),claimSecret='K'.repeat(43),target='https://photos.google.com/u/2/?test=1#album';
  assert.equal((await request(env,'/auth/session',{state,automatic:true,claimSecret,name:'Safari',platform:'iPhone'},bearer)).status,200);
  const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);
@@ -462,8 +462,9 @@ for(const bearer of [undefined,'legacy-test'])test(`automatic return keeps secre
  const poll=value=>handleGoogleAuthRequest(new Request(syncOrigin+'/auth/poll',{method:'POST',headers:bearer?{Authorization:'Bearer '+bearer}:{},body:JSON.stringify({state,...value})}),env);
  for(const value of [{},{claimSecret:'X'.repeat(43)},{claimSecret:state}])assert.equal((await poll(value)).status,401);
  assert.equal((await request(env,'/auth/poll',{state},bearer)).status,401);
+ assert.equal((await poll({claimSecret})).status,401);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,deviceCount);
- const responses=await Promise.all([poll({claimSecret}),poll({claimSecret})]);
+ const responses=await Promise.all([request(env,'/auth/poll',{state,claimSecret},bearer),request(env,'/auth/poll',{state,claimSecret},bearer)]);
  const claims=await Promise.all(responses.map(response=>response.json()));assert.equal(claims.filter(value=>value.status==='done').length,1);
  assert.equal((await (await poll({claimSecret})).json()).status,'expired');
 });
