@@ -360,7 +360,7 @@ test('item revisions prevent stale undo after another tab changes or sends the s
 
 function bundleEnvironment(fault={}) {
  const nodes=new Map(),hosts=[];
- const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{setProperty(key,value){this[key]=value;}},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),add(name){this.values.add(name);},remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){for(const child of children){if(child.parentNode)child.parentNode.childNodes=child.parentNode.childNodes.filter(node=>node!==child);child.parentNode=this;child.parentElement=this;this.childNodes.push(child);}},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){for(const child of this.childNodes)child.parentNode=null;this.childNodes=[];this.append(...children);},querySelector(selector){const match=node=>selector.startsWith('.')?(node.class||'').split(' ').includes(selector.slice(1)):node.tagName===selector.toUpperCase();const visit=node=>node.childNodes?.map(child=>match(child)?child:visit(child)).find(Boolean);return visit(this)||null;},querySelectorAll(selector){const result=[];const visit=node=>{for(const child of node.childNodes||[]){if(selector.startsWith('.')&&(child.class||'').split(' ').includes(selector.slice(1)))result.push(child);visit(child);}};visit(this);return result;},getAttribute(key){return this[key]??null;},remove(){if(this.parentNode)this.parentNode.childNodes=this.parentNode.childNodes.filter(child=>child!==this);},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
+ const element=tag=>({contains(node){return this===node||this.childNodes.some(child=>child.contains?.(node));},tagName:tag.toUpperCase(),style:{setProperty(key,value){this[key]=value;}},dataset:{},childNodes:[],hidden:false,value:'',classList:{values:new Set(),add(name){this.values.add(name);},remove(name){this.values.delete(name);},toggle(name,force){if(force===false||(force===undefined&&this.values.has(name)))this.values.delete(name);else this.values.add(name);},contains(name){return this.values.has(name);}},append(...children){for(const child of children){if(child.parentNode)child.parentNode.childNodes=child.parentNode.childNodes.filter(node=>node!==child);child.parentNode=this;child.parentElement=this;this.childNodes.push(child);}},insertBefore(child,before){this.childNodes.splice(this.childNodes.indexOf(before),0,child);},replaceChildren(...children){for(const child of this.childNodes)child.parentNode=null;this.childNodes=[];this.append(...children);},querySelector(selector){const match=node=>selector.startsWith('.')?(node.class||'').split(' ').includes(selector.slice(1)):node.tagName===selector.toUpperCase();const visit=node=>node.childNodes?.map(child=>match(child)?child:visit(child)).find(Boolean);return visit(this)||null;},querySelectorAll(selector){const result=[];const visit=node=>{for(const child of node.childNodes||[]){if(selector.startsWith('.')&&(child.class||'').split(' ').includes(selector.slice(1)))result.push(child);visit(child);}};visit(this);return result;},getAttribute(key){return this[key]??null;},remove(){if(this.parentNode)this.parentNode.childNodes=this.parentNode.childNodes.filter(child=>child!==this);},setAttribute(key,value){this[key]=value;if(key==='id'){nodes.set(value,this);if(['queue-details','history-details'].includes(value))this.open=true;}if(key==='value')this.value=value;},listeners:{},addEventListener(name,handler){const previous=this.listeners[name];this.listeners[name]=previous?event=>{previous(event);handler(event);}:handler;},setPointerCapture(){},focus(){root.activeElement=this;},getBoundingClientRect(){return {width:this.id==='media'?820:300,height:440};},decode(){return Promise.resolve();},paused:true,play(){this.paused=false;this.playCalls=(this.playCalls||0)+1;return Promise.resolve();},pause(){this.paused=true;this.pauseCalls=(this.pauseCalls||0)+1;},removeAttribute(key){delete this[key];},load(){}});
 
  const root={childNodes:[],append(...children){this.childNodes.push(...children);},getElementById(id){const visit=node=>{for(const child of node.childNodes||[]){if(child.id===id)return child;const found=visit(child);if(found)return found;}return null;};return visit(this);},querySelectorAll:()=>[...nodes.values()].filter(node=>['BUTTON','SELECT'].includes(node.tagName))};
  Object.defineProperty(root,'innerHTML',{set(){throw new TypeError('TrustedHTML required');}});
@@ -811,7 +811,7 @@ test('deck videos support tap playback and swiping with native controls only whe
  assert.equal(video.paused,false);
  media.listeners.click(swipeEvent());assert.equal(video.paused,true);
  media.listeners.click(swipeEvent());assert.equal(video.paused,false);
- mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);
  mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);
  media.listeners.pointerdown(swipeEvent());media.listeners.pointermove(swipeEvent({clientX:150}));media.listeners.pointerup(swipeEvent({clientX:150}));
  const click=swipeEvent();media.listeners.click(click);assert.equal(click.prevented,true);assert.equal(click.stopped,true);
@@ -2180,15 +2180,15 @@ test('empty and filtered decks cannot latch swipe dismissal',async()=>{
  nodes.get('undo').onclick();await mounted.settle();swipe();await mounted.settle();
  assert.equal((await mounted.read()).items[0].decision,'keep');
 });
-test('deck video buttons control playback and audio and enlarge restores native controls',async()=>{
+test('deck video buttons control playback and audio and enlarge preserves timeline controls',async()=>{
  const mounted=await mountedReview([item('v',{type:'video'})],async()=>({ok:true,text:async()=>envelope('VrseUb',[['v'],'https://lh3.googleusercontent.com/video'])}));
  const media=mounted.nodes.get('media'),video=media.querySelector('video');
  const buttons=media.childNodes.filter(node=>node.dataset.videoControl);
- assert.equal(video.controls,false);assert.equal(buttons.length,2);
+ assert.equal(video.controls,false);assert.equal(buttons.length,4);
  video.paused=false;buttons[0].onclick();assert.equal(video.paused,true);
  buttons[0].onclick();assert.equal(video.paused,false);
  buttons[1].onclick();assert.equal(video.muted,false);
- mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,true);assert.ok(buttons.every(button=>button.hidden));
+ mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);assert.ok(buttons.every(button=>!button.hidden));
  mounted.nodes.get('enlarge').onclick();assert.equal(video.controls,false);assert.ok(buttons.every(button=>!button.hidden));
 });
 test('overlay stops pointer touch and wheel propagation without cancelling browser defaults',async()=>{
@@ -2764,6 +2764,27 @@ test('video resume is throttled, flushed on close and seeks after metadata on re
  const restored=reopened.nodes.get('media').querySelector('video');restored.duration=120;restored.listeners.loadedmetadata();
  assert.equal(restored.currentTime,37.25);
  assert.equal((await db.read(account)).items[0].decision,null);
+});
+
+test('enlarged video timeline seeks against its own bounds and persists through metadata restore',async()=>{
+ const fetch=async()=>({ok:true,text:async()=>envelope('VrseUb',[['synthetic-video'],'https://lh3.googleusercontent.com/synthetic-video'])});
+ const mounted=await mountedReview([item('synthetic-video',{type:'video'})],{fetch});
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const media=mounted.nodes.get('media'),video=media.querySelector('video');
+ video.duration=120;
+ mounted.nodes.get('enlarge').onclick();
+ const timeline=media.childNodes.find(node=>node.dataset.videoControl==='seek');
+ timeline.getBoundingClientRect=()=>({left:100,width:400});
+ timeline.listeners.click({clientX:400,stopPropagation(){}});
+ assert.equal(video.currentTime,90);
+ video.listeners.loadedmetadata();
+ assert.equal(video.currentTime,90);
+ assert.equal(media.childNodes.find(node=>node.dataset.videoControl==='time').textContent,'1:30 / 2:00');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ assert.equal((await db.resume(account)).video.time,90);
 });
 
 test('Tab traps focus in the shell and settings while backdrop click closes the window',async()=>{
