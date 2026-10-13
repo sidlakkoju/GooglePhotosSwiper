@@ -76,3 +76,39 @@ test('failed thumbnails are isolated by account scope',async()=>{
  const second={};await thumbnails.bind(second,item,value=>value.thumbUrl);assert.equal(second.src,item.thumbUrl);
  await second.onerror();assert.deepEqual(calls,['synthetic-account-a','synthetic-account-b']);
 });
+
+test('binds during a refresh wait for the fresh URL without requesting the cached URL',async()=>{
+ let finishRefresh;const calls=[],requests=[];
+ const refreshed=new Promise(resolve=>{finishRefresh=resolve;});
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:value=>{calls.push(value.mediaKey);return refreshed;},placeholder:image=>{image.placeholder=true;}});
+ const first={},second={set src(value){requests.push(value);}};
+ await thumbnails.bind(first,item,value=>value.thumbUrl);
+ const retry=first.onerror();
+ const binding=thumbnails.bind(second,item,value=>value.thumbUrl);
+ await Promise.resolve();
+ assert.deepEqual(requests,[]);
+ finishRefresh({...item,thumbUrl:'https://fixture.invalid/fresh'});
+ await Promise.all([retry,binding]);
+ assert.deepEqual(requests,['https://fixture.invalid/fresh']);
+ assert.deepEqual(calls,[item.mediaKey]);
+});
+test('a late error on the old URL adopts the cached refresh without poisoning later binds',async()=>{
+ const calls=[],placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:async value=>{calls.push(value.mediaKey);return {...value,thumbUrl:'https://fixture.invalid/fresh'};},placeholder:image=>{image.src=null;placeholders.push(image);}});
+ const first={},second={};
+ await Promise.all([thumbnails.bind(first,item,value=>value.thumbUrl),thumbnails.bind(second,item,value=>value.thumbUrl)]);
+ await first.onerror();
+ assert.equal(first.src,'https://fixture.invalid/fresh');
+ assert.equal(second.src,item.thumbUrl);
+ await second.onerror();
+ assert.equal(second.src,first.src);
+ const later={};await thumbnails.bind(later,item,value=>value.thumbUrl);
+ assert.equal(later.src,first.src);
+ assert.deepEqual(placeholders,[]);
+ assert.deepEqual(calls,[item.mediaKey]);
+ await second.onerror();
+ const failed={};await thumbnails.bind(failed,item,value=>value.thumbUrl);
+ assert.equal(failed.src,null);
+ assert.deepEqual(placeholders,[second,failed]);
+ assert.deepEqual(calls,[item.mediaKey]);
+});
