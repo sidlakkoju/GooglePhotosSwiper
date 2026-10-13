@@ -130,3 +130,34 @@ test('late continuation of another played memory waits for the active memory to 
  assert.deepEqual(flashbackDeck(state,structuredClone(saved),()=>0),expected);
  assert.deepEqual(saved.starts,[olderPlayed.mediaKey,newerPlayed.mediaKey]);
 });
+
+for(const source of ['failed partial load','saved first-page queue'])test(`expanded ${source} shuffles all pending memories and moves an unplayed boundary label`,()=>{
+ const recent=items.slice(28,48),state={items:recent,started:true,exhausted:false},saved=source==='failed partial load'?{}:{keys:recent.map(item=>item.mediaKey),starts:[items[28].mediaKey,items[32].mediaKey,items[40].mediaKey]};
+ if(source==='failed partial load')flashbackDeck(state,saved,()=>0,Date.now(),null,true);
+ const originalKeys=[...saved.keys];
+ state.items=items.slice(0,48);state.exhausted=true;
+ const deck=flashbackDeck(state,saved,()=>0),groups=reviewMemories(state.items),runs=[];
+ for(const row of deck){const group=groups.findIndex(memory=>memory.includes(row));if(runs.at(-1)?.group!==group)runs.push({group,items:[]});runs.at(-1).items.push(row);}
+ assert.equal(deck.length,48);
+ assert.equal(runs.length,groups.length);
+ for(const run of runs)assert.deepEqual(run.items,groups[run.group]);
+ assert.notDeepEqual(deck.slice(0,originalKeys.length).map(row=>row.mediaKey),originalKeys);
+ assert.ok(deck.slice(0,originalKeys.length).some(row=>!originalKeys.includes(row.mediaKey)));
+ assert.ok(saved.starts.includes(items[24].mediaKey));
+ assert.ok(!saved.starts.includes(items[28].mediaKey));
+ assert.deepEqual(new Set(saved.starts),new Set(groups.map(group=>group[0].mediaKey)));
+ assert.deepEqual(flashbackDeck(state,JSON.parse(JSON.stringify(saved)),()=>.99),deck);
+});
+
+test('expanding a partial deck preserves the active memory while shuffling pending memories',()=>{
+ const recent=items.slice(24,48),state={items:recent,started:true,exhausted:false},saved={};
+ const initial=flashbackDeck(state,saved,()=>0,Date.now(),null,true),played=initial[0],active=reviewMemories(recent).find(group=>group.includes(played));
+ saved.seen=[played.mediaKey];
+ state.items=items.slice(0,48).map(row=>row===played?{...row,decision:'remove'}:row);state.exhausted=true;
+ const deck=flashbackDeck(state,saved,()=>0);
+ assert.deepEqual(deck.slice(0,active.length-1),active.slice(1));
+ assert.ok(saved.starts.includes(played.mediaKey));
+ assert.ok(!saved.starts.includes(deck[0].mediaKey));
+ assert.ok(deck.slice(active.length-1,recent.length-1).some(row=>!recent.includes(row)));
+ assert.deepEqual(flashbackDeck(state,structuredClone(saved),()=>.99),deck);
+});
