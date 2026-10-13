@@ -7,7 +7,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(videoURL=async key=>({url:`video:${key}`}),decode=()=>Promise.resolve()){
  const images=[],videos=[],calls=[],sizes=[];
  const create=collection=>()=>{const element={removed:[],decodeCalls:0,decode(){this.decodeCalls++;return decode();},removeAttribute(name){this.removed.push(name);delete this[name];},pause(){this.paused=true;},load(){this.loads=(this.loads||0)+1;}};collection.push(element);return element;};
- const buffer=createReviewPreloader({createImage:create(images),createVideo:create(videos),videoURL:key=>{calls.push(key);return videoURL(key);},previewURL:(url,size)=>{sizes.push(size);return `${url}=w${size.width}-h${size.height}`;},playbackURL:url=>url});
+ const buffer=createReviewPreloader({createImage:create(images),createVideo:create(videos),videoURL:key=>{calls.push(key);return videoURL(key);},previewURL:(url,size)=>{new URL(url);sizes.push(size);return `${url}=w${size.width}-h${size.height}`;},playbackURL:url=>url});
  return {buffer,images,videos,calls,sizes};
 }
 test('screen sized lookahead decodes three photos and warms two videos and posters, deduped',async()=>{
@@ -72,4 +72,11 @@ test('review clear preserves upcoming downloads and transfers a decoded element 
  f.buffer.clear();
  assert.equal(image.src,source);
  assert.deepEqual(image.removed,[]);
+});
+
+test('clear disposes previews even when a preserved item has an invalid URL',async()=>{
+ const f=fixture(),items=[photo('a'),photo('b')];
+ f.buffer.update(items,items[0],{width:100,height:100});await tick();
+ assert.doesNotThrow(()=>f.buffer.clear([{mediaKey:'b',thumbUrl:'invalid'}],{width:100,height:100}));
+ assert.ok(f.images[0].removed.includes('src'));
 });

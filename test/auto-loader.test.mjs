@@ -75,3 +75,21 @@ test('app execution failures show the update banner and resolve gracefully',asyn
   assert.equal(env.document.documentElement.dataset.psLoaderInjected,undefined);
  }
 });
+
+for(const marker of ['psLoaded','psLoaderInjected'])for(const stage of ['cache','request','write'])test(`loader race during ${stage} with ${marker} skips update banner`,async()=>{
+ const {env,nodes}=fixture({...app,requiredLoaderVersion:'1.0.1'});
+ if(stage==='cache')env.GM.getValue=async()=>{env.document.documentElement.dataset[marker]='1';return app;};
+ if(stage==='request')env.GM.xmlHttpRequest=options=>{env.document.documentElement.dataset[marker]='1';options.onerror();};
+ if(stage==='write')env.GM.setValue=async()=>{env.document.documentElement.dataset[marker]='1';};
+ assert.equal(await startAutoLoader(env),false);
+ assert.equal(env.window.runs,undefined);
+ assert.equal(nodes.length,0);
+});
+test('install artifacts use ASCII and unique grants and connect entries',async()=>{
+ for(const name of ['photoswiper.user.js','photoswiper-loader.user.js','photoswiper-app.user.js']){
+  const source=await readFile(new URL('../userscript/'+name,import.meta.url),'utf8');
+  assert.doesNotMatch(source,/[^\x00-\x7f]/);
+  const entries=source.match(/^\/\/ @(grant|connect) .*$/gm);
+  assert.equal(new Set(entries).size,entries.length);
+ }
+});

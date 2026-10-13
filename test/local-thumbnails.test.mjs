@@ -43,7 +43,7 @@ test('refreshed URLs never enter sync progress',()=>{
  assert.equal('thumbUrl' in progress.items[0],false);assert.equal('urlFetchedAt' in progress.items[0],false);
 });
 test('remote checkpoint cannot overwrite a valid device-local thumbnail',async()=>{
- const local={...item,urlFetchedAt:1,revision:1,state:'active'};
+ const local={...item,thumbUrl:'https://fixture.invalid/device-local',urlFetchedAt:1,revision:1,state:'active'};
  const client=createSyncClient({fetch:async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{items:[{...local,thumbUrl:'https://fixture.invalid/foreign',urlFetchedAt:999}]}})})});
  client.configure({url:'https://sync.fixture.invalid',token:'synthetic-token'});
  const result=await client.sync('synthetic-account',{started:true,items:[local],history:[],syncDecisions:{},syncCheckpoint:reviewSyncProgress({started:true,items:[local]})},async value=>value);
@@ -214,4 +214,26 @@ for(const outcome of ['reject','dead'])test(`cache eviction during a ${outcome} 
   }
   assert.deepEqual(calls,[item.mediaKey]);
  }
+});
+
+test('detached strip image does not request the shared in-flight refresh',async()=>{
+ let finish;const requests=[],calls=[];
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:value=>{calls.push(value.mediaKey);return new Promise(resolve=>{finish=resolve;});},placeholder(){}});
+ const first={isConnected:true,set src(value){requests.push(['first',value]);}},second={isConnected:true,set src(value){requests.push(['second',value]);}};
+ await thumbnails.bind(first,item,value=>value.thumbUrl);
+ const retry=first.onerror();await Promise.resolve();first.isConnected=false;
+ const binding=thumbnails.bind(second,item,value=>value.thumbUrl);
+ finish({...item,thumbUrl:'https://fixture.invalid/fresh'});await Promise.all([retry,binding]);
+ assert.deepEqual(requests,[['first',item.thumbUrl],['second','https://fixture.invalid/fresh']]);assert.deepEqual(calls,[item.mediaKey]);
+});
+test('successful refreshed image can retry a later expired URL once',async()=>{
+ let count=0;const thumbnails=createLocalThumbnails({stale:()=>false,refresh:async value=>({...value,thumbUrl:`https://fixture.invalid/fresh-${++count}`}),placeholder(){}});
+ const image={};await thumbnails.bind(image,item,value=>value.thumbUrl);await image.onerror();image.onload();
+ await image.onerror();assert.equal(count,2);assert.equal(image.src,'https://fixture.invalid/fresh-2');
+ await image.onerror();const rebuilt={};await thumbnails.bind(rebuilt,item,value=>value.thumbUrl);assert.equal(rebuilt.src,undefined);
+});
+test('poster lookup retries once before filename fallback',async()=>{
+ let calls=0;const placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:()=>true,refresh:async()=>{calls++;throw Error('Fixture failure');},placeholder:(image,value)=>placeholders.push(value.name)});
+ await thumbnails.bind({},item,value=>value.thumbUrl,{retryLookup:true});assert.equal(calls,2);assert.deepEqual(placeholders,[item.name]);
 });

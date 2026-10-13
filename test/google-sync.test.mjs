@@ -30,7 +30,7 @@ async function signIn(env,state,bearer,sub='account-one'){
  const claim=await request(env,'/auth/claim',{state,code},bearer);assert.equal(claim.status,200);return claim.json();
 }
 test('Google verification accepts only signed RS256 tokens with correct audience, issuer, expiry and nonce',async()=>{
- assert.equal((await verifyGoogleToken(await token('nonce'),'nonce',fetchKeys)).sub,'account-one');
+ for(const iss of ['accounts.google.com','https://accounts.google.com'])assert.equal((await verifyGoogleToken(await token('nonce',{iss}),'nonce',fetchKeys)).sub,'account-one');
  for(const overrides of [{aud:'wrong'},{iss:'wrong'},{exp:1},{nonce:'wrong'}])await assert.rejects(verifyGoogleToken(await token('nonce',overrides),'nonce',fetchKeys));
  const other=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);
  await assert.rejects(verifyGoogleToken(await token('nonce',{},other.privateKey),'nonce',fetchKeys));
@@ -56,9 +56,23 @@ test('one-time Google claims share a sub space, isolate other accounts and prese
  assert.equal((await (await api(a,'trash-check?scope=first','POST',{ids:['photo']})).json()).safe,false);
  assert.equal((await (await api(c,'trash-check','POST',{ids:['photo']})).json()).safe,false);
 });
-test('Google migration is additive and safe to repeat without changing existing data',()=>{
- const sql=readFileSync(new URL('../worker/migrations/0004_google_sync.sql',import.meta.url),'utf8');assert.doesNotMatch(sql,/\b(DROP|DELETE|UPDATE|ALTER)\b/i);
- const db=new D1();db.sqlite.exec("INSERT INTO decisions VALUES ('default','old','keep')");db.sqlite.exec(sql);db.sqlite.exec(sql);assert.equal(db.sqlite.prepare('SELECT decision FROM decisions WHERE id = ?').get('old').decision,'keep');
+test('all migrations preserve existing data and tracked migrations are safe to rerun',()=>{
+ const sqlite=new DatabaseSync(':memory:');
+ sqlite.exec('CREATE TABLE d1_migrations (name TEXT PRIMARY KEY)');
+ const files=readdirSync(new URL('../worker/migrations/',import.meta.url)).sort();
+ const migrate=()=>{for(const file of files){
+  const sql=readFileSync(new URL('../worker/migrations/'+file,import.meta.url),'utf8');
+  assert.doesNotMatch(sql,/\b(DROP|DELETE)\b/i);
+  if(sql.includes('ALTER TABLE'))assert.match(sql,/ALTER TABLE \w+ ADD COLUMN /);
+  if(sqlite.prepare('SELECT name FROM d1_migrations WHERE name = ?').get(file))continue;
+  sqlite.exec('BEGIN');
+  try{sqlite.exec(sql);sqlite.prepare('INSERT INTO d1_migrations VALUES (?)').run(file);sqlite.exec('COMMIT');}catch(error){sqlite.exec('ROLLBACK');throw error;}
+ }};
+ migrate();sqlite.exec("INSERT INTO decisions VALUES ('default','old','keep'); INSERT INTO google_pending (state_hash,nonce,expires_at,name,platform,claim_hash,source_device) VALUES (X'01','fixture',1,'Fixture','test',X'02','fixture-device')");
+ migrate();migrate();
+ assert.equal(sqlite.prepare('SELECT decision FROM decisions WHERE id = ?').get('old').decision,'keep');
+ assert.equal(sqlite.prepare('SELECT source_device FROM google_pending').get().source_device,'fixture-device');
+ assert.equal(sqlite.prepare('SELECT count(*) AS n FROM d1_migrations').get().n,files.length);
 });
 test('two clients poll accepted per-photo decisions and retain only their own undo history',async()=>{
  const {createSyncClient}=await import('../lib/userscript-sync.mjs');
@@ -471,4 +485,16 @@ for(const bearer of [undefined,'legacy-test'])test(`automatic return delivers a 
  const claims=await Promise.all(responses.map(response=>response.json()));assert.equal(claims.filter(value=>value.status==='done').length,1);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,deviceCount+(bearer?0:1));
  assert.equal((await (await poll({claimSecret})).json()).status,'expired');
+});
+
+test('unauthenticated session creation is atomically capped and expired sessions free capacity',async()=>{
+ const env={DB:new D1()};
+ const insert=env.DB.sqlite.prepare('INSERT INTO google_pending (state_hash,nonce,expires_at,name,platform) VALUES (?,?,?,?,?)');
+ for(let index=0;index<999;index++)insert.run(Buffer.from(String(index)),'fixture',Math.floor(Date.now()/1000)+300,'Fixture','test');
+ const responses=await Promise.all(['a','b','c'].map(value=>request(env,'/auth/session',{state:value.repeat(43),name:'Fixture',platform:'test'})));
+ assert.deepEqual(responses.map(response=>response.status).sort(),[200,429,429]);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_pending').get().n,1000);
+ env.DB.sqlite.exec('UPDATE google_pending SET expires_at = 1');
+ assert.equal((await request(env,'/auth/session',{state:'d'.repeat(43),name:'Fixture',platform:'test'})).status,200);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_pending').get().n,1);
 });
