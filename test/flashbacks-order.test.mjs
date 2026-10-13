@@ -93,3 +93,19 @@ test('persisted played boundary memories continue before the remaining shuffled 
  assert.deepEqual(flashbackDeck(state,saved,()=>0).map(item=>item.mediaKey),expected);
  assert.deepEqual(saved.starts,persisted.starts);
 });
+
+ test('kept photos previously seen in Flashbacks resurface after both cooldowns',()=>{
+ const now=Date.UTC(2026,8,1),kept={...items[0],decision:'keep',lastDecisionAt:now-31*86400000,lastDecisionSwipe:0,keepCount:1},saved={keys:[],seen:[kept.mediaKey],starts:[kept.mediaKey]};
+ assert.deepEqual(flashbackDeck({items:[kept],swipeCount:499},saved,()=>0,now),[]);
+ assert.deepEqual(saved.seen,[kept.mediaKey]);
+ assert.deepEqual(flashbackDeck({items:[kept],swipeCount:500},saved,()=>0,now),[kept]);
+ assert.deepEqual(saved.seen,[]);
+ });
+ for(const split of [false,true])test(`legacy boundary resume repairs continuation with stripped seen entries: ${split}`,()=>{
+ const older=items.slice(0,4),played=items.slice(4,8).map(item=>({...item,decision:'remove'})),remaining=items.slice(8,16),saved={keys:[...remaining,...(split?older:[])].map(item=>item.mediaKey),seen:[],starts:[played[0].mediaKey,remaining[0].mediaKey,...(split?[older[0].mediaKey]:[])]};
+ const state={items:[...older,...played,...remaining],started:true,exhausted:true};
+ const expected=[...older,...remaining].map(item=>item.mediaKey);
+ assert.deepEqual(flashbackDeck(state,saved,()=>0).map(item=>item.mediaKey),expected);
+ assert.deepEqual(saved.starts,[played[0].mediaKey,remaining[0].mediaKey]);
+ assert.deepEqual(flashbackDeck(state,JSON.parse(JSON.stringify(saved)),()=>0).map(item=>item.mediaKey),expected);
+ });

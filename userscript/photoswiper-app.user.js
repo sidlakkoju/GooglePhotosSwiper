@@ -301,6 +301,7 @@ function keptEligible(item,swipes,now=Date.now()){
 function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null){
  if(state.started&&!state.exhausted)return [];
  const swipes=reviewSwipeCount(state),eligible=state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,swipes,now))),byKey=new Map(eligible.map(item=>[item.mediaKey,item]));
+ saved.seen=(saved.seen||[]).filter(key=>byKey.get(key)?.decision!=='keep');
  let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...(saved.seen||[])]),memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'));
  const unreviewed=eligible.filter(item=>!item.decision&&!known.has(item.mediaKey)),kept=eligible.filter(item=>item.decision==='keep'&&!known.has(item.mediaKey)).sort((a,b)=>a.lastDecisionAt-b.lastDecisionAt),remainingUnswiped=eligible.filter(item=>!item.decision).length;
  const allowance=remainingUnswiped?Math.max(0,Math.floor(remainingUnswiped/19)-keys.filter(key=>byKey.get(key)?.decision==='keep').length):kept.length;
@@ -308,8 +309,15 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  const fresh=memories.map(memory=>memory.filter(item=>selected.has(item.mediaKey))).filter(memory=>memory.length);
  for(let i=fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
  if(!remainingUnswiped&&!keys.length)fresh.sort((a,b)=>Math.min(...a.map(item=>item.lastDecisionAt))-Math.min(...b.map(item=>item.lastDecisionAt)));
- for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else if(fullMemory.some(item=>(saved.seen||[]).includes(item.mediaKey)))keys.unshift(...memory.map(item=>item.mediaKey));else keys.push(...memory.map(item=>item.mediaKey));}
+ for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else if(fullMemory.some(item=>(saved.seen||[]).includes(item.mediaKey)||(saved.starts||[]).includes(item.mediaKey)&&!!item.decision))keys.unshift(...memory.map(item=>item.mediaKey));else keys.push(...memory.map(item=>item.mediaKey));}
 
+ for(const group of memories){
+  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=keys.findIndex(key=>members.has(key));
+  const playedStart=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
+  if(playedStart)saved.starts=saved.starts.filter(key=>key===playedStart.mediaKey||!members.has(key));
+  if(index<0||!playedStart)continue;
+  keys=[...ordered,...keys.filter(key=>!members.has(key))];
+ }
  const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
  if(memory&&keys.includes(focused)){
   const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
@@ -317,7 +325,7 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  }
  const loadedKeys=new Set(state.items.map(item=>item.mediaKey));
  saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>loadedKeys.has(key));
- saved.starts=[...new Set([...(saved.starts||[]),...memories.filter(memory=>!memory.some(item=>known.has(item.mediaKey))).map(memory=>memory.find(item=>keys.includes(item.mediaKey))?.mediaKey).filter(Boolean)])];
+ saved.starts=[...new Set([...(saved.starts||[]),...memories.filter(memory=>!memory.some(item=>known.has(item.mediaKey)||(saved.starts||[]).includes(item.mediaKey))).map(memory=>memory.find(item=>keys.includes(item.mediaKey))?.mediaKey).filter(Boolean)])];
  return keys.map(key=>byKey.get(key));
 }
 
@@ -1859,6 +1867,12 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   }catch(error){message(error.message);}
  }
  async function undo(){if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}if(resume.flashbacks){resume.flashbacks.seen=(resume.flashbacks.seen||[]).filter(key=>key!==last.key);}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);if(last.cooldown)next.items=next.items.map(item=>item.mediaKey===last.key?{...item,...last.cooldown}:item);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
+ async function loadRequested(refresh=false){
+  let cancel;
+  const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
+  cancelLibraryLoading=cancel;
+  try{await load(refresh,cancelled);}finally{if(cancelLibraryLoading===cancel)cancelLibraryLoading=null;}
+ }
  async function load(refresh=false,cancelled=null) {
   const token=leaseGeneration;
   const assertLoadSession=()=>{if(token!==leaseGeneration||(cancelled&&sessionClosing))throw Error('Library loading session changed.');};
@@ -1877,7 +1891,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  window.addEventListener('resize',refreshPreviews);
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
 
- $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
+ $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>loadRequested());$('refresh').onclick=()=>run(()=>loadRequested(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=()=>{inspected=null;focused=null;deckItems=null;buffer.clear();render();};
  $('sort').onchange=()=>{focused=shown||null;inspected=null;deckItems=null;buffer.clear();updateOrder();render();};

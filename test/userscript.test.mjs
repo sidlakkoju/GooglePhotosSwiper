@@ -3779,3 +3779,20 @@ test('Flashbacks loads past fifty fresh cards and withholds cards until the olde
   assert.equal(mounted.nodes.get('keep').disabled,false);
  }finally{finalPage.resolve();await mounted.nodes.get('close').onclick();}
 });
+
+for(const action of ['load','refresh'])test(`Close cancels an explicit Flashbacks ${action} awaiting a library page`,async()=>{
+ let started,finish;
+ const requested=new Promise(resolve=>{started=resolve;});
+ const mounted=await mountedReview([item('a')],async(url,options)=>{
+ const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+ started();await new Promise(resolve=>{finish=resolve;});
+ return {ok:true,text:async()=>envelope(entry[0],[[], 'another-cursor'])};
+ });
+ const operation=mounted.nodes.get(action).onclick();await requested;
+ const before=await mounted.read();
+ await Promise.race([mounted.nodes.get('close').onclick(),new Promise((resolve,reject)=>setTimeout(()=>reject(Error('Close remained blocked by library loading')),1000))]);
+ assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await operation;
+ finish();await mounted.settle();
+ assert.deepEqual(await mounted.read(),before);
+});
