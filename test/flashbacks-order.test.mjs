@@ -49,14 +49,16 @@ test('switching into Flashbacks finishes the focused memory before returning to 
  assert.equal(new Set(resumed.keys).size,15);
 });
 
-test('paginated Flashbacks wait for the whole timeline and keep boundary memories together',async()=>{
+test('paginated Flashbacks build immediately, extend across years, and keep boundary memories together',async()=>{
  const {emptyReview,loadReviewPages}=await import('../lib/userscript-core.mjs');
  const rows=Array.from({length:244},(_,index)=>({mediaKey:`QA${String(index).padStart(4,'0')}`,date:new Date(Date.UTC(2008+Math.floor(index/13),0,1,0,index%13)).toISOString(),decision:null,state:'active'})).reverse();
  let state=emptyReview(),pages=0;
  const saved={},rng=random();
  await loadReviewPages({read:async()=>state,save:async next=>{
   state=next;
-  if(!state.exhausted){assert.deepEqual(flashbackDeck(state,saved,rng),[]);assert.deepEqual(saved,{});}
+  const deck=flashbackDeck(state,saved,rng);assert.ok(deck.length>0);
+  if(!state.exhausted){const boundary=reviewMemories(state.items)[0];assert.ok(boundary.every(item=>!deck.includes(item)));}
+  if(pages>1)assert.ok(deck.length>50);
   return state;
  },call:async(operation,{cursor})=>{
   assert.equal(cursor,pages?String(pages*50):null);
@@ -81,8 +83,7 @@ test('persisted played boundary memories continue before the remaining shuffled 
  const state={started:true,exhausted:false,items:[...played,...remaining],history:[]};
  let saved=JSON.parse(JSON.stringify({keys:[...played,...remaining].map(item=>item.mediaKey),seen:played.map(item=>item.mediaKey),starts:[played[0].mediaKey,remaining[0].mediaKey]}));
  const persisted=structuredClone(saved);
- assert.deepEqual(flashbackDeck(state,saved,()=>0),[]);
- assert.deepEqual(saved,persisted);
+ assert.deepEqual(flashbackDeck(state,saved,()=>0).map(item=>item.mediaKey),remaining.map(item=>item.mediaKey));
  state.items.push(...older);
  state.exhausted=true;
  const expected=[...older,...remaining].map(item=>item.mediaKey);
@@ -160,4 +161,39 @@ test('expanding a partial deck preserves the active memory while shuffling pendi
  assert.ok(!saved.starts.includes(deck[0].mediaKey));
  assert.ok(deck.slice(active.length-1,recent.length-1).some(row=>!recent.includes(row)));
  assert.deepEqual(flashbackDeck(state,structuredClone(saved),()=>.99),deck);
+});
+
+test('loading older pages preserves the shown memory and releases a complete boundary with one label',()=>{
+ const state={items:items.slice(28,48),started:true,exhausted:false},saved={},rng=random();
+ const initial=flashbackDeck(state,saved,rng),boundary=items.slice(24,32),shown=initial[0],active=reviewMemories(initial).find(group=>group.includes(shown));
+ assert.ok(initial.length>0);
+ assert.ok(boundary.every(item=>!initial.includes(item)));
+ state.items=items.slice(12,48);
+ const extended=flashbackDeck(state,saved,rng,Date.now(),shown.mediaKey);
+ assert.deepEqual(extended.slice(0,active.length),active);
+ assert.ok(extended.length>initial.length);
+ assert.ok(extended.slice(active.length,initial.length).some(item=>!initial.includes(item)));
+ const offset=extended.indexOf(boundary[0]);
+ assert.deepEqual(extended.slice(offset,offset+boundary.length),boundary);
+ assert.deepEqual(saved.starts.filter(key=>boundary.some(item=>item.mediaKey===key)),[boundary[0].mediaKey]);
+ for(const item of active){saved.seen.push(item.mediaKey);state.items=state.items.map(row=>row===item?{...row,decision:'remove'}:row);}
+ const next=flashbackDeck(state,saved,rng);
+ assert.ok(active.every(item=>!next.includes(item)));
+ assert.ok(saved.starts.includes(shown.mediaKey));
+});
+
+test('a failed later page retains the first-page deck and releases its held boundary',async()=>{
+ const {emptyReview,loadReviewPages}=await import('../lib/userscript-core.mjs');
+ let state=emptyReview(),calls=0,initial;
+ const saved={};
+ await assert.rejects(loadReviewPages({read:async()=>state,save:async next=>{state=next;initial=flashbackDeck(state,saved,()=>0);return state;},call:async()=>{
+  if(calls++)throw Error('Synthetic page failure');
+  return {items:items.slice(28,48),nextPageId:'synthetic-next'};
+ },target:Infinity}),/Synthetic page failure/);
+ assert.ok(initial.length>0);
+ const shown=initial[0],deck=flashbackDeck(state,saved,()=>0,Date.now(),shown.mediaKey,true);
+ assert.equal(deck[0],shown);
+ assert.equal(deck.length,state.items.length);
+ saved.seen.push(shown.mediaKey);state.items=state.items.map(item=>item===shown?{...item,decision:'remove'}:item);
+ assert.equal(flashbackDeck(state,saved,()=>0,Date.now(),null,true).length,state.items.length-1);
 });
