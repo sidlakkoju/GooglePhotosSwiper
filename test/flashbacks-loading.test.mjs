@@ -51,3 +51,20 @@ test('an already visible boundary stays together when older photos arrive',()=>{
  assert.deepEqual(flashbackDeck(state,saved,()=>0).slice(0,7),expected.slice(1));
  assert.ok(saved.starts.includes(shown.mediaKey));
 });
+
+for(const serialized of [false,true])test(`a visible expanded memory stays whole after another page and resume: ${serialized}`,()=>{
+ const state={items:items.slice(28),started:true,exhausted:false};
+ let saved={};
+ const shown=items[28],expected=[...items.slice(28,32),...items.slice(24,28)];
+ flashbackDeck(state,saved,()=>.99,Date.now(),null,true);
+ state.items=items.slice(16);
+ assert.deepEqual(flashbackDeck(state,saved,()=>0,Date.now(),shown.mediaKey).slice(0,8),expected);
+ if(serialized)saved=JSON.parse(JSON.stringify(saved));
+ state.items=items;
+ state.exhausted=true;
+ const deck=flashbackDeck(state,saved,()=>0,Date.now(),shown.mediaKey);
+ assert.deepEqual(deck.slice(0,8),expected);
+ assert.equal(new Set(deck).size,items.length);
+ assert.deepEqual(saved.starts.filter(key=>items.slice(24,32).some(item=>item.mediaKey===key)),[shown.mediaKey]);
+ assert.deepEqual(flashbackDeck(state,JSON.parse(JSON.stringify(saved)),()=>.99),deck);
+});
