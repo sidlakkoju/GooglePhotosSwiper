@@ -299,6 +299,7 @@ function keptEligible(item,swipes,now=Date.now()){
  return item.decision==='keep'&&Number.isFinite(item.lastDecisionAt)&&now-item.lastDecisionAt>=30*86400000*multiplier&&swipes-(item.lastDecisionSwipe||0)>=500*multiplier;
 }
 function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null,allowPartial=false){
+ const previousKeys=new Set(saved.keys||[]);
  const memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash')),boundary=state.started&&!state.exhausted&&!allowPartial?memories[0]:null;
  const boundaryStarted=boundary?.some(item=>item.mediaKey===focused||(saved.seen||[]).includes(item.mediaKey)||item.decision&&(saved.starts||[]).includes(item.mediaKey));
  const held=new Set(boundary&&!boundaryStarted?boundary.map(item=>item.mediaKey):[]);
@@ -324,7 +325,7 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  }
 
  for(const group of memories){
-  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey);
+  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.some(item=>keys.includes(item.mediaKey)&&!previousKeys.has(item.mediaKey))?group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey):keys.filter(key=>members.has(key));
   const playedStart=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
   const continuation=playedStart&&group.some(item=>!item.decision&&keys.includes(item.mediaKey)&&group.indexOf(item)<group.indexOf(playedStart));
   if(!continuation)continue;
@@ -336,14 +337,15 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
  if(memory&&keys.includes(focused)){
   const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
-  keys=[...ordered.slice(index),...keys.filter(key=>!members.has(key)),...ordered.slice(0,index)];
+  const earlier=ordered.slice(0,index),remaining=keys.filter(key=>!members.has(key));
+  keys=earlier.some(key=>!previousKeys.has(key))||earlier.length&&earlier.every(key=>keys.indexOf(key)>keys.indexOf(focused)&&(!remaining.length||keys.indexOf(key)<keys.indexOf(remaining[0])))?[...ordered.slice(index),...earlier,...remaining]:[...ordered.slice(index),...remaining,...earlier];
  }
  const loadedKeys=new Set(state.items.map(item=>item.mediaKey));
  saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>loadedKeys.has(key));
  for(const group of memories){
   const members=new Set(group.map(item=>item.mediaKey)),start=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
   if(start)continue;
-  const first=group.find(item=>keys.includes(item.mediaKey));
+  const first=byKey.get(keys.find(key=>members.has(key)));
   saved.starts=(saved.starts||[]).filter(key=>!members.has(key));
   if(first)saved.starts.push(first.mediaKey);
  }
@@ -1906,7 +1908,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   libraryFailure=null;deckItems=null;
   const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));render();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
   let result;
-  try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,maxPages,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){libraryFailure=error;deckItems=null;}throw error;}
+  try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,maxPages,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;libraryFailure=error;deckItems=null;}throw error;}
   assertLoadSession();
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
