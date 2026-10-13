@@ -2826,6 +2826,7 @@ test('continuous deck prefetches at ten cards, preserves in-flight swipes and re
   return {ok:true,text:async()=>envelope(entry[0],[keys.map(key=>[key,['https://lh3.googleusercontent.com/synthetic'],1720000000000,key+'-dedup',0,{}]),next])};
  };
  const mounted=await mountedReview([item('kept',{decision:'keep'}),item('queued',{decision:'remove'})],{fetch});
+ mounted.nodes.get('sort').value='original';mounted.nodes.get('sort').onchange();
  await mounted.click('refresh');
  for(let index=0;index<39;index++)mounted.nodes.get('keep').onclick();
  await mounted.settle();assert.deepEqual(cursors,[null]);
@@ -2876,6 +2877,7 @@ for(const scenario of ['empty','oldest','largest'])test(`prefetched cards render
   return {ok:true,text:async()=>envelope(entry[0],[keys.map(key=>[key,['https://lh3.googleusercontent.com/synthetic'],date,key+'-dedup',0,{}]),args[0]===null?'second':args[0]==='second'?'third':null])};
  };
  const mounted=await mountedReview([],{fetch});
+ mounted.nodes.get('sort').value='original';mounted.nodes.get('sort').onchange();
  try{
   await mounted.click('refresh');
   if(scenario!=='empty'){mounted.nodes.get('sort').value=scenario;mounted.nodes.get('sort').onchange();}
@@ -3748,4 +3750,69 @@ for(const event of ['pagehide','hidden'])test(`${event} releases the lease while
   release();await mounted.settle();
   assert.equal((await db.readLease(account)).owner,'synthetic-other');
  }finally{release();mounted.environment.document.hidden=false;await db.lease(account,'synthetic-other',true);await mounted.nodes.get('close').onclick();}
+});
+
+test('Flashbacks loads past fifty fresh cards and withholds cards until the oldest page arrives',async()=>{
+ const finalPage=Promise.withResolvers(),cursors=[];
+ const rows=Array.from({length:113},(_,index)=>({key:`QA${String(index).padStart(4,'0')}`,date:Date.UTC(2008+Math.floor(index/13),0,1,0,index%13)})).reverse();
+ const mounted=await mountedReview([],{fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');
+  const cursor=JSON.parse(entry[1])[0];cursors.push(cursor);
+  const offset=Number(cursor)||0;
+  if(offset===100)await finalPage.promise;
+  return {ok:true,text:async()=>envelope(entry[0],[rows.slice(offset,offset+50).map(row=>[row.key,['https://lh3.googleusercontent.com/synthetic'],row.date,`${row.key}-dedup`,0,{}]),offset+50<rows.length?String(offset+50):null])};
+ }});
+ try{
+  mounted.nodes.get('load').onclick();
+  await waitForReview(()=>cursors.length===3);
+  assert.deepEqual(cursors,[null,'50','100']);
+  assert.match(mounted.nodes.get('caption').textContent,/Loading more items/);
+  assert.equal(mounted.nodes.get('keep').disabled,true);
+  assert.equal((await mounted.read()).items.length,100);
+  finalPage.resolve();
+  await waitForReview(async()=>(await mounted.read()).exhausted);
+  await mounted.settle();
+  assert.equal((await mounted.read()).items.length,113);
+  assert.match(mounted.nodes.get('caption').textContent,/^Memory /);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+ }finally{finalPage.resolve();await mounted.nodes.get('close').onclick();}
+});
+
+for(const action of ['load','refresh'])test(`Close cancels an explicit Flashbacks ${action} awaiting a library page`,async()=>{
+ let started,finish;
+ const requested=new Promise(resolve=>{started=resolve;});
+ const mounted=await mountedReview([item('a')],async(url,options)=>{
+ const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+ started();await new Promise(resolve=>{finish=resolve;});
+ return {ok:true,text:async()=>envelope(entry[0],[[], 'another-cursor'])};
+ });
+ const operation=mounted.nodes.get(action).onclick();await requested;
+ const before=await mounted.read();
+ await Promise.race([mounted.nodes.get('close').onclick(),new Promise((resolve,reject)=>setTimeout(()=>reject(Error('Close remained blocked by library loading')),1000))]);
+ assert.equal(mounted.nodes.get('overlay').hidden,true);
+ await operation;
+ finish();await mounted.settle();
+ assert.deepEqual(await mounted.read(),before);
+});
+
+test('Flashbacks exposes saved cards after a preload page fails',async()=>{
+ const cursors=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  cursors.push(args[0]);
+  if(args[0]==='second')throw Error('Synthetic page failure');
+  return {ok:true,text:async()=>envelope(entry[0],[[['saved-photo',['https://lh3.googleusercontent.com/synthetic'],1720000000000,'saved-dedup',0,{}]],'second'])};
+ };
+ const mounted=await mountedReview([],{fetch});
+ await mounted.click('refresh');
+ await mounted.settle();
+ assert.deepEqual(cursors,[null,'second']);
+ assert.equal((await mounted.read()).exhausted,false);
+ assert.match(mounted.nodes.get('caption').textContent,/Memory 7\/3\/2024/);
+ mounted.nodes.get('keep').onclick();
+ await mounted.settle();
+ assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='saved-photo').decision,'keep');
 });

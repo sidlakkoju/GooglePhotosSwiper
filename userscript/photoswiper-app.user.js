@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.66
+// @version 1.2.67
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -298,24 +298,54 @@ function keptEligible(item,swipes,now=Date.now()){
  const multiplier=2**Math.max(0,(item.keepCount||1)-1);
  return item.decision==='keep'&&Number.isFinite(item.lastDecisionAt)&&now-item.lastDecisionAt>=30*86400000*multiplier&&swipes-(item.lastDecisionSwipe||0)>=500*multiplier;
 }
-function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null){
+function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null,allowPartial=false){
+ if(state.started&&!state.exhausted&&!allowPartial)return [];
  const swipes=reviewSwipeCount(state),eligible=state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,swipes,now))),byKey=new Map(eligible.map(item=>[item.mediaKey,item]));
- let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...(saved.seen||[])]),memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'));
+ const seen=(saved.seen||[]).filter(key=>byKey.get(key)?.decision!=='keep');
+ let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...seen]),memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'));
  const unreviewed=eligible.filter(item=>!item.decision&&!known.has(item.mediaKey)),kept=eligible.filter(item=>item.decision==='keep'&&!known.has(item.mediaKey)).sort((a,b)=>a.lastDecisionAt-b.lastDecisionAt),remainingUnswiped=eligible.filter(item=>!item.decision).length;
  const allowance=remainingUnswiped?Math.max(0,Math.floor(remainingUnswiped/19)-keys.filter(key=>byKey.get(key)?.decision==='keep').length):kept.length;
  const selected=new Set([...unreviewed,...kept.slice(0,allowance)].map(item=>item.mediaKey));
+ saved.seen=(saved.seen||[]).filter(key=>!selected.has(key)||byKey.get(key)?.decision!=='keep');
+ const headMemory=memories.find(group=>group.some(item=>item.mediaKey===keys[0]));
+ const activeMemory=headMemory?.some(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey))?headMemory:null;
+ const reshuffle=keys.length>0&&unreviewed.length>0;
  const fresh=memories.map(memory=>memory.filter(item=>selected.has(item.mediaKey))).filter(memory=>memory.length);
- for(let i=fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
+ for(let i=reshuffle?0:fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
  if(!remainingUnswiped&&!keys.length)fresh.sort((a,b)=>Math.min(...a.map(item=>item.lastDecisionAt))-Math.min(...b.map(item=>item.lastDecisionAt)));
  for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else keys.push(...memory.map(item=>item.mediaKey));}
+ if(reshuffle){
+  const pending=new Set(keys),groups=memories.map(group=>group.filter(item=>pending.has(item.mediaKey))).filter(group=>group.length);
+  for(let i=groups.length-1;i>0;i--){if(!groups[i][0].date)continue;const j=Math.floor(random()*(i+1));[groups[i],groups[j]]=[groups[j],groups[i]];}
+  if(activeMemory){const index=groups.findIndex(group=>activeMemory.includes(group[0]));if(index>0)groups.unshift(...groups.splice(index,1));}
+  keys=groups.flatMap(group=>group.map(item=>item.mediaKey));
+ }
 
+ for(const group of memories){
+  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey);
+  const playedStart=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
+  const continuation=playedStart&&group.some(item=>!item.decision&&keys.includes(item.mediaKey)&&group.indexOf(item)<group.indexOf(playedStart));
+  if(!continuation)continue;
+  saved.starts=saved.starts.filter(key=>key===playedStart.mediaKey||!members.has(key));
+  const remainder=keys.filter(key=>!members.has(key));
+  const insertion=activeMemory&&activeMemory!==group?remainder.findIndex(key=>!activeMemory.some(item=>item.mediaKey===key)):0;
+  remainder.splice(insertion<0?remainder.length:insertion,0,...ordered);keys=remainder;
+ }
  const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
  if(memory&&keys.includes(focused)){
   const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
   keys=[...ordered.slice(index),...keys.filter(key=>!members.has(key)),...ordered.slice(0,index)];
  }
- saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>byKey.has(key));
- saved.starts=[...new Set([...(saved.starts||[]),...memories.map(memory=>memory.find(item=>keys.includes(item.mediaKey)&&!known.has(item.mediaKey))?.mediaKey).filter(Boolean)])];
+ const loadedKeys=new Set(state.items.map(item=>item.mediaKey));
+ saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>loadedKeys.has(key));
+ for(const group of memories){
+  const members=new Set(group.map(item=>item.mediaKey)),start=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
+  if(start)continue;
+  const first=group.find(item=>keys.includes(item.mediaKey));
+  saved.starts=(saved.starts||[]).filter(key=>!members.has(key));
+  if(first)saved.starts.push(first.mediaKey);
+ }
+ saved.starts=[...new Set(saved.starts)];
  return keys.map(key=>byKey.get(key));
 }
 
@@ -1511,7 +1541,7 @@ function mountPhotosSwipe(environment) {
  const itemSize=item=>Number.isFinite(item.size)&&item.size>=0?bytes(item.size):'Unknown size';
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
  let deckCache=null,deckItems=null,deckFilter=null,deckSort=null;
- function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;let items=deckSort==='flashbacks'?flashbackDeck(state,resume.flashbacks||={},Math.random,Date.now(),focused):reviewDeck(state);items=items.filter(item=>deckFilter==='all'||item.type===deckFilter);if(deckSort==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if(deckSort==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));const pinned=state.items.find(item=>item.mediaKey===focused&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,reviewSwipeCount(state))));if(pinned&&deckSort!=='flashbacks')items=[pinned,...items.filter(item=>item!==pinned)];deckCache=items;return items;}
+ function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;let items=deckSort==='flashbacks'?flashbackDeck(state,resume.flashbacks||={},Math.random,Date.now(),focused,!!libraryFailure):reviewDeck(state);items=items.filter(item=>deckFilter==='all'||item.type===deckFilter);if(deckSort==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if(deckSort==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));const pinned=state.items.find(item=>item.mediaKey===focused&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,reviewSwipeCount(state))));if(pinned&&deckSort!=='flashbacks')items=[pinned,...items.filter(item=>item!==pinned)];deckCache=items;return items;}
 
  function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):deck().find(item=>item.mediaKey===focused)||deck()[0];}
  function mediaURL(value,video=false,expanded=false) {
@@ -1579,12 +1609,12 @@ function mountPhotosSwipe(environment) {
  let libraryLoading=null,libraryFailure=null,cancelLibraryLoading=null;
  function cancelLibraryFill(){cancelLibraryLoading?.();cancelLibraryLoading=null;libraryLoading=null;}
  function fillLibrary(){
-  if(libraryLoading||libraryFailure||sessionClosing||closingPromise||busy||leaseError||leaseRecoveryPending||!pageVisible()||!lockedAccount||!identity||!state.started||state.exhausted||reviewDeck(state).length>10||$('overlay').hidden)return;
+  if(libraryLoading||libraryFailure||sessionClosing||closingPromise||busy||leaseError||leaseRecoveryPending||!pageVisible()||!lockedAccount||!identity||!state.started||state.exhausted||($('sort').value!=='flashbacks'&&reviewDeck(state).length>10)||$('overlay').hidden)return;
   const token=leaseGeneration;
   let cancel;
   const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
   cancelLibraryLoading=cancel;
-  const loading=load(false,cancelled).catch(error=>{if(token!==leaseGeneration||sessionClosing||!pageVisible())return;libraryFailure=error;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{if(libraryLoading!==loading)return;libraryLoading=null;cancelLibraryLoading=null;render();});
+  const loading=load(false,cancelled).catch(error=>{if(token!==leaseGeneration||sessionClosing||!pageVisible())return;libraryFailure=error;deckItems=null;message(`Library loading failed: ${error.message}. Retry Load more.`);}).finally(()=>{if(libraryLoading!==loading)return;libraryLoading=null;cancelLibraryLoading=null;render();});
   libraryLoading=loading;
  }
  function refill(){
@@ -1691,7 +1721,7 @@ function mountPhotosSwipe(environment) {
  }
  function renderCard(){
   const item=current();
-  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:(reviewDeck(state).length?'No items match this filter.':state.exhausted?"You\u2019ve reviewed everything":libraryFailure?'Library loading failed. Retry Load more.':'Loading more items\u2026');
+  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}`:(reviewDeck(state).length&&(!state.started||state.exhausted||$('sort').value!=='flashbacks')?'No items match this filter.':state.exhausted?"You\u2019ve reviewed everything":libraryFailure?'Library loading failed. Retry Load more.':'Loading more items\u2026');
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
  }
  function renderStats(){
@@ -1857,14 +1887,21 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   }catch(error){message(error.message);}
  }
  async function undo(){if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}if(resume.flashbacks){resume.flashbacks.seen=(resume.flashbacks.seen||[]).filter(key=>key!==last.key);}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);if(last.cooldown)next.items=next.items.map(item=>item.mediaKey===last.key?{...item,...last.cooldown}:item);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
+ async function loadRequested(refresh=false){
+  let cancel;
+  const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
+  cancelLibraryLoading=cancel;
+  try{await load(refresh,cancelled);}finally{if(cancelLibraryLoading===cancel)cancelLibraryLoading=null;}
+ }
  async function load(refresh=false,cancelled=null) {
   const token=leaseGeneration;
   const assertLoadSession=()=>{if(token!==leaseGeneration||(cancelled&&sessionClosing))throw Error('Library loading session changed.');};
   const loadCall=async(operation,args)=>{assertLoadSession();const request=call(operation,args);const result=await (cancelled?Promise.race([request,cancelled]):request);assertLoadSession();return result;};
   buffer.clear();previousKey=null;
-  libraryFailure=null;
+  libraryFailure=null;deckItems=null;
   const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
-  const result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});
+  let result;
+  try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){libraryFailure=error;deckItems=null;}throw error;}
   assertLoadSession();
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
@@ -1875,7 +1912,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  window.addEventListener('resize',refreshPreviews);
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
 
- $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
+ $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>loadRequested());$('refresh').onclick=()=>run(()=>loadRequested(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=()=>{inspected=null;focused=null;deckItems=null;buffer.clear();render();};
  $('sort').onchange=()=>{focused=shown||null;inspected=null;deckItems=null;buffer.clear();updateOrder();render();};
@@ -1951,7 +1988,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.66":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.67":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
