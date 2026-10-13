@@ -862,7 +862,7 @@ function createLocalThumbnails({refresh,stale,scope=()=>'',placeholder}) {
   if(!force&&local&&!stale(local))return local;
   if(!force&&!stale(item)&&item.thumbUrl){cache.set(key,item);if(cache.size>512)cache.delete(cache.keys().next().value);return item;}
   if(force)retriedKeys.add(key);
-  const request=Promise.resolve().then(()=>refresh(item)).then(fresh=>{if(cache.get(key)!==local)return cache.get(key)||fresh;cache.delete(key);cache.set(key,fresh);if(cache.size>512)cache.delete(cache.keys().next().value);return fresh;},error=>{if(cache.get(key)===local)retriedKeys.delete(key);throw error;});
+  const request=Promise.resolve().then(()=>refresh(item)).then(fresh=>{if(cache.has(key)&&cache.get(key)!==local)return cache.get(key);cache.delete(key);cache.set(key,fresh);if(cache.size>512)cache.delete(cache.keys().next().value);return fresh;},error=>{if(!cache.has(key)||cache.get(key)===local)retriedKeys.delete(key);throw error;});
   pending.set(key,{request,item});
   try{return await request;}finally{pending.delete(key);}
  }

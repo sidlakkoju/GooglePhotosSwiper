@@ -181,3 +181,37 @@ for(const staleInitially of [false,true])test(`a transient ${staleInitially?'ini
  assert.equal(grid.src,'https://fixture.invalid/recovered=w100');
  assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
 });
+
+for(const outcome of ['reject','dead'])test(`cache eviction during a ${outcome} retry preserves recovery and failure caching`,async()=>{
+ let finishRefresh,rejectRefresh;
+ const pending=new Promise((resolve,reject)=>{finishRefresh=resolve;rejectRefresh=reject;});
+ const calls=[],original={...item,urlFetchedAt:1};
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:value=>{calls.push(value.mediaKey);return calls.length===1?pending:Promise.resolve({...value,thumbUrl:'https://fixture.invalid/recovered',urlFetchedAt:2});},placeholder:image=>{image.src=null;}});
+ const first={};await thumbnails.bind(first,original,value=>value.thumbUrl);
+ const retry=first.onerror();
+ await Promise.resolve();
+ for(let index=0;index<512;index++)await thumbnails.resolve({...original,mediaKey:`eviction-${index}`});
+ if(outcome==='reject')rejectRefresh(Error('Temporary lookup failure'));
+ else finishRefresh({...original,thumbUrl:'https://fixture.invalid/dead',urlFetchedAt:2});
+ await retry;
+ if(outcome==='reject'){
+  assert.equal(first.src,null);
+  const queue={},grid={};
+  await Promise.all([thumbnails.bind(queue,original,value=>value.thumbUrl),thumbnails.bind(grid,original,value=>`${value.thumbUrl}=w100`)]);
+  await queue.onerror();
+  await grid.onerror();
+  assert.equal(queue.src,'https://fixture.invalid/recovered');
+  assert.equal(grid.src,'https://fixture.invalid/recovered=w100');
+  assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+ }else{
+  assert.equal(first.src,'https://fixture.invalid/dead');
+  await first.onerror();
+  assert.equal(first.src,null);
+  for(let pass=0;pass<3;pass++){
+   const later={};await thumbnails.bind(later,original,value=>value.thumbUrl);
+   assert.equal(later.src,null);
+   assert.equal(later.onerror,null);
+  }
+  assert.deepEqual(calls,[item.mediaKey]);
+ }
+});
