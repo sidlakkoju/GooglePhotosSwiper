@@ -7,7 +7,7 @@ import {cardPreviewURL,previewURL} from '../lib/userscript-performance.mjs';
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
 function fixture(dpr){
  const images=[],queueThumbs={children:[],append(image){this.children.push(image);}};
- const context={window:{devicePixelRatio:dpr},location:{pathname:'/u/0/'},cardPreviewURL,previewURL,queueThumbs,document:{createElement(tag){assert.equal(tag,'img');const listeners=new Map();const image={naturalWidth:0,addEventListener(type,listener){listeners.set(type,listener);},load(width=800){this.naturalWidth=width;listeners.get('load')?.();}};images.push(image);return image;}},previewSize:()=>({width:800,height:450})};
+ const context={window:{devicePixelRatio:dpr},location:{pathname:'/u/0/'},cardPreviewURL,previewURL,queueThumbs,document:{createElement(tag){assert.equal(tag,'img');const listeners=new Map();const image={naturalWidth:0,addEventListener(type,listener){listeners.set(type,listener);},load(width=800){this.naturalWidth=width;listeners.get('load')?.();}};images.push(image);return image;}},queueImage:(image,item)=>{image.src=context.queueThumbnailSource(item);},previewSize:()=>({width:800,height:450})};
  vm.createContext(context);
  vm.runInContext(source.slice(source.indexOf(' function mediaURL('),source.indexOf(' const preloader='))+source.slice(source.indexOf(' function previewSource('),source.indexOf(' function previewSize(')),context);
  return {context,images,queueThumbs,run:code=>vm.runInContext(code,context)};

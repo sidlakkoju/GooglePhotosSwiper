@@ -344,8 +344,9 @@ async function openReviewDatabase(indexedDB) {
 }
 
 const fields=['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent'];
+function syncedPreviewItem(item){const local={...item};delete local.urlFetchedAt;return local;}
 function mergeProgressItem(item,checkpoint) {
- return {...Object.fromEntries(Object.entries(item).filter(([field])=>!fields.includes(field))),...checkpoint};
+ return {...Object.fromEntries(Object.entries(item).filter(([field])=>!fields.includes(field))),...Object.fromEntries(fields.filter(field=>checkpoint[field]!==undefined).map(field=>[field,checkpoint[field]]))};
 }
 function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
  let settings={},blocked=false,firstSync=true;
@@ -399,7 +400,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
     const checkpoint=checkpointItems.get(item.mediaKey);checkpointItems.delete(item.mediaKey);
     return checkpoint&&(checkpoint.revision||0)>=(item.revision||0)?mergeProgressItem(item,checkpoint):item;
    });
-   for(const item of checkpointItems.values())mergedItems.push({...item,name:item.mediaKey,type:item.type||'photo',needsPreview:true});
+   for(const item of checkpointItems.values())mergedItems.push({...syncedPreviewItem(item),name:item.mediaKey,type:item.type||'photo',needsPreview:true});
    const items=mergedItems.map(item=>{
     const value=decisions[item.mediaKey]??(Object.hasOwn(pending,item.mediaKey)||Object.hasOwn(state.syncDecisions||{},item.mediaKey)?null:item.decision);
     const entry=history.findLast(entry=>entry.key===item.mediaKey&&entry.decision===value);
@@ -409,7 +410,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    if(!state.started&&!state.items.length&&!state.history.length&&!dirty&&Object.keys(pending).length===0&&(remote.progress.started||Object.keys(decisions).length)){
     const restored=remote.progress.items?.map(item=>({...item}))||Object.keys(decisions).map(mediaKey=>({mediaKey,revision:history.findLast(entry=>entry.key===mediaKey)?.revision||0,state:'active'}));
     for(const mediaKey of Object.keys(decisions))if(!restored.some(item=>item.mediaKey===mediaKey))restored.push({mediaKey,revision:history.findLast(entry=>entry.key===mediaKey)?.revision||0,state:'active'});
-    next={...next,started:!!remote.progress.started,items:restored.map(item=>({...item,name:item.mediaKey,type:item.type||'photo',decision:decisions[item.mediaKey]??null,needsPreview:true})),lifetimeFreed:remote.progress.lifetimeFreed||0};
+    next={...next,started:!!remote.progress.started,items:restored.map(item=>({...syncedPreviewItem(item),name:item.mediaKey,type:item.type||'photo',decision:decisions[item.mediaKey]??null,needsPreview:true})),lifetimeFreed:remote.progress.lifetimeFreed||0};
     try{next=await rebuild(next);}catch(error){status(`${error.message} \u00b7 checkpoint recovered; retry loading the library`);}
    }
    let progress=reviewSyncProgress(next,decisions);
@@ -482,7 +483,7 @@ async function rebuildSyncedReview(state,call) {
  const items=new Map(state.items.map(item=>[item.mediaKey,item])),seen=new Set();let cursor=null,exhausted=false;
  for(let count=0;count<12;count++){
   const page=await call('library',{cursor});
-  for(const item of page.items){const old=items.get(item.mediaKey),storage=Object.fromEntries(['size','spaceTaken','takesUpSpace'].map(field=>[field,item[field]??old?.[field]]));items.set(item.mediaKey,{...old,...item,...storage,decision:state.syncDecisions[item.mediaKey]??null,state:old?.state||'active',revision:old?.revision||0,needsPreview:false});}
+  for(const item of page.items){const old=items.get(item.mediaKey),storage=Object.fromEntries(['size','spaceTaken','takesUpSpace'].map(field=>[field,item[field]??old?.[field]]));items.set(item.mediaKey,{...old,...item,...storage,decision:state.syncDecisions[item.mediaKey]??null,state:old?.state||'active',revision:old?.revision||0,urlFetchedAt:Date.now(),needsPreview:false});}
   if(page.nextPageId&&(page.nextPageId===cursor||seen.has(page.nextPageId)))throw Error('Google repeated a library page during sync recovery.');
   cursor=page.nextPageId;exhausted=!cursor;seen.add(cursor);
   if(exhausted||[...items.values()].filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash').length>=50)break;
@@ -927,6 +928,32 @@ function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
   return running;
  }
  return {enqueue(){pending=true;return flush();},flush,get flushing(){return !!running;},get pending(){return pending;}};
+}
+
+function createLocalThumbnails({refresh,stale,scope=()=>'',placeholder}) {
+ const cache=new Map(),pending=new Map();
+ async function resolve(item,force=false) {
+  const key=`${scope()}:${item.mediaKey}`,local=cache.get(key);
+  if(!force&&local&&!stale(local))return local;
+  if(!force&&!stale(item)&&item.thumbUrl){cache.set(key,item);if(cache.size>512)cache.delete(cache.keys().next().value);return item;}
+  if(pending.has(key))return pending.get(key);
+  const request=Promise.resolve().then(()=>refresh(item)).then(fresh=>{cache.delete(key);cache.set(key,fresh);if(cache.size>512)cache.delete(cache.keys().next().value);return fresh;});
+  pending.set(key,request);
+  try{return await request;}finally{pending.delete(key);}
+ }
+ function bind(image,item,source) {
+  let retried=false,refreshing=false,failed=false;
+  const fail=()=>{if(failed)return;failed=true;image.onerror=null;placeholder(image,item);};
+  image.onerror=async()=>{
+   if(failed||refreshing)return;
+   if(retried){fail();return;}
+   retried=true;refreshing=true;
+   try{const fresh=await resolve(item,true);if(!failed)image.src=source(fresh);}catch{fail();}finally{refreshing=false;}
+  };
+  const ready=resolve(item).then(fresh=>{if(!failed)image.src=source(fresh);},fail);
+  return ready;
+ }
+ return {resolve,bind};
 }
 
 function createSessionStorageCounter() {
@@ -1584,6 +1611,8 @@ function mountPhotosSwipe(environment) {
  function previewSize(){const {width,height}=$('media').getBoundingClientRect();return {width:width||1,height:height||1,compact:!!window.matchMedia?.('(max-width:760px), (pointer:coarse)').matches};}
  function preloadReview(item){const size=previewSize(),items=reviewPreviewWindow(deck(),item,size.compact).filter(candidate=>candidate.mediaKey===item?.mediaKey||!reviewURLStale(candidate));preloader.update($('overlay').hidden||inspected?[]:items,$('overlay').hidden?null:item,size);}
  function clearPreviewWindow(){const size=previewSize(),items=reviewPreviewWindow(inspected?[]:deck(),current(),size.compact);preloader.clear(items,size);buffer.clear(items);}
+ const thumbnails=createLocalThumbnails({refresh:refreshItemURL,stale:reviewURLStale,scope:()=>identity?.account,placeholder:(image,item)=>{const label=document.createElement('span');label.textContent=item.name||'Preview unavailable';label.setAttribute('class','thumbnail-placeholder');label.style.cssText='display:flex;align-items:center;justify-content:center;background:var(--ps-fill);color:var(--ps-label2);width:100%;height:100%;overflow:hidden;font-size:11px';if(image.parentElement===queueThumbs){label.style.width='26px';label.style.height='30px';}image.replaceWith(label);}});
+ function queueImage(image,item){return thumbnails.bind(image,item,queueThumbnailSource);}
  const urlRefreshes=new Map();
  async function refreshItemURL(item) {
   const account=identity?.account,key=`${account}:${item.mediaKey}`;
@@ -1746,7 +1775,7 @@ function mountPhotosSwipe(environment) {
  function renderStats(){
   const queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
   lifetime.textContent=estimate(state.items.filter(item=>item.state==='in_trash'&&item.decision==='remove'));
-  storageCapsule.update(storageSession.total(state.items));queueSize.textContent='\u00b7 '+formatStorageBytes(reviewStorage(candidates).bytes);trashBadge.textContent=String(candidates.length);queuePill.hidden=candidates.length<25;queuePillText.textContent=`${candidates.length} going to Trash`;queueGrowth.hidden=candidates.length<=25;queueGrowth.textContent=`+${candidates.length-25}`;queueThumbs.replaceChildren();for(const item of candidates.slice(-3)){const image=document.createElement('img');image.alt='';image.src=queueThumbnailSource(item);queueThumbs.append(image);}
+  storageCapsule.update(storageSession.total(state.items));queueSize.textContent='\u00b7 '+formatStorageBytes(reviewStorage(candidates).bytes);trashBadge.textContent=String(candidates.length);queuePill.hidden=candidates.length<25;queuePillText.textContent=`${candidates.length} going to Trash`;queueGrowth.hidden=candidates.length<=25;queueGrowth.textContent=`+${candidates.length-25}`;queueThumbs.replaceChildren();for(const item of candidates.slice(-3)){const image=document.createElement('img');image.alt='';queueImage(image,item);queueThumbs.append(image);}
   $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
   const {nextUndo,historyLabel,decisionLabel}=historyView();
   undoPreview.textContent=nextUndo?`Next Undo: ${historyLabel(nextUndo)}; restores ${decisionLabel(nextUndo.previous)}.`:'No previous decisions can be undone.';
@@ -1775,7 +1804,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   reviewGrid.replaceChildren();
   for(const item of rows){
    const tile=document.createElement('div');tile.setAttribute('class',`trash-tile${item.decision==='remove'?'':' kept'}`);
-   const photo=document.createElement('button'),image=document.createElement('img');photo.setAttribute('class','trash-photo');photo.setAttribute('aria-label',`Preview ${item.name}`);image.alt=item.name;image.loading='lazy';image.src=mediaURL(item.thumbUrl);photo.append(image);photo.onclick=()=>{if(busy)return;previewKey=item.mediaKey;renderTrashReview();};
+   const photo=document.createElement('button'),image=document.createElement('img');photo.setAttribute('class','trash-photo');photo.setAttribute('aria-label',`Preview ${item.name}`);image.alt=item.name;image.loading='lazy';thumbnails.bind(image,item,fresh=>mediaURL(fresh.thumbUrl));photo.append(image);photo.onclick=()=>{if(busy)return;previewKey=item.mediaKey;renderTrashReview();};
    const check=document.createElement('button');check.setAttribute('class','trash-check');icon(check,`Keep ${item.name}`,['M5 12l4 4L19 6']);check.setAttribute('aria-label',`${item.decision==='remove'?'Keep':'Trash'} ${item.name}`);check.setAttribute('aria-pressed',String(item.decision==='remove'));check.onclick=()=>{selectTrashItem(item.mediaKey,item.decision!=='remove');[...reviewGrid.querySelectorAll('.trash-check')].find(button=>button.dataset.key===item.mediaKey)?.focus();};check.dataset.key=item.mediaKey;tile.append(photo,check);
    if(item.type==='video'){const duration=document.createElement('span');duration.setAttribute('class','trash-duration');duration.textContent=`\u25b6 ${videoDuration(item)}`;tile.append(duration);}
    if(item.legacy){const legacy=document.createElement('span');legacy.setAttribute('class','trash-legacy');legacy.textContent='Previously marked';tile.append(legacy);}
@@ -1784,9 +1813,9 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   reviewPanel.querySelector('.trash-preview')?.remove();previewGeneration++;if(previewVideo){previewVideo.pause();previewVideo.removeAttribute('src');previewVideo.load();previewVideo=null;}
   const item=rows.find(item=>item.mediaKey===previewKey);if(!item){previewKey=null;return;}
   const preview=document.createElement('section');preview.setAttribute('class','trash-preview');preview.setAttribute('id','trash-preview');preview.setAttribute('role','dialog');preview.setAttribute('aria-label',`Preview ${item.name}`);const nav=document.createElement('div');nav.setAttribute('class','trash-nav');const back=document.createElement('button'),position=document.createElement('span'),done=document.createElement('button');back.textContent='\u2039 Going to Trash';position.textContent=`${rows.indexOf(item)+1} of ${rows.length}`;done.textContent='Done';back.onclick=done.onclick=()=>{previewKey=null;renderTrashReview();};nav.append(back,position,done);
-  const media=document.createElement('div');media.setAttribute('class','trash-preview-media');const image=document.createElement(item.type==='video'?'video':'img');if(item.type==='video'){image.controls=true;image.playsInline=true;image.poster=previewSource(item.thumbUrl);previewVideo=image;const token=previewGeneration;videoURL(item).then(url=>{if(token===previewGeneration)image.src=url;}).catch(error=>message(error.message));}else{image.alt=item.name;image.src=previewSource(item.thumbUrl);}media.append(image);
+  const media=document.createElement('div');media.setAttribute('class','trash-preview-media');const image=document.createElement(item.type==='video'?'video':'img');if(item.type==='video'){image.controls=true;image.playsInline=true;previewVideo=image;const token=previewGeneration;thumbnails.resolve(item).then(fresh=>{if(token===previewGeneration)image.poster=previewSource(fresh.thumbUrl);}).catch(()=>{});videoURL(item).then(url=>{if(token===previewGeneration)image.src=url;}).catch(error=>message(error.message));}else{image.alt=item.name;thumbnails.bind(image,item,fresh=>previewSource(fresh.thumbUrl));}media.append(image);
   const caption=document.createElement('div'),details=document.createElement('small');caption.setAttribute('class','trash-preview-caption');caption.textContent=item.name;details.textContent=[item.date?new Date(item.date).toLocaleDateString():'Unknown date',item.type==='video'?videoDuration(item):null,itemSize(item),item.legacy?'Previously marked':null].filter(Boolean).join(' \u00b7 ');caption.append(details);
-  const strip=document.createElement('div');strip.setAttribute('class','trash-strip');for(const row of rows){const button=document.createElement('button'),thumb=document.createElement('img');button.setAttribute('class',row.mediaKey===previewKey?'active':'');button.setAttribute('aria-label',`Preview ${row.name}`);thumb.alt='';thumb.src=mediaURL(row.thumbUrl);button.append(thumb);button.onclick=()=>{previewKey=row.mediaKey;renderTrashReview();};strip.append(button);}
+  const strip=document.createElement('div');strip.setAttribute('class','trash-strip');for(const row of rows){const button=document.createElement('button'),thumb=document.createElement('img');button.setAttribute('class',row.mediaKey===previewKey?'active':'');button.setAttribute('aria-label',`Preview ${row.name}`);thumb.alt='';thumbnails.bind(thumb,row,fresh=>mediaURL(fresh.thumbUrl));button.append(thumb);button.onclick=()=>{previewKey=row.mediaKey;renderTrashReview();};strip.append(button);}
   const bar=document.createElement('div');bar.setAttribute('class','trash-bar');const keep=document.createElement('button'),trash=document.createElement('button');keep.textContent='Keep';trash.textContent='Trash';trash.setAttribute('class','preview-trash');keep.setAttribute('aria-pressed',String(item.decision==='keep'));trash.setAttribute('aria-pressed',String(item.decision==='remove'));keep.onclick=()=>selectTrashItem(item.mediaKey,false);trash.onclick=()=>selectTrashItem(item.mediaKey,true);bar.append(keep,trash);preview.append(nav,media,caption,strip,bar);reviewPanel.append(preview);done.focus();
  }
  function videoDuration(item){const seconds=Math.max(0,Math.floor((Number(item.duration)||0)/1000));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;}
