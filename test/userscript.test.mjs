@@ -45,6 +45,16 @@ test('fake library and bulk metadata responses produce photos/videos and preserv
  assert.equal(result.items[0].type,'video');assert.equal(result.items[0].spaceTaken,300);assert.equal(result.items[0].size,500);assert.equal(result.items[0].name,'fake.mp4');assert.equal(result.nextPageId,'next');
  assert.deepEqual(f.calls[0].args,['previous',null,50,null,1,1]);assert.equal(f.calls[1].args[0][1][0].length,36);
 });
+test('library place names reach Flashbacks separately from coordinates',async()=>{
+ const date='2025-02-17T12:00:00.000Z',coordinates=[48.86,2.35],geo=[];geo[0]=coordinates;geo[4]=[[null,[[' Paris ']]]];
+ const rows=[['located',['https://lh3.googleusercontent.com/fake'],Date.parse(date),'stable',0,{129168200:[null,geo]}],['unnamed',['https://lh3.googleusercontent.com/fake'],Date.parse(date),'other',0,{129168200:[null,[coordinates]]}],['missing',['https://lh3.googleusercontent.com/fake'],Date.parse(date),'last',0,{}]];
+ const f=fixture(id=>id==='lcxiM'?[rows,null]:null),result=await call(f,'library');
+ assert.deepEqual(result.items.map(row=>row.location),[coordinates,coordinates,null]);
+ assert.deepEqual(result.items.map(row=>row.locationName),['Paris',null,null]);
+ const mounted=await mountedReview([result.items[0]]),label=mounted.nodes.get('card').querySelector('.memory-label');
+ assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · Paris · 1 of 1`);
+ await mounted.nodes.get('close').onclick();
+});
 test('metadata failures retain review items with unknown sizes; invalid preview hosts fail',async()=>{
  const row=['photo',['https://lh3.googleusercontent.com/fake'],1720000000000,'stable',0,{}];
  const f=fixture(id=>id==='lcxiM'?[[row],null]:null);const result=await call(f,'library');assert.equal(result.items.length,1);assert.match(result.metadataWarning,/sizes/);
@@ -3450,9 +3460,9 @@ test('order capsule cycles approved names, pins the card, opens its menu and res
  const restored=bundleEnvironment();restored.environment.window.indexedDB=indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),restored.environment);await restored.nodes.get('launcher').onclick();assert.match(restored.nodes.get('order-switcher').childNodes[0].textContent,/Flashbacks/);assert.equal(restored.nodes.get('caption').textContent,resumed);await restored.nodes.get('close').onclick();
 });
 
-for(const location of ['Paris',null,{name:'Paris'},[48.86,2.35]])test(`Flashbacks memory label advances and restores with location ${JSON.stringify(location)}`,async()=>{
- const date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-memory-first',{date,location}),item('synthetic-memory-next',{date:'2025-02-17T12:01:00.000Z',location})]),label=mounted.nodes.get('card').querySelector('.memory-label');
- const text=()=>label.childNodes.map(node=>node.textContent).join(''),month=new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'}),place=location&&!Array.isArray(location)?' · Paris':'';
+for(const locationName of ['Paris',null,''])test(`Flashbacks memory label advances and restores with place ${JSON.stringify(locationName)}`,async()=>{
+ const date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-memory-first',{date,location:[48.86,2.35],locationName}),item('synthetic-memory-next',{date:'2025-02-17T12:01:00.000Z',location:[48.86,2.35],locationName})]),label=mounted.nodes.get('card').querySelector('.memory-label');
+ const text=()=>label.childNodes.map(node=>node.textContent).join(''),month=new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'}),place=locationName?' · Paris':'';
  assert.equal(label.hidden,false);assert.equal(text(),`${month}${place} · 1 of 2`);
  mounted.nodes.get('order-menu').childNodes[1].onclick();assert.equal(label.hidden,true);
  mounted.nodes.get('order-menu').childNodes[0].onclick();assert.equal(label.hidden,false);
@@ -3462,7 +3472,7 @@ for(const location of ['Paris',null,{name:'Paris'},[48.86,2.35]])test(`Flashback
 });
 
 test('Flashbacks single-item memory keeps long place text in a shrinking ellipsis segment',async()=>{
- const place='Synthetic city with a very long location name',date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-single-memory',{date,location:place})]),label=mounted.nodes.get('card').querySelector('.memory-label');
+ const place='Synthetic city with a very long location name',date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-single-memory',{date,location:[48.86,2.35],locationName:place})]),label=mounted.nodes.get('card').querySelector('.memory-label');
  assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${place} · 1 of 1`);
  assert.equal(label.querySelector('.memory-place').title,place);
  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('');

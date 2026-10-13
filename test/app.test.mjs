@@ -112,3 +112,16 @@ test('album titles retain the full synthetic account and preserve saved target n
   }finally{store.close();}
  }
 });
+
+test('imports preserve place names separately from coordinates and normalize absent names',()=>{
+ const store=createStore();
+ try{
+  store.setSetting('account','account');
+  store.importItems([{...sample('located'),location:[48.86,2.35],locationName:'Paris'},{...sample('unnamed'),location:[48.86,2.35]},{...sample('invalid'),locationName:{name:'Paris'}}],'account');
+  const rows=store.listItems();
+  assert.deepEqual(rows.map(row=>row.locationName),['Paris',null,null]);
+  assert.deepEqual(rows.map(row=>row.location),[[48.86,2.35],[48.86,2.35],null]);
+  store.importItems([{...sample('located'),location:[48.86,2.35],locationName:'London'}],'account');
+  assert.equal(store.listItems()[0].locationName,'London');
+ }finally{store.close();}
+});
