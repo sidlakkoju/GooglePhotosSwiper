@@ -14,7 +14,7 @@ function fixture(){
  const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,setAttribute(key,value){this[key]=value;},querySelector:tag=>tag==='video'?video:image,append:button=>buttons.push(button),addEventListener:(type,fn)=>handlers[type]=fn};
  const card={style:{},classList:{contains:name=>classes.has(name),remove:name=>classes.delete(name),toggle(name,on){const value=on??!classes.has(name);if(value)classes.add(name);else classes.delete(name);return value;}}};
  const nodes={card,media:mediaElement,zoom:{value:'1'},enlarge:{}};
- const context=vm.createContext({createVideoTimeline:()=>[],captureVideo(){},mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector.includes('button')?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
+ const context=vm.createContext({otherTab:false,leaseError:null,createVideoTimeline:()=>[],captureVideo(){},mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector.includes('button')?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
  vm.runInContext(source.slice(source.indexOf(' function updateVideoControls()'),source.indexOf(' queue_detailsElement.addEventListener')),context);
  createSwipeFeedback({window:{},targets:[mediaElement],card,under:{style:{}},keep:{style:{}},remove:{style:{}},canSwipe:()=>false,onDecide(){},playbackOnClick:true});
  const click=target=>{target.onclick?.();handlers.click({target});};

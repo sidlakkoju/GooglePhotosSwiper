@@ -1,3 +1,4 @@
+import {decisionWins} from './decision-merge.mjs';
 import {authenticate,pairingRequest} from './pairing.mjs';
 const origin = 'https://photos.google.com';
 const methods = 'GET, PUT, DELETE, POST, PATCH, OPTIONS';
@@ -40,9 +41,24 @@ export async function syncRequest(request,env={}) {
   const mapping=await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(device.id).first();
   if(mapping&&mapping.space!=='legacy')scope=mapping.space+':shared';
   const historyScope=scope+':device:'+device.id;
-  await db.prepare("INSERT OR IGNORE INTO review_state (scope,progress,history) SELECT ?, '{}', history FROM review_state WHERE scope = ?").bind(historyScope,scope).run();
-  const decisionStatements=(id,value)=>value===null?[db.prepare('DELETE FROM decisions WHERE scope = ? AND id = ? AND (NOT EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ?) OR EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ?))').bind(scope,id,scope,id,scope,id,device.id)]:[db.prepare("INSERT INTO decisions (scope,id,decision) VALUES (?,?,?) ON CONFLICT(scope,id) DO UPDATE SET decision = excluded.decision").bind(scope,id,value),db.prepare('INSERT INTO decision_versions (scope,id,device_id,updated_at) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM decisions WHERE scope = ? AND id = ? AND decision = ?) ON CONFLICT(scope,id) DO UPDATE SET device_id = excluded.device_id, updated_at = excluded.updated_at').bind(scope,id,device.id,Date.now(),scope,id,value)];
-  const writeDecision=(id,value)=>db.batch(decisionStatements(id,value));
+  await db.prepare("INSERT OR IGNORE INTO review_state (scope,progress,history) SELECT ?, '{}', '[]' FROM review_state WHERE scope = ?").bind(historyScope,scope).run();
+  const decisionStatements=(id,value,updatedAt=Date.now(),undo=false)=>{
+   const owned="(NOT EXISTS (SELECT 1 FROM decisions WHERE scope = ? AND id = ?) OR EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ?))";
+   const ownerArgs=[scope,id,scope,id,device.id];
+   const notTrashed="NOT EXISTS (SELECT 1 FROM review_items WHERE scope = ? AND id = ? AND json_extract(data, '$.state') = 'in_trash')";
+   if(value===null)return [
+    db.prepare(`INSERT INTO decision_versions (scope,id,device_id,updated_at) SELECT ?,?,?,? WHERE ${owned} AND ${notTrashed} ON CONFLICT(scope,id) DO UPDATE SET updated_at = excluded.updated_at WHERE decision_versions.device_id = excluded.device_id AND excluded.updated_at >= decision_versions.updated_at`).bind(scope,id,device.id,updatedAt,...ownerArgs,scope,id),
+    db.prepare(`DELETE FROM decisions WHERE scope = ? AND id = ? AND EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ? AND updated_at = ?) AND ${notTrashed}`).bind(scope,id,scope,id,device.id,updatedAt,scope,id)
+   ];
+   const statements=[];
+   if(value==='keep')statements.push(db.prepare('INSERT INTO decision_keeps (scope,id,updated_at) VALUES (?,?,?) ON CONFLICT(scope,id) DO UPDATE SET updated_at = MAX(decision_keeps.updated_at, excluded.updated_at)').bind(scope,id,updatedAt));
+   const insertWins=decisionWins('(SELECT decision FROM decisions WHERE scope = ? AND id = ?)','?','(SELECT updated_at FROM decision_versions WHERE scope = ? AND id = ?)','?');
+   const wins=decisionWins('(SELECT decision FROM decisions WHERE scope = ? AND id = ?)','?','decision_versions.updated_at','excluded.updated_at');
+   statements.push(db.prepare(`INSERT INTO decision_versions (scope,id,device_id,updated_at) SELECT ?,?,?,? WHERE ${notTrashed} AND ${undo?owned:insertWins} ON CONFLICT(scope,id) DO UPDATE SET device_id = excluded.device_id, updated_at = excluded.updated_at WHERE ${undo?'decision_versions.device_id = excluded.device_id AND excluded.updated_at >= decision_versions.updated_at':wins}`).bind(scope,id,device.id,updatedAt,scope,id,...(undo?ownerArgs:[scope,id,value,scope,id,updatedAt]),...(undo?[]:[scope,id,value])));
+   statements.push(db.prepare(`INSERT INTO decisions (scope,id,decision) SELECT ?,?,? WHERE ${notTrashed} AND EXISTS (SELECT 1 FROM decision_versions WHERE scope = ? AND id = ? AND device_id = ? AND updated_at = ?)${undo?'':" AND (? = 'remove' OR NOT EXISTS (SELECT 1 FROM decisions WHERE scope = ? AND id = ? AND decision = 'remove'))"} ON CONFLICT(scope,id) DO UPDATE SET decision = excluded.decision`).bind(scope,id,value,scope,id,scope,id,device.id,updatedAt,...(undo?[]:[value,scope,id])));
+   return statements;
+  };
+  const writeDecision=(id,value,updatedAt,undo)=>db.batch(decisionStatements(id,value,updatedAt,undo));
 
   const route=url.pathname,method=request.method;
   const read=async()=>{
@@ -54,7 +70,8 @@ export async function syncRequest(request,env={}) {
     const items=await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all();
     progress.items=items.results.map(item=>JSON.parse(item.data));
    }
-   return {decisions:rows.results,progress,history:ownHistory?JSON.parse(ownHistory.history):[]};
+   const versions=await db.prepare('SELECT id,device_id FROM decision_versions WHERE scope = ?').bind(scope).all();
+   return {decisions:rows.results,progress,history:ownHistory?JSON.parse(ownHistory.history):[],...(mapping&&mapping.space!=='legacy'?{decisionOwners:Object.fromEntries(versions.results.map(row=>[row.id,row.device_id===device.id]))}:{})};
   };
   if(route==='/api/state'&&method==='GET'){
    const state=await read();
@@ -63,20 +80,20 @@ export async function syncRequest(request,env={}) {
   }
   if(route==='/api/decisions'&&method==='PUT'){
    const value=await body(request);
-   if(Object.keys(value).length!==1||!Array.isArray(value.decisions)||value.decisions.length>2000||!value.decisions.every(entry=>entry&&Object.keys(entry).length===2&&identifier(entry.id)&&decision(entry.decision)))throw Error('Invalid decisions');
-   if(value.decisions.length)await db.batch(value.decisions.flatMap(entry=>decisionStatements(entry.id,entry.decision)));
-   return respond({ok:true,merged:true,decisions:(await read()).decisions});
+   if(Object.keys(value).length!==1||!Array.isArray(value.decisions)||value.decisions.length>2000||!value.decisions.every(entry=>entry&&Object.keys(entry).every(key=>['id','decision','updatedAt','undo'].includes(key))&&identifier(entry.id)&&decision(entry.decision)&&(entry.updatedAt===undefined||Number.isSafeInteger(entry.updatedAt)&&entry.updatedAt>=0)&&(entry.undo===undefined||typeof entry.undo==='boolean')))throw Error('Invalid decisions');
+   if(value.decisions.length)await db.batch(value.decisions.flatMap(entry=>decisionStatements(entry.id,entry.decision,entry.updatedAt,entry.undo)));
+   const state=await read();return respond({ok:true,merged:true,decisions:state.decisions,...(state.decisionOwners?{decisionOwners:state.decisionOwners}:{})});
   }
   const match=route.match(/^\/api\/decisions\/([^/]+)$/);
   if(match&&['PUT','DELETE'].includes(method)){
    const id=decodeURIComponent(match[1]);if(!identifier(id))return respond({error:'Invalid item ID'},400);
    if(method==='DELETE')await writeDecision(id,null);
-   else {const value=await body(request);if(Object.keys(value).length!==1||!['keep','remove'].includes(value.decision))throw Error('Invalid decision');await writeDecision(id,value.decision);}
+   else {const value=await body(request);if(Object.keys(value).some(key=>!['decision','updatedAt','undo'].includes(key))||!['keep','remove'].includes(value.decision)||(value.updatedAt!==undefined&&(!Number.isSafeInteger(value.updatedAt)||value.updatedAt<0))||(value.undo!==undefined&&typeof value.undo!=='boolean'))throw Error('Invalid decision');await writeDecision(id,value.decision,value.updatedAt,value.undo);}
    return respond({ok:true});
   }
   if(route==='/api/trash-check'&&method==='POST'){
    const value=await body(request);if(!Array.isArray(value.ids)||value.ids.length>25||!value.ids.every(identifier))throw Error('Invalid items');
-   const rows=await db.batch(value.ids.map(id=>db.prepare("SELECT id FROM decisions WHERE scope = ? AND id = ? AND decision = 'remove'").bind(scope,id)));
+   const rows=await db.batch(value.ids.map(id=>db.prepare("SELECT d.id FROM decisions d LEFT JOIN decision_versions v ON v.scope = d.scope AND v.id = d.id LEFT JOIN decision_keeps k ON k.scope = d.scope AND k.id = d.id WHERE d.scope = ? AND d.id = ? AND d.decision = 'remove' AND COALESCE(k.updated_at,0) <= COALESCE(v.updated_at,0)").bind(scope,id)));
    return respond({safe:rows.every(row=>row.results.length===1)});
   }
   if(route==='/api/progress'&&method==='GET')return respond((await read()).progress);
@@ -87,7 +104,7 @@ export async function syncRequest(request,env={}) {
    if(route==='/api/progress'){
     if(!value||Object.keys(value).some(key=>!['started','reviewed','items','lifetimeFreed','swipeCount'].includes(key))||Object.hasOwn(value,'swipeCount')&&(!Number.isSafeInteger(value.swipeCount)||value.swipeCount<0)||typeof value.started!=='boolean'||!Number.isSafeInteger(value.reviewed)||value.reviewed<0||Object.hasOwn(value,'items')&&!progressItemsValid(value.items)||Object.hasOwn(value,'lifetimeFreed')&&(!Number.isSafeInteger(value.lifetimeFreed)||value.lifetimeFreed<0))throw Error('Invalid progress');
     const incoming=JSON.stringify({...value,...(Object.hasOwn(value,'items')?{items:[]}:{})});
-    const statements=(value.items||[]).map(item=>db.prepare("INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data WHERE COALESCE(json_extract(excluded.data, '$.revision'), 0) > COALESCE(json_extract(review_items.data, '$.revision'), 0)").bind(scope,item.mediaKey,JSON.stringify(item)));
+    const statements=(value.items||[]).map(item=>db.prepare("INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data WHERE COALESCE(json_extract(review_items.data, '$.state'),'active') != 'in_trash' AND (json_extract(excluded.data, '$.state') = 'in_trash' OR COALESCE(json_extract(excluded.data, '$.revision'), 0) > COALESCE(json_extract(review_items.data, '$.revision'), 0))").bind(scope,item.mediaKey,JSON.stringify(item)));
     for(let index=0;index<statements.length;index+=100)await db.batch(statements.slice(index,index+100));
     await db.prepare('UPDATE review_state SET progress = json_patch(progress, ?) WHERE scope = ?').bind(incoming,scope).run();
     const items=[];

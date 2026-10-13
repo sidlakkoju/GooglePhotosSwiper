@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.65
+// @version 1.2.66
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -333,8 +333,7 @@ async function createLeaseOwner(window,crypto) {
     if(lock)return new Promise(()=>{});
    }).catch(reject);
   });
-  if(saved&&await claim(saved))owner=saved;
-  else await claim(owner);
+  try{if(saved&&await claim(saved))owner=saved;else await claim(owner);}catch{owner=crypto.randomUUID();}
  }
  window.addEventListener?.('pagehide',()=>{try{window.sessionStorage.setItem(key,owner);}catch{}});
  window.addEventListener?.('pageshow',()=>{try{window.sessionStorage.removeItem(key);}catch{}});
@@ -421,19 +420,19 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   let checkpoint=state;
   try {
    const remote=pull?await syncRequest(scope,'api/state'):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress||{}};
-   let decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))};
-   const pending={...state.syncPending};
-   if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey))pending[item.mediaKey]=item.decision;
+   let decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))},owners=remote.decisionOwners||{};
+   const pending={...state.syncPending},pendingTimes={...state.syncPendingTimes};
+   if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey)){pending[item.mediaKey]=item.decision;pendingTimes[item.mediaKey]=item.lastDecisionAt??0;}
    const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
    const historyKeys=new Set([...(state.syncHistoryKeys||[]),...Object.keys(pending),...(dirty?state.history.map(entry=>entry.key):[])]);
    const remaining={...pending};
-   for(const batch of decisionBatches(pending)){
+   for(const batch of decisionBatches(pending,pendingTimes,state.syncPendingUndo)){
     const accepted=await syncRequest(scope,'api/decisions','PUT',{decisions:batch});
     for(const {id,decision} of batch){delete remaining[id];if(decision===null)delete decisions[id];else decisions[id]=decision;}
-    if(accepted.merged&&accepted.decisions)decisions=Object.fromEntries(accepted.decisions.map(item=>[item.id,item.decision]));
-    checkpoint={...state,syncDecisions:{...decisions},syncPending:{...remaining},syncDirty:dirty,syncHistoryKeys:[...historyKeys]};
+    if(accepted.merged&&accepted.decisions){decisions=Object.fromEntries(accepted.decisions.map(item=>[item.id,item.decision]));owners=accepted.decisionOwners||owners;}
+    checkpoint={...state,syncDecisions:{...decisions},syncPending:{...remaining},syncPendingTimes:pendingTimes,syncDirty:dirty,syncHistoryKeys:[...historyKeys]};
    }
-   const history=(dirty?mergeHistory(remote.history,state.history,historyKeys):remote.history).slice(-2000);
+   const history=(dirty?mergeHistory(remote.history,state.history,historyKeys):remote.history).filter(entry=>owners[entry.key]!==false).slice(-2000);
    const checkpointItems=new Map((remote.progress.items||[]).map(item=>[item.mediaKey,item]));
    const checkpointRevisions=new Map([...checkpointItems].map(([key,item])=>[key,item.revision||0]));
    const mergedItems=state.items.map(item=>{
@@ -470,7 +469,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
      progress.items=reviewSyncProgress(next,decisions).items;
     }
    }catch(error){writeError=error;}
-   next=await save({...next,syncPending:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:remote.progress,syncCheckpoint:writeError?state.syncCheckpoint:progress});
+   next=await save({...next,syncPending:{},syncPendingTimes:{},syncPendingUndo:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:remote.progress,syncCheckpoint:writeError?state.syncCheckpoint:progress});
    if(writeError){if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
@@ -478,15 +477,16 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
  return {configure,sync,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST')};
 }
 function markSyncChanges(previous,next) {
- const pending={...previous.syncPending};
+ const pending={...previous.syncPending},times={...previous.syncPendingTimes},undos={...previous.syncPendingUndo};
+ const undo=next.history.length<previous.history.length;
  const old=new Map(previous.items.map(item=>[item.mediaKey,item.decision]));
  let dirty=!!previous.syncDirty||JSON.stringify(previous.history)!==JSON.stringify(next.history);
  const items=next.items.map(item=>{
   if(!old.has(item.mediaKey)&&previous.syncDecisions?.[item.mediaKey])return {...item,decision:previous.syncDecisions[item.mediaKey],revision:previous.history.findLast(entry=>entry.key===item.mediaKey)?.revision||item.revision||0};
-  if((old.get(item.mediaKey)??null)!==(item.decision??null)){pending[item.mediaKey]=item.decision??null;dirty=true;}
+  if((old.get(item.mediaKey)??null)!==(item.decision??null)){pending[item.mediaKey]=item.decision??null;times[item.mediaKey]=Date.now();undos[item.mediaKey]=undo||item.decision==='keep'&&(!!undos[item.mediaKey]||old.get(item.mediaKey)==='remove');dirty=true;}
   return item;
  });
- return {...next,items,syncPending:pending,syncDirty:dirty};
+ return {...next,items,syncPending:pending,syncPendingTimes:times,syncPendingUndo:undos,syncDirty:dirty};
 }
 
 function progressBatches(progress) {
@@ -533,12 +533,12 @@ function mergeSyncResult(current,snapshot,synced) {
  const existing=new Set(items.map(item=>item.mediaKey));
  for(const item of synced.items)if(!existing.has(item.mediaKey))items.push(item);
  const recovered=!snapshot.started&&!snapshot.items.length&&synced.started;
- return {...current,swipeCount:Math.max(reviewSwipeCount(current),reviewSwipeCount(synced)),...(recovered?{started:synced.started,cursor:synced.cursor,exhausted:synced.exhausted}:{}),lifetimeFreed:Math.max(current.lifetimeFreed||0,synced.lifetimeFreed||0),syncProgress:synced.syncProgress,syncCheckpoint:synced.syncCheckpoint,items,history,syncDecisions:synced.syncDecisions,syncPending:pending,syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
+ return {...current,swipeCount:Math.max(reviewSwipeCount(current),reviewSwipeCount(synced)),...(recovered?{started:synced.started,cursor:synced.cursor,exhausted:synced.exhausted}:{}),lifetimeFreed:Math.max(current.lifetimeFreed||0,synced.lifetimeFreed||0),syncProgress:synced.syncProgress,syncCheckpoint:synced.syncCheckpoint,items,history,syncDecisions:synced.syncDecisions,syncPending:pending,syncPendingTimes:{...synced.syncPendingTimes,...Object.fromEntries([...changed].filter(key=>Object.hasOwn(current.syncPendingTimes||{},key)).map(key=>[key,current.syncPendingTimes[key]]))},syncPendingUndo:{...synced.syncPendingUndo,...Object.fromEntries([...changed].filter(key=>Object.hasOwn(current.syncPendingUndo||{},key)).map(key=>[key,current.syncPendingUndo[key]]))},syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
 }
-function decisionBatches(pending) {
+function decisionBatches(pending,times={},undos={}) {
  const batches=[];let batch=[],bytes=16;
  for(const [id,decision] of Object.entries(pending)){
-  const entry={id,decision},size=new TextEncoder().encode(JSON.stringify(entry)).length;
+  const entry={id,decision,...(times?.[id]!==undefined?{updatedAt:times[id]}:{}),...(undos?.[id]?{undo:true}:{})},size=new TextEncoder().encode(JSON.stringify(entry)).length;
   if(batch.length&&(batch.length===2000||bytes+size+1>262144)){batches.push(batch);batch=[];bytes=16;}
   if(bytes+size>262144)throw Error('Decision exceeds sync input limit');
   bytes+=size+(batch.length?1:0);batch.push(entry);
@@ -1005,6 +1005,9 @@ function mountPhotosSwipe(environment) {
  const rawCall=environment.photosCall||createPhotosAPI(environment);
  let owner;
  const ownerReady=createLeaseOwner(window,environment.crypto).then(value=>{owner=value;});
+ let tabChannel;
+ try{if(window.BroadcastChannel)tabChannel=new window.BroadcastChannel('photos-swipe-tabs');}catch{}
+ const notifyTabs=account=>{try{tabChannel?.postMessage({account,owner});}catch{}};
  const host=document.createElement('div');host.id='photos-swipe-userscript-host';
  host.style.cssText='position:fixed;inset:0;z-index:2147483647;pointer-events:none';
  const root=host.attachShadow({mode:'open'});
@@ -1364,8 +1367,8 @@ function mountPhotosSwipe(environment) {
  const googleSignInResumed=resumeGoogleSignIn();
  let pageActive=true,suspendingPromise=null,resumeOpening=false;
  let sessionClosing=false;
- let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false;
- const useHere=document.createElement('button');useHere.setAttribute('id','use-here');useHere.textContent='Use here';useHere.hidden=true;$('status').append(useHere);useHere.onclick=()=>open(true);
+ let leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false,takeoverPending=false;
+ const useHere=document.createElement('button');useHere.setAttribute('id','use-here');useHere.textContent='Use here';useHere.hidden=true;useHere.onclick=()=>open(true);
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
  let writes=createWrites(),persistedItems=null;
@@ -1398,7 +1401,7 @@ function mountPhotosSwipe(environment) {
  function apply(next,removedKey){state=markSyncChanges(state,next);if(removedKey&&deckCache){deckCache=deckCache.filter(item=>item.mediaKey!==removedKey);deckItems=state.items;}render();writes.enqueue();scheduleSync();}
  const readyMessage=()=>gear.classList.contains('gear-error')?syncSummary:'';
  const idleMessage=()=>state.job?'A saved album operation is ready to retry.':readyMessage();
- const message=value=>{$('status').textContent=otherTab?'Open in another tab':value;reviewStatus.textContent=reviewPanel.hidden?'':value;reviewStatus.hidden=!reviewStatus.textContent;if(otherTab){useHere.hidden=false;$('status').append(useHere);}else useHere.hidden=true;};
+ const message=value=>{$('status').textContent=otherTab?'Open in another tab':value;reviewStatus.textContent=reviewPanel.hidden?'':value;reviewStatus.hidden=!reviewStatus.textContent;useHere.hidden=!(otherTab||leaseError?.message.includes('busy in another tab'));if(!useHere.hidden)showLockCard();};
  function persistResume(){if(otherTab||!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value=structuredClone(resume);resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
  function captureVideo(){const video=$('media').querySelector('video');if(video&&video.dataset.resumeReady!=='pending'&&shown&&Number.isFinite(video.currentTime)){resume={...resume,video:{key:shown,time:video.currentTime}};persistResume();}}
  async function call(operation,args={}) {
@@ -1419,7 +1422,7 @@ function mountPhotosSwipe(environment) {
   leaseGeneration++;
   stopRenewal();
   const account=lockedAccount||acquiringAccount;lockedAccount=null;acquiringAccount=null;
-  return account?db.lease(account,owner,true).catch(()=>{}):Promise.resolve();
+  return account?db.lease(account,owner,true).then(()=>notifyTabs(account)).catch(()=>{}):Promise.resolve();
  }
  async function assertAccount(){
   const token=leaseGeneration,account=identity?.account;
@@ -1448,7 +1451,7 @@ function mountPhotosSwipe(environment) {
  }
  function pauseForOtherTab(){
   if(!sheet.hidden)closeSettings();reviewPanel.hidden=true;previewKey=null;resumeReviewPlayback=false;renderTrashReview();$('close').focus();
-  leaseGeneration++;cancelLibraryFill();stopSync();libraryFailure=null;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;stopRenewal();message(leaseError.message);controls();
+  leaseGeneration++;cancelLibraryFill();stopSync();libraryFailure=null;otherTab=true;acquiringAccount=null;swipeFeedback.reset();leaseError=Error('Open in another tab');lockedAccount=null;stopRenewal();startRenewal();message(leaseError.message);controls();
  }
  const hasLocalChanges=()=>activeOperation||writes.pending||state.items!==persistedItems;
  async function renewLease(takeover=false,claim=false){
@@ -1465,7 +1468,7 @@ function mountPhotosSwipe(environment) {
    if(lease.owner!==owner&&hasLocalChanges())lease=await db.lease(account,owner,false,true);
    if(!sessionCurrent())return false;
    if(lease.owner!==owner){pauseForOtherTab();return false;}
-   lockedAccount=account;leaseError=null;startRenewal();return true;
+   const acquired=lockedAccount!==account;lockedAccount=account;leaseError=null;startRenewal();if(acquired)notifyTabs(account);return true;
   }catch(error){
    if(token===leaseGeneration){lockedAccount=null;leaseError=error;message(error.message);startRenewal();}
    return false;
@@ -1473,7 +1476,8 @@ function mountPhotosSwipe(environment) {
  }
  async function refreshLease(){
   await suspendingPromise;
-  if(otherTab||sessionClosing||!pageVisible()||$('overlay').hidden)return;
+  if(sessionClosing||!pageVisible()||$('overlay').hidden)return;
+  if(otherTab){const lease=await db.readLease(identity.account);if(!busy&&!openingPromise&&(!lease||lease.expires<=Date.now()))await open();return;}
   const token=leaseGeneration,recovering=leaseRecoveryPending||!!leaseError;
   const account=identity?.account;
   if(!account)return;
@@ -1609,10 +1613,16 @@ function mountPhotosSwipe(environment) {
  }
  function dropWarmVideo(){if(warmedVideo){warmedVideo.pause();warmedVideo.removeAttribute('src');warmedVideo.load();}warmedVideo=null;warmedKey=null;}
  function stopMedia(clearUnderCard=true){captureVideo();swipeFeedback.reset();if(clearUnderCard){underCard.replaceChildren();underCard.hidden=true;}generation++;const image=$('media').querySelector('img');const old=state.items.find(item=>item.mediaKey===shown);if(image&&old&&image.complete&&image.naturalWidth)buffer.retain(old,image);const video=$('media').querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
+ function showLockCard(){
+  stopMedia();
+  const card=document.createElement('div'),title=document.createElement('p');
+  card.setAttribute('class','tab-lock-card');card.style.padding='24px';title.textContent='Open in another tab';useHere.hidden=false;card.append(title,useHere);$('media').replaceChildren(card);
+ }
  async function display(item,retried=false,forceRefresh=false) {
   const preview=underCard.querySelector('img'),preloaded=preview?.dataset?.key===item?.mediaKey?preview:null;
   stopMedia(shown!==(item?.mediaKey||null));$('zoom').value='1';$('card').classList.remove('zoomed');mediaElement.style.touchAction='';shown=item?.mediaKey||null;const token=generation;
   $('media').style.color='var(--ps-label)';$('media').setAttribute('aria-busy','false');
+  if(otherTab||leaseError?.message.includes('busy in another tab')){showLockCard();return;}
   if(!item){$('media').textContent='No items to review. Load more or refresh latest.';return;}
   let handlingError=false;
   const failed=async()=>{
@@ -1802,19 +1812,20 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    resume=await db.resume(identity.account);$('filter').value=resume.filter||'all';$('sort').value=resume.sort||'flashbacks';reviewEvery.value=String(resume.reviewEvery||25);deleteMethod.value='trash';trashOptIn.checked=true;focused=resume.currentId||null;inspected=resume.inspected&&state.items.some(item=>item.mediaKey===focused)?focused:null;const missing=focused&&!state.items.some(item=>item.mediaKey===focused&&item.state==='active');if(missing){focused=null;inspected=null;}
    if(syncEnabled)await synchronize();
    if(!pageVisible()||sessionGeneration!==leaseGeneration)return;
-   leaseRecoveryPending=false;
+   leaseRecoveryPending=false;takeoverPending=false;
    message(missing?'Saved item is unavailable. Continuing with the next unreviewed item.':idleMessage());
   }catch(error){
    await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
   }finally{busy=false;render();controls();}
  }
  function open(claim=false){
+  takeoverPending=takeoverPending||claim;
   if(openingPromise)return openingPromise;
-  openingPromise=openSession(claim).then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageVisible()&&!$('overlay').hidden&&!closingPromise)open();}});
+  openingPromise=openSession(takeoverPending).then(()=>{refreshStalePreviews();}).finally(()=>{openingPromise=null;if(resumeOpening){resumeOpening=false;if(pageVisible()&&!$('overlay').hidden&&!closingPromise)open();}});
   return openingPromise;
  }
  async function closeSession(){
-  sessionClosing=true;cancelLibraryFill();stopRenewal();stopSync();
+  takeoverPending=false;sessionClosing=true;cancelLibraryFill();stopRenewal();stopSync();
   captureVideo();persistResume();if(!sheet.hidden)suppressViewerShortcuts();sheet.hidden=true;resumeReviewPlayback=false;
   preloader.clear();finishCardAnimation();clearCardAnimation();await openingPromise;await activeOperation;await libraryLoading;await writes.flush();
   leaseGeneration++;stopRenewal();
@@ -1883,12 +1894,14 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   pageActive=false;leaseRecoveryPending=true;
   stopRenewal();
   if(suspendingPromise)return suspendingPromise;
-  if(!writes.pending&&!writes.flushing)return releaseLease();
-  suspendingPromise=writes.flush().finally(()=>releaseLease()).finally(()=>{suspendingPromise=null;});
+  const releasing=releaseLease();
+  if(!writes.pending&&!writes.flushing)return releasing;
+  suspendingPromise=Promise.all([releasing,writes.flush()]).finally(()=>{suspendingPromise=null;});
   return suspendingPromise;
  }
  async function resumeLease(){
   await suspendingPromise;await activeOperation;await syncRunning;
+  if(takeoverPending&&pageVisible()&&!closingPromise)return open(true);
   if(!leaseRecoveryPending)await refreshLease();
   await libraryLoading;
   if(!pageVisible()||!identity||$('overlay').hidden||closingPromise)return;
@@ -1896,13 +1909,14 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  function clearMedia(){stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);}
  function leavePage(){
-  suspendPage();
-  clearMedia();
+  const releasing=suspendPage();
+  clearMedia();return releasing;
  }
+ if(tabChannel)tabChannel.onmessage=async({data})=>{if(!identity||data?.account!==identity.account||data.owner===owner||!pageVisible()||$('overlay').hidden)return;try{await refreshLease();}catch{}};
  for(const event of ['pagehide','unload'])window.addEventListener(event,leavePage);
  window.addEventListener('focus',async()=>{if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){await refreshLease();if(!otherTab)await synchronize();}});
  document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();clearPreviewWindow();dropWarmVideo();}else{pageActive=true;if(openingPromise&&!$('overlay').hidden)resumeOpening=true;else if(leaseRecoveryPending&&!identity&&!$('overlay').hidden&&!closingPromise)open();if(identity&&!$('overlay').hidden)resumeLease();}});
- window.addEventListener('pageshow',()=>{pageActive=true;if(!document.hidden&&!$('overlay').hidden){if(openingPromise)resumeOpening=true;return open();}});
+ window.addEventListener('pageshow',function restorePage(){pageActive=true;if(!document.hidden&&!$('overlay').hidden){if(openingPromise)resumeOpening=true;return open();}});
  function editingFieldFocused(event){
   const editable=element=>['INPUT','SELECT','TEXTAREA'].includes(element?.tagName)||element?.isContentEditable;
   const focused=[document.activeElement,root.activeElement];
@@ -1937,7 +1951,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.65":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.66":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
