@@ -94,11 +94,10 @@ export async function googleAuthRequest(request,env){
    if(pending.completed_at===null||pending.completed_at===-1)return json({status:'pending'});
    if(value.code===undefined){
     if(pending.state_claim!==1)return json({status:'pending'});
-    if(!await browserMatches(pending))return json({error:'Unauthorized'},401);
     if(pending.private_claim_hash){
      const proof=await hash(typeof value.claimSecret==='string'?value.claimSecret:'');
      if(proof.length!==pending.private_claim_hash.length||!proof.every((byte,index)=>byte===pending.private_claim_hash[index]))return json({error:'Unauthorized'},401);
-    }
+    }else if(!await browserMatches(pending))return json({error:'Unauthorized'},401);
    }
    if(value.code!==undefined&&(typeof value.code!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(value.code)||!await db.prepare('SELECT state_hash FROM google_pending WHERE state_hash = ? AND claim_hash = ?').bind(digest,await hash(value.code)).first()))throw Error('Invalid code');
   }
