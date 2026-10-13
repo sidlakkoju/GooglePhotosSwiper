@@ -744,3 +744,29 @@ test('first sync preserves local decision time instead of assigning upload time'
  assert.equal(uploads[0].decisions[0].updatedAt,50);
  assert.equal(e.DB.sqlite.prepare('SELECT updated_at FROM decision_versions').get().updated_at,100);
 });
+
+for(const reversal of ['trash untick','undo then keep'])test(`synced remove can be reversed by ${reversal} before the next sync`,async()=>{
+ const environment=env(),uploads=[];
+ const client=createSyncClient({fetch:(url,options)=>{
+  if(new URL(url).pathname==='/api/decisions')uploads.push(JSON.parse(options.body).decisions);
+  return syncRequest(new Request(url,options),environment);
+ }});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const entry={key:'photo',previous:null,decision:'remove',revision:1};
+ let state={started:true,items:[{mediaKey:'photo',decision:null,state:'active',revision:0}],history:[],syncDecisions:{}};
+ state=markSyncChanges(state,{...decideReview(state,'photo','remove',null),history:[entry]});
+ state=await client.sync('default',state,async value=>value);
+ if(reversal==='undo then keep')state=markSyncChanges(state,{...decideReview(state,'photo',null,'remove'),history:[]});
+ state=markSyncChanges(state,decideReview(state,'photo','keep',state.items[0].decision));
+ assert.equal(state.syncPendingUndo.photo,true);
+ state=await client.sync('default',state,async value=>value);
+ assert.equal(uploads.at(-1)[0].undo,true);
+ assert.equal(state.items[0].decision,'keep');
+ assert.equal(state.syncDecisions.photo,'keep');
+ assert.deepEqual(state.syncPending,{});
+ assert.equal((await client.trashCheck('default',['photo'])).safe,false);
+ state=markSyncChanges(state,decideReview(state,'photo','remove','keep'));
+ state=await client.sync('default',state,async value=>value);
+ assert.equal(state.items[0].decision,'remove');
+ assert.equal((await client.trashCheck('default',['photo'])).safe,true);
+});

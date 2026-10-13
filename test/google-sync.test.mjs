@@ -587,3 +587,19 @@ test('polling removes undo eligibility when another device owns the same keep de
  assert.equal(one.history.length,0);
  assert.equal(one.items[0].decision,'keep');
 });
+
+for(const batch of [false,true])test(`undo-to-keep records trash protection against older other-device removes (${batch?'batch':'single'})`,async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};
+ const a=await signIn(env,'8'.repeat(43)),b=await signIn(env,'9'.repeat(43));
+ const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
+ const decide=(device,decision,updatedAt,undo=false)=>api(device,batch?'decisions':'decisions/photo','PUT',batch?{decisions:[{id:'photo',decision,updatedAt,undo}]}:{decision,updatedAt,undo});
+ await decide(a,'keep',100);
+ await decide(a,'remove',200);
+ await decide(a,'keep',300,true);
+ assert.equal(env.DB.sqlite.prepare('SELECT updated_at FROM decision_keeps').get().updated_at,300);
+ await decide(b,'remove',150);
+ assert.deepEqual((await (await api(a,'state')).json()).decisions,[{id:'photo',decision:'remove'}]);
+ assert.equal((await (await api(b,'trash-check','POST',{ids:['photo']})).json()).safe,false);
+ await decide(b,'remove',350);
+ assert.equal((await (await api(b,'trash-check','POST',{ids:['photo']})).json()).safe,true);
+});
