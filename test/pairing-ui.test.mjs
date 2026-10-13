@@ -385,11 +385,18 @@ for(const options of [{missingFragment:true},{mismatchedState:true}])test(`Googl
 test('Google return removes the completion code and restores the Photos fragment',async()=>{
  const f=await googleFixture('done',{resume:true});await f.pending;assert.equal(f.context.restoredURL,'https://photos.google.com/u/0/#album');assert.equal(JSON.parse(f.requests[0].data).code,'c'.repeat(43));
 });
-test('blocked Google popup opens a sign-in tab without a return claimant',async()=>{
- const f=await googleFixture('pending',{blockedPopup:true,withholdCode:true});assert.equal(f.opened,'https://worker.example/auth/start');f.notice.children[0].onclick();await f.pending;
+test('blocked Google popup returns in the same tab and claims with the completion code',async()=>{
+ const f=await googleFixture('pending',{blockedPopup:true,withholdCode:true});await f.pending;
+ assert.equal(f.context.window.location.href,'https://worker.example/auth/start?return=https%3A%2F%2Fphotos.google.com%2Fu%2F0%2F');assert.equal(f.requests.length,1);assert.equal((await f.context.environment.GM.getValue('photos-swipe-google-state')).length,43);
+ const returned=await googleFixture('done',{resume:true});await returned.pending;assert.equal(JSON.parse(returned.requests[0].data).code,'c'.repeat(43));assert.equal(returned.saved.token,'new-token');
+});
+test('iOS navigation keeps both sign-in buttons locked and preserves private state on a second tap',async()=>{
+ const f=await googleFixture('done',{ios:true});await f.pending;const state=await f.context.environment.GM.getValue('photos-swipe-google-state');
+ assert.equal(f.button.disabled,true);assert.equal(f.settingsButton.disabled,true);f.context.refreshControls();await f.button.onclick();await f.settingsButton.onclick();
+ assert.equal(f.requests.length,1);assert.equal(await f.context.environment.GM.getValue('photos-swipe-google-state'),state);
 });
 
-for(const blockedPopup of [false,true])for(const firstClaimant of ['return','opener'])test(`Google sign-in has one claimant with ${blockedPopup?'fallback tab':'popup'} and ${firstClaimant} first`,async()=>{
+for(const blockedPopup of [false])for(const firstClaimant of ['return','opener'])test(`Google sign-in has one claimant with ${blockedPopup?'fallback tab':'popup'} and ${firstClaimant} first`,async()=>{
  let claimed=false;const claimants=[];
  const redeem=claimant=>{claimants.push(claimant);if(claimed)return {status:'expired'};claimed=true;return {status:'done',token:'new-token',deviceId:'same-device'};};
  const f=await googleFixture('done',{blockedPopup,withholdCode:true,pollResponses:[request=>{
