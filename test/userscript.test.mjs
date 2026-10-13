@@ -3727,3 +3727,15 @@ test('Flashbacks undo restores a card held in the middle after changing order',a
  assert.equal((await mounted.read()).items.find(row=>held.startsWith(`${row.name} ·`)).decision,null);
  await mounted.nodes.get('close').onclick();
 });
+
+test('mounted Flashbacks switch keeps the held card and advances forward within its memory',async()=>{
+ const mounted=await mountedReview(Array.from({length:4},(_,index)=>item(`p${index}`,{date:new Date(Date.UTC(2020,0,1,0,index)).toISOString(),size:index===2?100:1})));
+ await mounted.click('keep');
+ mounted.nodes.get('sort').value='largest';mounted.nodes.get('sort').onchange();
+ await mounted.click('keep');
+ assert.match(mounted.nodes.get('caption').textContent,/^p2 · /);
+ mounted.nodes.get('sort').value='flashbacks';mounted.nodes.get('sort').onchange();
+ assert.match(mounted.nodes.get('caption').textContent,/^p2 · /);
+ await mounted.click('keep');
+ assert.match(mounted.nodes.get('caption').textContent,/^p3 · /);
+});

@@ -38,3 +38,13 @@ test('large libraries retain swipe counts and apply decisions without argument o
  assert.equal(next.items[0].lastDecisionSwipe,250001);
  assert.equal(next.history.length,1);
 });
+
+test('switching into Flashbacks finishes the focused memory before returning to earlier photos',()=>{
+ const state={items:items.slice(0,16),history:[]},saved={keys:items.slice(0,16).map(item=>item.mediaKey)};
+ const expected=[...items.slice(2,8),...items.slice(8,16),...items.slice(0,2)].map(item=>item.mediaKey);
+ assert.deepEqual(flashbackDeck(state,saved,()=>0,Date.now(),items[2].mediaKey).map(item=>item.mediaKey),expected);
+ const resumed=JSON.parse(JSON.stringify(saved));
+ resumed.seen=[items[2].mediaKey];
+ assert.deepEqual(flashbackDeck(state,resumed,()=>0).map(item=>item.mediaKey),expected.slice(1));
+ assert.equal(new Set(resumed.keys).size,15);
+});
