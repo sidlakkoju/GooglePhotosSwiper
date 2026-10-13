@@ -48,3 +48,30 @@ test('switching into Flashbacks finishes the focused memory before returning to 
  assert.deepEqual(flashbackDeck(state,resumed,()=>0).map(item=>item.mediaKey),expected.slice(1));
  assert.equal(new Set(resumed.keys).size,15);
 });
+
+test('paginated Flashbacks wait for the whole timeline and keep boundary memories together',async()=>{
+ const {emptyReview,loadReviewPages}=await import('../lib/userscript-core.mjs');
+ const rows=Array.from({length:244},(_,index)=>({mediaKey:`QA${String(index).padStart(4,'0')}`,date:new Date(Date.UTC(2008+Math.floor(index/13),0,1,0,index%13)).toISOString(),decision:null,state:'active'})).reverse();
+ let state=emptyReview(),pages=0;
+ const saved={},rng=random();
+ await loadReviewPages({read:async()=>state,save:async next=>{
+  state=next;
+  if(!state.exhausted){assert.deepEqual(flashbackDeck(state,saved,rng),[]);assert.deepEqual(saved,{});}
+  return state;
+ },call:async(operation,{cursor})=>{
+  assert.equal(cursor,pages?String(pages*50):null);
+  const offset=pages++*50;
+  return {items:rows.slice(offset,offset+50),nextPageId:offset+50<rows.length?String(offset+50):null};
+ },target:Infinity});
+ assert.equal(pages,5);
+ const groups=reviewMemories(state.items),deck=flashbackDeck(state,saved,rng),membership=new Map(groups.flatMap((group,index)=>group.map(row=>[row.mediaKey,index]))),runs=[];
+ for(const row of deck){const memory=membership.get(row.mediaKey);if(runs.at(-1)?.memory!==memory)runs.push({memory,items:[]});runs.at(-1).items.push(row);}
+ assert.equal(deck.length,244);assert.equal(runs.length,groups.length);
+ for(const run of runs)assert.deepEqual(run.items,groups[run.memory]);
+ assert.ok(deck.slice(0,50).some(row=>!rows.slice(0,50).some(loaded=>loaded.mediaKey===row.mediaKey)));
+ assert.equal(saved.starts.length,groups.length);
+ const consumed=deck.slice(0,50).map(row=>row.mediaKey);
+ saved.seen=consumed;
+ state={...state,items:state.items.map(row=>consumed.includes(row.mediaKey)?{...row,decision:'remove'}:row)};
+ assert.deepEqual(flashbackDeck(state,JSON.parse(JSON.stringify(saved)),()=>0).map(row=>row.mediaKey),deck.slice(50).map(row=>row.mediaKey));
+});
