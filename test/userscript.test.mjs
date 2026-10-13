@@ -3506,3 +3506,13 @@ test('Google sign out retains decisions, queue and undo history locally',async()
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);assert.equal((await db.settings()).token,'');
  await mounted.nodes.get('close').onclick();await mounted.nodes.get('launcher').onclick();assert.deepEqual((await mounted.read()).history,previous.history);await mounted.nodes.get('close').onclick();
 });
+
+for(const hash of ['#photos', '#pswipe-pair=synthetic-legacy-pair'])test(`hash changes preserve local review progress for ${hash}`,async()=>{
+ const mounted=await mountedReview([item('synthetic'),item('next')]);
+ await mounted.click('keep');const before=await mounted.read();
+ mounted.environment.location.hash=hash;
+ assert.doesNotThrow(()=>mounted.environment.window.listeners.hashchange?.({type:'hashchange'}));
+ assert.deepEqual(await mounted.read(),before);
+ await mounted.click('undo');assert.equal((await mounted.read()).items[0].decision,null);
+ await mounted.nodes.get('close').onclick();
+});

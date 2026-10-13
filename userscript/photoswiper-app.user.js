@@ -1849,7 +1849,6 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  window.addEventListener('resize',refreshPreviews);
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
 
- window.addEventListener('hashchange',()=>receivePairing(false));
  $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>load());$('refresh').onclick=()=>run(()=>load(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=()=>{inspected=null;focused=null;deckItems=null;buffer.clear();render();};
