@@ -320,8 +320,8 @@ function fakeIndexedDB(fault={}) {
   transaction(name){
    const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='settings'&&String(key).startsWith('resume:')&&fault.resumeGate){fault.resumeStarted?.();await fault.resumeGate;}if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){stores.set(name,staged);tx.oncomplete();}});});return request;},
-    delete:key=>staged.delete(key),
+    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='settings'&&String(key).startsWith('resume:')&&fault.resumeGate){fault.resumeStarted?.();await fault.resumeGate;}if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){if(wrote)stores.set(name,staged);tx.oncomplete();}});});return request;},
+    delete:key=>{wrote=true;staged.delete(key);},
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
    return tx;
@@ -367,7 +367,7 @@ function bundleEnvironment(fault={}) {
  const result={nodes,hosts,root};
  const document={defaultView:{performance:{now:()=>performance.now()},matchMedia:()=>({matches:true}),requestAnimationFrame:callback=>{callback(performance.now());return null;}},listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},createTextNode:textContent=>({textContent}),getElementById:id=>hosts.find(host=>host.id===id),createElement:tag=>{const node=element(tag);if(tag==='canvas')node.getContext=()=>({measureText:text=>({width:text.length*7})});if(tag==='select')node.value='';const append=node.append;node.append=function(...children){append.call(this,...children);if(tag==='select'&&!this.value)this.value=children[0].value;};node.attachShadow=options=>{result.shadowMode=options.mode;return root;};return node;},querySelector:()=>null,createElementNS:(namespace,tag)=>element(tag),head:element('head'),body:element('body'),documentElement:{style:{cssText:''},dataset:{},append:host=>hosts.push(host)}};
  const events=new EventTarget();
- const window={scrollX:0,scrollY:0,scrollTo(){},requestAnimationFrame:callback=>{callback();return null;},cancelAnimationFrame(){},dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;events.addEventListener(name,handler);}};window.top=window;
+ const window={scrollX:0,scrollY:0,scrollTo(){},requestAnimationFrame:callback=>{callback();return null;},cancelAnimationFrame(){},dispatchEvent:event=>events.dispatchEvent(event),WIZ_global_data:{...tokens},crypto:webcrypto,indexedDB:fakeIndexedDB(fault),fetch:async()=>{throw Error('Unexpected fake network request');},setTimeout,clearTimeout,AbortController,listeners:{},eventHandlers:{},addEventListener(name,handler){(this.eventHandlers[name]||=[]).push(handler);const previous=this.listeners[name];this.listeners[name]=previous?event=>Promise.all([previous(event),handler(event)]):handler;events.addEventListener(name,handler);}};window.top=window;
  result.environment={window,document,location:{...page},structuredClone,Date,URL,URLSearchParams,TextEncoder,Uint8Array,AbortController,AbortSignal,setInterval,clearInterval};
  return result;
 }
@@ -2182,7 +2182,7 @@ for(const delayed of ['identity','save'])test(`swipes, arrow keys and buttons ad
   nodes.get('remove').onclick();shown('e');
   assert.deepEqual((await mounted.read()).items.map(row=>row.decision),[null,null,null,null,null]);
  }finally{release();}
- await mounted.settle();
+ await waitForReview(async()=> (await mounted.read()).history.length===4);
  const saved=await mounted.read();
  assert.deepEqual(saved.items.map(row=>row.decision),['keep','remove','keep','remove',null]);
  assert.deepEqual(saved.history.map(entry=>[entry.key,entry.decision,entry.revision]),[['a','keep',1],['b','remove',1],['c','keep',1],['d','remove',1]]);
@@ -3073,7 +3073,7 @@ test('hidden and pagehide release ownership and resumed pages cannot steal a fre
   await new Promise(resolve=>setTimeout(resolve,10));
   await db.lease(account,'live');
   if(lifecycle==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));}
-  else await mounted.environment.window.listeners.pageshow({persisted:true});
+  else {assert.ok(mounted.environment.window.eventHandlers.pageshow.some(handler=>handler.name==='restorePage'));await mounted.environment.window.listeners.pageshow({persisted:true});}
   assert.match(mounted.nodes.get('status').textContent,lifecycle==='hidden'?/^Open in another tab$/:/busy in another tab/);
   await mounted.click('keep');assert.equal((await db.read(account)).items[0].decision,null);
   await assert.rejects(db.lease(account,'third'),/busy in another tab/);
@@ -3120,7 +3120,7 @@ for(const interruption of ['hidden','load','refresh'])test(`blocked review retri
  }finally{holding=false;releaseRecovery();releaseOperation();mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();}
 });
 
-for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} drains a swipe awaiting identity before releasing ownership`,async()=>{
+for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} releases ownership and saves a pending swipe after reacquiring`,async()=>{
  let holding=false,started,finish;
  const checking=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{finish=resolve;});
  const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{if(holding){started();await gate;}return webcrypto.subtle.digest(...args);}}};
@@ -3129,11 +3129,15 @@ for(const lifecycle of ['hidden','pagehide'])test(`${lifecycle} drains a swipe a
  if(lifecycle==='hidden'){mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
  else mounted.environment.window.listeners.pagehide();
  holding=false;finish();await mounted.settle();
- assert.equal((await mounted.read()).items[0].decision,'keep');
+ assert.equal((await mounted.read()).items[0].decision,null);
+ if(lifecycle==='hidden'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+ else await mounted.environment.window.listeners.pageshow({persisted:true});
+ await waitForReview(async()=> (await mounted.read()).items[0].decision==='keep');
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
  const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
- await db.lease(account,'other');await db.lease(account,'other',true);
+ await assert.rejects(db.lease(account,'other'),/busy in another tab/);
  mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();
+ await db.lease(account,'other');await db.lease(account,'other',true);
 });
 
 test('Close cancels a busy lease recovery awaiting identity',async()=>{
@@ -3224,6 +3228,8 @@ for(const overlappingLoad of [false,true])test(`showing during a pending swipe s
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep',null]);
  assert.equal(timers.size,1);
  mounted.nodes.get('keep').onclick();mounted.environment.window.listeners.pagehide();await mounted.settle();
+ await mounted.environment.window.listeners.pageshow({persisted:true});
+ await waitForReview(async()=> (await mounted.read()).items.every(row=>row.decision==='keep'));
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['keep','keep','keep']);
  await mounted.nodes.get('close').onclick();
 });
@@ -3582,4 +3588,164 @@ test('backing out of same-tab sign-in leaves the viewer and Cancel accessible',a
   assert.equal(mounted.nodes.get('google-sign-in').disabled,false);
   assert.equal((await db.read(account)).items[0].decision,'keep');
  }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('failed Web Locks requests produce a fresh owner instead of rejecting initialization',async()=>{
+ const {createLeaseOwner}=await import('../lib/userscript-db.mjs');
+ for(const request of [()=>{throw Error('Synthetic lock failure');},async()=>{throw Error('Synthetic lock rejection');}]){
+  const saved='synthetic-old-owner',window={sessionStorage:{getItem:()=>saved,removeItem(){}},navigator:{locks:{request}}};
+  const owner=await createLeaseOwner(window,webcrypto);
+  assert.notEqual(owner,saved);
+  assert.notEqual(owner,await createLeaseOwner(window,webcrypto));
+ }
+});
+
+test('a frozen tab shows a full takeover card, retries a killed owner, and reacquires through the UI pageshow handler',async()=>{
+ const timers=new Map();let timerId=0;
+ const mounted=await mountedReview([item('synthetic-frozen')],{},undefined,{setInterval:handler=>{timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const actualNow=Date.now;let now=actualNow();Date.now=()=>now;
+ try{
+  const frozen=(await db.readLease(account)).owner;
+  now+=LEASE_EXPIRY_MS;
+  await db.lease(account,'synthetic-other');
+  await mounted.environment.window.listeners.focus();
+  assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+  const button=mounted.nodes.get('use-here');
+  assert.equal(button.parentNode.class,'tab-lock-card');
+  assert.notEqual(button.parentNode,mounted.nodes.get('status'));
+  assert.equal(button.disabled,false);
+  assert.equal(mounted.nodes.get('media').querySelector('p').textContent,'Open in another tab');
+  await [...timers.values()][0]();
+  assert.equal((await db.readLease(account)).owner,'synthetic-other');
+  now+=LEASE_EXPIRY_MS;
+  await [...timers.values()][0]();
+  assert.equal((await db.readLease(account)).owner,frozen);
+  await mounted.environment.window.listeners.pagehide();
+  assert.equal((await db.readLease(account)).expires,0);
+  const handlers=mounted.environment.window.eventHandlers.pageshow;
+  const restore=handlers.find(handler=>handler.name==='restorePage');
+  assert.ok(restore);
+  assert.ok(handlers.length>=2);
+  await restore({persisted:true});
+  assert.equal((await db.readLease(account)).owner,frozen);
+  assert.ok((await db.readLease(account)).expires>now);
+  assert.match(mounted.nodes.get('caption').textContent,/synthetic-frozen/);
+ }finally{Date.now=actualNow;await mounted.nodes.get('close').onclick();}
+});
+
+for(const visibleTiming of ['after claim','during claim'])test(`Use here remains a takeover when visibility returns ${visibleTiming}`,async()=>{
+ let delay=false,release,started;
+ const gate=new Promise(resolve=>{started=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  const value=await webcrypto.subtle.digest(...args);
+  if(delay){delay=false;started();await new Promise(resolve=>{release=resolve;});}
+  return value;
+ }}};
+ const mounted=await mountedReview([item('synthetic-takeover')],{crypto});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await db.lease(account,(await db.readLease(account)).owner,true);
+ await db.lease(account,'synthetic-other');
+ await mounted.environment.window.listeners.focus();
+ delay=true;const taking=mounted.nodes.get('use-here').onclick();await gate;
+ try{
+  mounted.environment.document.hidden=true;await mounted.environment.document.listeners.visibilitychange();
+  if(visibleTiming==='during claim'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+  release();await taking;
+  if(visibleTiming==='after claim'){mounted.environment.document.hidden=false;mounted.environment.document.listeners.visibilitychange();}
+  await waitForReview(async()=> (await db.readLease(account)).owner!=='synthetic-other');
+  await mounted.settle();
+  assert.doesNotMatch(mounted.nodes.get('status').textContent,/another tab/);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+ }finally{release();mounted.environment.document.hidden=false;await mounted.nodes.get('close').onclick();}
+});
+
+for(const trigger of ['heartbeat','focus','visible'])test(`open devices drop remotely reviewed items on ${trigger}`,async()=>{
+ const timers=new Map();let timerId=0,reviewed=false,pulls=0;
+ const mounted=await mountedReview([item('synthetic-polled'),item('synthetic-next')],{
+  fetch:async(url,options)=>{
+   const path=new URL(url).pathname;
+   assert.equal(new URL(url).origin,'https://sync.example');
+   if(path==='/api/state'){pulls++;return {ok:true,json:async()=>({decisions:reviewed?[{id:'synthetic-polled',decision:'keep'}]:[],history:[],progress:{}})};}
+   assert.equal(path,'/api/progress');
+   return {ok:true,json:async()=>({items:JSON.parse(options.body).items})};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'},{setInterval:(handler,delay)=>{assert.equal(delay,LEASE_HEARTBEAT_MS);timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ try{
+  reviewed=true;const before=pulls;
+  if(trigger==='heartbeat')await [...timers.values()][0]();
+  else if(trigger==='focus')await mounted.environment.window.listeners.focus();
+  else mounted.environment.document.listeners.visibilitychange();
+  await waitForReview(async()=> (await mounted.read()).items[0].decision==='keep');
+  assert.ok(pulls>before);
+  assert.match(mounted.nodes.get('caption').textContent,/synthetic-next/);
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('a failed server trash safety check prevents the Google Photos trash call',async()=>{
+ let safetyChecks=0,trashCalls=0;
+ const mounted=await mountedReview([item('synthetic-trash-check',{decision:'remove',dedupKey:'synthetic-dedup'})],{
+  confirm:()=>true,
+  fetch:async(url,options)=>{
+   if(new URL(url).origin!=='https://sync.example'){trashCalls++;throw Error('Unexpected synthetic media call');}
+   const path=new URL(url).pathname;
+   if(path==='/api/trash-check'){safetyChecks++;return {ok:true,json:async()=>({safe:false})};}
+   if(path==='/api/progress')return {ok:true,json:async()=>({items:JSON.parse(options.body).items})};
+   return {ok:true,json:async()=>({decisions:[{id:'synthetic-trash-check',decision:'remove'}],history:[],progress:{}})};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'});
+ try{
+  await mounted.click('review');await mounted.click('move-trash');
+  assert.equal(safetyChecks,1);
+  assert.equal(trashCalls,0);
+  assert.match(mounted.nodes.get('status').textContent,/Sync decisions changed/);
+  assert.equal((await mounted.read()).items[0].state,'active');
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('browser-local channel notifications detect takeover and announce release',async()=>{
+ const messages=[];let channel;
+ class SyntheticChannel {
+  constructor(name){assert.equal(name,'photos-swipe-tabs');channel=this;}
+  postMessage(message){messages.push(message);}
+ }
+ const mounted=await mountedReview([item('synthetic-channel')],{BroadcastChannel:SyntheticChannel});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ const owner=(await db.readLease(account)).owner;
+ try{
+  assert.ok(messages.some(message=>message.account===account&&message.owner===owner));
+  await db.lease(account,'synthetic-other',false,true,true);
+  await channel.onmessage({data:{account,owner:'synthetic-other'}});
+  assert.equal(mounted.nodes.get('status').textContent,'Open in another tab');
+  await mounted.nodes.get('use-here').onclick();
+  assert.equal((await db.readLease(account)).owner,owner);
+  const count=messages.length;
+  await mounted.environment.window.listeners.pagehide();
+  assert.ok(messages.length>count);
+  assert.equal((await db.readLease(account)).expires,0);
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+for(const event of ['pagehide','hidden'])test(`${event} releases the lease while a pending decision waits for identity`,async()=>{
+ let hold=false,release,started;
+ const waiting=new Promise(resolve=>{started=resolve;});
+ const crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+  if(hold){hold=false;started();await new Promise(resolve=>{release=resolve;});}
+  return webcrypto.subtle.digest(...args);
+ }}};
+ const mounted=await mountedReview([item('synthetic-pending')],{crypto});
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ hold=true;mounted.nodes.get('keep').onclick();await waiting;
+ try{
+  if(event==='pagehide')mounted.environment.window.dispatchEvent(new Event('pagehide'));
+  else{mounted.environment.document.hidden=true;mounted.environment.document.listeners.visibilitychange();}
+  await waitForReview(async()=> (await db.readLease(account)).expires===0);
+  await db.lease(account,'synthetic-other');
+  release();await mounted.settle();
+  assert.equal((await db.readLease(account)).owner,'synthetic-other');
+ }finally{release();mounted.environment.document.hidden=false;await db.lease(account,'synthetic-other',true);await mounted.nodes.get('close').onclick();}
 });

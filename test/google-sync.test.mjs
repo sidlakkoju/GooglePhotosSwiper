@@ -44,15 +44,15 @@ test('one-time Google claims share a sub space, isolate other accounts and prese
  const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
  await api(a,'decisions/photo?scope=first','PUT',{decision:'remove'});
  await api(b,'decisions/photo?scope=second','PUT',{decision:'keep'});
- assert.equal((await (await api(b,'state?scope=first')).json()).decisions[0].decision,'keep');
+ assert.equal((await (await api(b,'state?scope=first')).json()).decisions[0].decision,'remove');
  assert.equal((await (await api(c,'state?scope=first')).json()).decisions.length,0);
  assert.equal((await (await api(c,'devices')).json()).devices.length,1);
  const pair=await (await api(a,'pair/start','POST')).json();
  const response=await syncRequest(new Request(syncOrigin+'/api/pair/claim',{method:'POST',body:JSON.stringify({short:pair.short,name:'Backup',platform:'test'})}),env);
  assert.equal(response.status,200);const backup=await response.json();
- assert.equal((await (await api(backup,'state?scope=first')).json()).decisions[0].decision,'keep');
+ assert.equal((await (await api(backup,'state?scope=first')).json()).decisions[0].decision,'remove');
  assert.equal((await api(b,'decisions/photo?scope=first','DELETE')).status,200);
- assert.equal((await (await api(a,'state?scope=first')).json()).decisions.length,0);
+ assert.equal((await (await api(a,'state?scope=first')).json()).decisions[0].decision,'remove');
  assert.equal((await (await api(a,'trash-check?scope=first','POST',{ids:['photo']})).json()).safe,false);
  assert.equal((await (await api(c,'trash-check','POST',{ids:['photo']})).json()).safe,false);
 });
@@ -87,8 +87,8 @@ test('two clients poll accepted per-photo decisions and retain only their own un
  let two=await second.sync('photos-two',initial(),save);
  assert.equal(two.items[0].decision,'remove');assert.equal(reviewDeck(two).length,0);assert.equal(two.history.length,0);assert.equal(one.history.length,1);
  two=await second.sync('photos-two',{...two,items:[{...two.items[0],decision:'keep'}],syncPending:{photo:'keep'}},save);
- assert.equal(two.items[0].decision,'keep');
- const version=env.DB.sqlite.prepare('SELECT device_id,updated_at FROM decision_versions').get();assert.equal(version.device_id,b.deviceId);assert.ok(version.updated_at>0);
+ assert.equal(two.items[0].decision,'remove');
+ const version=env.DB.sqlite.prepare('SELECT device_id,updated_at FROM decision_versions').get();assert.equal(version.device_id,a.deviceId);assert.ok(version.updated_at>0);
  const scope=env.DB.sqlite.prepare('SELECT scope FROM decisions').get().scope;
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions WHERE scope = ?').get(scope).n,1);
 });
@@ -123,6 +123,7 @@ test('linking a hashed Photos scope preserves shared and per-device undo and per
  assert.equal((await api('legacy-test','decisions/clear-before-link','DELETE')).status,200);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM decisions WHERE id = ?').get('clear-before-link').n,0);
  env.DB.sqlite.prepare('INSERT INTO review_state VALUES (?,?,?)').run(scope,JSON.stringify({started:true,reviewed:1}),JSON.stringify([entry]));
+ await api('legacy-test','undo','PUT',{history:[entry]});
  assert.deepEqual((await (await api('legacy-test','state')).json()).history,[entry]);
  const {createSyncClient}=await import('../lib/userscript-sync.mjs');
  const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),env)});
@@ -201,12 +202,12 @@ test('linking and repeated Google sign-in preserve ownership and undo-to-undecid
  assert.equal((await (await api(again.token,'trash-check','POST',{ids:['new']})).json()).safe,false);
 });
 
-test('Keep and undo-to-keep replace synced removes through both write endpoints',async()=>{
+test('explicit own-device undo-to-keep replaces synced removes through both write endpoints',async()=>{
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},device=await signIn(env,'p'.repeat(43));
  const api=(path,method,value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},body:JSON.stringify(value)}),env);
  for(const batch of [false,true]){
   await api('decisions/photo','PUT',{decision:'remove'});
-  const response=await api(batch?'decisions':'decisions/photo','PUT',batch?{decisions:[{id:'photo',decision:'keep'}]}:{decision:'keep'});
+  const response=await api(batch?'decisions':'decisions/photo','PUT',batch?{decisions:[{id:'photo',decision:'keep',undo:true}]}:{decision:'keep',undo:true});
   assert.equal(response.status,200);
   assert.equal((await (await api('trash-check','POST',{ids:['photo']})).json()).safe,false);
   assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions').get().decision,'keep');
@@ -497,4 +498,92 @@ test('unauthenticated session creation is atomically capped and expired sessions
  env.DB.sqlite.exec('UPDATE google_pending SET expires_at = 1');
  assert.equal((await request(env,'/auth/session',{state:'d'.repeat(43),name:'Fixture',platform:'test'})).status,200);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_pending').get().n,1);
+});
+
+test('two Google devices merge timestamps, removal precedence, device undo and newer-keep trash safety',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};
+ const a=await signIn(env,'1'.repeat(43)),b=await signIn(env,'2'.repeat(43));
+ const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
+ const decide=(device,decision,updatedAt,undo=false)=>api(device,'decisions','PUT',{decisions:[{id:'synthetic-photo',decision,updatedAt,undo}]});
+ const state=async()=> (await (await api(a,'state')).json()).decisions;
+ await decide(a,'keep',100);
+ await decide(b,'keep',50);
+ assert.equal(env.DB.sqlite.prepare('SELECT device_id FROM decision_versions').get().device_id,a.deviceId);
+ await decide(b,'remove',40);
+ assert.deepEqual(await state(),[{id:'synthetic-photo',decision:'remove'}]);
+ assert.equal(env.DB.sqlite.prepare('SELECT device_id FROM decision_versions').get().device_id,b.deviceId);
+ await decide(a,'remove',30);
+ assert.equal(env.DB.sqlite.prepare('SELECT device_id FROM decision_versions').get().device_id,b.deviceId);
+ await decide(a,'keep',200);
+ assert.deepEqual(await state(),[{id:'synthetic-photo',decision:'remove'}]);
+ assert.equal((await (await api(b,'trash-check','POST',{ids:['synthetic-photo']})).json()).safe,false);
+ await decide(a,null,250,true);
+ await decide(a,'keep',260,true);
+ assert.deepEqual(await state(),[{id:'synthetic-photo',decision:'remove'}]);
+ await decide(b,'keep',300,true);
+ assert.deepEqual(await state(),[{id:'synthetic-photo',decision:'keep'}]);
+ await decide(b,'remove',400);
+ await decide(b,'keep',400);
+ assert.deepEqual(await state(),[{id:'synthetic-photo',decision:'remove'}]);
+ assert.equal((await (await api(b,'trash-check','POST',{ids:['synthetic-photo']})).json()).safe,true);
+ await decide(b,null,500,true);
+ assert.deepEqual(await state(),[]);
+ await decide(a,'keep',450);
+ assert.deepEqual(await state(),[]);
+});
+
+test('synced trash stays binned after stale progress, keeps and own-device undo',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};
+ const device=await signIn(env,'3'.repeat(43));
+ const api=(path,value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method:'PUT',headers:{Authorization:'Bearer '+device.token},body:JSON.stringify(value)}),env);
+ await api('decisions',{decisions:[{id:'synthetic-binned',decision:'remove',updatedAt:100}]});
+ await api('progress',{started:true,reviewed:1,items:[{mediaKey:'synthetic-binned',state:'in_trash',revision:2}]});
+ await api('progress',{started:true,reviewed:1,items:[{mediaKey:'synthetic-binned',state:'active',revision:200}]});
+ await api('decisions',{decisions:[{id:'synthetic-binned',decision:'keep',updatedAt:300,undo:true}]});
+ await api('decisions',{decisions:[{id:'synthetic-binned',decision:null,updatedAt:400,undo:true}]});
+ assert.equal(env.DB.sqlite.prepare('SELECT decision FROM decisions').get().decision,'remove');
+ assert.equal(JSON.parse(env.DB.sqlite.prepare('SELECT data FROM review_items').get().data).state,'in_trash');
+});
+
+test('one-time space linking applies the same timestamp and remove precedence as ongoing writes',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'synthetic-legacy-token'};
+ const existing=await signIn(env,'4'.repeat(43));
+ const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
+ const rows=[
+  {id:'synthetic-older-keep',source:'keep',target:'keep',sourceTime:10,targetTime:20,winner:existing.deviceId},
+  {id:'synthetic-newer-keep',source:'keep',target:'keep',sourceTime:30,targetTime:20},
+  {id:'synthetic-older-remove',source:'remove',target:'keep',sourceTime:10,targetTime:20},
+  {id:'synthetic-newer-keep-vs-remove',source:'keep',target:'remove',sourceTime:30,targetTime:20,winner:existing.deviceId}
+ ];
+ await api(existing.token,'decisions','PUT',{decisions:rows.map(row=>({id:row.id,decision:row.target,updatedAt:row.targetTime}))});
+ await api('synthetic-legacy-token','decisions','PUT',{decisions:rows.map(row=>({id:row.id,decision:row.source,updatedAt:row.sourceTime}))});
+ const sourceDevice=env.DB.sqlite.prepare('SELECT id FROM devices WHERE is_legacy = 1').get().id;
+ const linked=await signIn(env,'5'.repeat(43),'synthetic-legacy-token');
+ const decisions=(await (await api(linked.token,'state')).json()).decisions;
+ const scope=env.DB.sqlite.prepare('SELECT space FROM device_spaces WHERE device_id = ?').get(existing.deviceId).space+':shared';
+ for(const row of rows){
+  assert.equal(decisions.find(entry=>entry.id===row.id).decision,row.source==='remove'||row.target==='remove'?'remove':'keep');
+  const version=env.DB.sqlite.prepare('SELECT device_id,updated_at FROM decision_versions WHERE scope = ? AND id = ?').get(scope,row.id);
+  assert.equal(version.device_id,row.winner||sourceDevice);
+  assert.equal(version.updated_at,row.winner?row.targetTime:row.sourceTime);
+ }
+ assert.equal((await (await api(linked.token,'trash-check','POST',{ids:['synthetic-newer-keep-vs-remove']})).json()).safe,false);
+});
+
+test('polling removes undo eligibility when another device owns the same keep decision',async()=>{
+ const {createSyncClient,markSyncChanges}=await import('../lib/userscript-sync.mjs');
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};
+ const a=await signIn(env,'6'.repeat(43)),b=await signIn(env,'7'.repeat(43));
+ const client=device=>{const result=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),env)});result.configure({url:syncOrigin,token:device.token});return result;};
+ const first=client(a),second=client(b),save=async state=>state;
+ const initial=()=>({started:true,history:[],items:[{mediaKey:'synthetic-own-keep',decision:null,state:'active',revision:0}],syncDecisions:{},syncPending:{}});
+ const keep=state=>markSyncChanges(state,{...state,history:[{key:'synthetic-own-keep',previous:null,decision:'keep',revision:1}],items:[{...state.items[0],decision:'keep',revision:1}]});
+ let one=await first.sync('default',keep(initial()),save);
+ const secondState=keep(initial());
+ assert.ok(secondState.syncPendingTimes['synthetic-own-keep']>=env.DB.sqlite.prepare('SELECT updated_at FROM decision_versions').get().updated_at,JSON.stringify(secondState));
+ const two=await second.sync('default',secondState,save);
+ assert.equal(two.history.length,1);
+ one=await first.sync('default',one,save);
+ assert.equal(one.history.length,0);
+ assert.equal(one.items[0].decision,'keep');
 });
