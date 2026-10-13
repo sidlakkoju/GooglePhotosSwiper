@@ -65,7 +65,7 @@ test('a dead initially refreshed URL stays a placeholder on later binds',async()
   const next={};await f.thumbnails.bind(next,item,value=>value.thumbUrl);
   assert.equal(next.src,null);assert.equal(next.onerror,null);
  }
- assert.deepEqual(f.calls,[item.mediaKey]);assert.equal(f.placeholders.length,6);
+ assert.deepEqual(f.calls,[item.mediaKey,item.mediaKey]);assert.equal(f.placeholders.length,6);
 });
 test('failed thumbnails are isolated by account scope',async()=>{
  let account='synthetic-account-a';const calls=[];
@@ -111,4 +111,38 @@ test('a late error on the old URL adopts the cached refresh without poisoning la
  assert.equal(failed.src,null);
  assert.deepEqual(placeholders,[second,failed]);
  assert.deepEqual(calls,[item.mediaKey]);
+});
+
+for(const proactive of [false,true])test(`${proactive?'poster resolve':'stale bind'} preserves the image error retry`,async()=>{
+ const calls=[],placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:async value=>{calls.push(value.mediaKey);return {...value,thumbUrl:`https://fixture.invalid/fresh-${calls.length}`,urlFetchedAt:1};},placeholder:image=>{image.src=null;placeholders.push(image);}});
+ if(proactive)await thumbnails.resolve(item);
+ const image={};await thumbnails.bind(image,item,value=>value.thumbUrl);
+ assert.equal(image.src,'https://fixture.invalid/fresh-1');
+ await image.onerror();
+ assert.equal(image.src,'https://fixture.invalid/fresh-2');
+ assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+ assert.deepEqual(placeholders,[]);
+ await image.onerror();
+ const later={};await thumbnails.bind(later,item,value=>value.thumbUrl);
+ assert.equal(later.src,null);
+ assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+});
+test('a newer saved thumbnail recovers failed queue and grid binds and gets its own retry',async()=>{
+ const calls=[],placeholders=[];
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:async value=>{calls.push(value.thumbUrl);return {...value,thumbUrl:calls.length===1?'https://fixture.invalid/dead-refresh':value.thumbUrl};},placeholder:image=>{image.src=null;placeholders.push(image);}});
+ const original={...item,urlFetchedAt:1},first={};
+ await thumbnails.bind(first,original,value=>value.thumbUrl);
+ await first.onerror();
+ await first.onerror();
+ const failed={};await thumbnails.bind(failed,original,value=>value.thumbUrl);
+ assert.equal(failed.src,null);
+ const updated={...original,thumbUrl:'https://fixture.invalid/newer',urlFetchedAt:2};
+ const queue={},grid={};
+ await Promise.all([thumbnails.bind(queue,updated,value=>value.thumbUrl),thumbnails.bind(grid,updated,value=>`${value.thumbUrl}=w100`)]);
+ assert.equal(queue.src,updated.thumbUrl);
+ assert.equal(grid.src,`${updated.thumbUrl}=w100`);
+ assert.deepEqual(placeholders,[first,failed]);
+ await queue.onerror();
+ assert.deepEqual(calls,[original.thumbUrl,updated.thumbUrl]);
 });
