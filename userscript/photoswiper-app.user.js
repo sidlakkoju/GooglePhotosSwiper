@@ -308,15 +308,16 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  const fresh=memories.map(memory=>memory.filter(item=>selected.has(item.mediaKey))).filter(memory=>memory.length);
  for(let i=fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
  if(!remainingUnswiped&&!keys.length)fresh.sort((a,b)=>Math.min(...a.map(item=>item.lastDecisionAt))-Math.min(...b.map(item=>item.lastDecisionAt)));
- for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else keys.push(...memory.map(item=>item.mediaKey));}
+ for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else if(fullMemory.some(item=>(saved.seen||[]).includes(item.mediaKey)))keys.unshift(...memory.map(item=>item.mediaKey));else keys.push(...memory.map(item=>item.mediaKey));}
 
  const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
  if(memory&&keys.includes(focused)){
   const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
   keys=[...ordered.slice(index),...keys.filter(key=>!members.has(key)),...ordered.slice(0,index)];
  }
- saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>byKey.has(key));
- saved.starts=[...new Set([...(saved.starts||[]),...memories.map(memory=>memory.find(item=>keys.includes(item.mediaKey)&&!known.has(item.mediaKey))?.mediaKey).filter(Boolean)])];
+ const loadedKeys=new Set(state.items.map(item=>item.mediaKey));
+ saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>loadedKeys.has(key));
+ saved.starts=[...new Set([...(saved.starts||[]),...memories.filter(memory=>!memory.some(item=>known.has(item.mediaKey))).map(memory=>memory.find(item=>keys.includes(item.mediaKey))?.mediaKey).filter(Boolean)])];
  return keys.map(key=>byKey.get(key));
 }
 

@@ -75,3 +75,21 @@ test('paginated Flashbacks wait for the whole timeline and keep boundary memorie
  state={...state,items:state.items.map(row=>consumed.includes(row.mediaKey)?{...row,decision:'remove'}:row)};
  assert.deepEqual(flashbackDeck(state,JSON.parse(JSON.stringify(saved)),()=>0).map(row=>row.mediaKey),deck.slice(50).map(row=>row.mediaKey));
 });
+
+test('persisted played boundary memories continue before the remaining shuffled deck without a second label',()=>{
+ const older=items.slice(0,4),played=items.slice(4,8).map(item=>({...item,decision:'remove'})),remaining=items.slice(8,16);
+ const state={started:true,exhausted:false,items:[...played,...remaining],history:[]};
+ let saved=JSON.parse(JSON.stringify({keys:[...played,...remaining].map(item=>item.mediaKey),seen:played.map(item=>item.mediaKey),starts:[played[0].mediaKey,remaining[0].mediaKey]}));
+ const persisted=structuredClone(saved);
+ assert.deepEqual(flashbackDeck(state,saved,()=>0),[]);
+ assert.deepEqual(saved,persisted);
+ state.items.push(...older);
+ state.exhausted=true;
+ const expected=[...older,...remaining].map(item=>item.mediaKey);
+ assert.deepEqual(flashbackDeck(state,saved,()=>0).map(item=>item.mediaKey),expected);
+ assert.deepEqual(saved.starts,persisted.starts);
+ assert.deepEqual(saved.seen,persisted.seen);
+ saved=JSON.parse(JSON.stringify(saved));
+ assert.deepEqual(flashbackDeck(state,saved,()=>0).map(item=>item.mediaKey),expected);
+ assert.deepEqual(saved.starts,persisted.starts);
+});
