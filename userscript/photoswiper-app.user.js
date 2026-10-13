@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.64
+// @version 1.2.65
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -788,7 +788,7 @@ function createReviewPreloader({createImage,createVideo,videoURL,previewURL,play
    }).catch(()=>{if(active(entry)){entries.delete(entry.key);dispose(entry);}});
   }
  }
- return {update,take(key,url){const entry=entries.get(key);if(!entry?.ready||entry.preview!==url)return null;const image=entry.image;if(entry.video)entry.image=null;else entries.delete(key);return image;},videoSource:key=>entries.get(key)?.source||entries.get(key)?.request,clear(items=[],size){const wanted=new Map(items.map(item=>[item.mediaKey,previewURL(item.thumbUrl,size)]));for(const [key,entry] of entries){if(wanted.get(key)===entry.preview)continue;entries.delete(key);dispose(entry);}}};
+ return {update,take(key,url){const entry=entries.get(key);if(!entry?.ready||entry.preview!==url)return null;const image=entry.image;if(entry.video)entry.image=null;else entries.delete(key);return image;},videoSource:key=>entries.get(key)?.source||entries.get(key)?.request,clear(items=[],size){const wanted=new Map();for(const item of items){try{wanted.set(item.mediaKey,previewURL(item.thumbUrl,size));}catch{}}for(const [key,entry] of entries){if(wanted.get(key)===entry.preview)continue;entries.delete(key);dispose(entry);}}};
 }
 
 function previewURL(value,{width=512,height=512,dpr=1,mobile=false,expanded=false,authuser='0',video=false}={}) {
@@ -866,10 +866,11 @@ function createLocalThumbnails({refresh,stale,scope=()=>'',placeholder}) {
   pending.set(key,{request,item});
   try{return await request;}finally{pending.delete(key);}
  }
- function bind(image,item,source) {
+ function bind(image,item,source,{retryLookup=false}={}) {
   const key=`${scope()}:${item.mediaKey}`;
   let refreshing=false,failed=false,currentSource,currentItem;
   const fail=(remember=true)=>{if(failed)return;failed=true;if(remember&&currentItem&&cache.get(key)?.thumbUrl===currentItem.thumbUrl)failedKeys.set(key,{thumbUrl:currentItem.thumbUrl,originalUrl:item.thumbUrl});image.onerror=null;placeholder(image,item);};
+  image.onload=()=>{retriedKeys.delete(key);};
   image.onerror=async()=>{
    if(failed||refreshing)return;
    if(retriedKeys.has(key)&&!pending.has(key)){
@@ -879,9 +880,9 @@ function createLocalThumbnails({refresh,stale,scope=()=>'',placeholder}) {
     return;
    }
    refreshing=true;
-   try{const fresh=await resolve(item,true);if(!failed){const nextSource=source(fresh);if(nextSource===currentSource)fail();else{currentItem=fresh;currentSource=nextSource;image.src=nextSource;}}}catch{fail(false);}finally{refreshing=false;}
+   try{const fresh=await resolve(item,true);if(!failed&&image.isConnected!==false){const nextSource=source(fresh);if(nextSource===currentSource)fail();else{currentItem=fresh;currentSource=nextSource;image.src=nextSource;}}}catch{fail(false);}finally{refreshing=false;}
   };
-  const ready=resolve(item).then(fresh=>{if(failedKeys.has(key)){fail();return;}if(!failed){currentItem=fresh;currentSource=source(fresh);image.src=currentSource;}},()=>fail(false));
+  const ready=resolve(item).then(fresh=>{if(failedKeys.has(key)){fail();return;}if(!failed){currentItem=fresh;currentSource=source(fresh);image.src=currentSource;}},async()=>{if(retryLookup){try{const fresh=await resolve(item,true);currentItem=fresh;currentSource=source(fresh);image.src=currentSource;return;}catch{}}fail(false);});
   return ready;
  }
  return {resolve,bind};
@@ -1723,7 +1724,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   reviewPanel.querySelector('.trash-preview')?.remove();previewGeneration++;if(previewVideo){previewVideo.pause();previewVideo.removeAttribute('src');previewVideo.load();previewVideo=null;}
   const item=rows.find(item=>item.mediaKey===previewKey);if(!item){previewKey=null;return;}
   const preview=document.createElement('section');preview.setAttribute('class','trash-preview');preview.setAttribute('id','trash-preview');preview.setAttribute('role','dialog');preview.setAttribute('aria-label',`Preview ${item.name}`);const nav=document.createElement('div');nav.setAttribute('class','trash-nav');const back=document.createElement('button'),position=document.createElement('span'),done=document.createElement('button');back.textContent='\u2039 Going to Trash';position.textContent=`${rows.indexOf(item)+1} of ${rows.length}`;done.textContent='Done';back.onclick=done.onclick=()=>{previewKey=null;renderTrashReview();};nav.append(back,position,done);
-  const media=document.createElement('div');media.setAttribute('class','trash-preview-media');const image=document.createElement(item.type==='video'?'video':'img');if(item.type==='video'){image.controls=true;image.playsInline=true;previewVideo=image;const token=previewGeneration;thumbnails.resolve(item).then(fresh=>{if(token===previewGeneration)image.poster=previewSource(fresh.thumbUrl);}).catch(()=>{});videoURL(item).then(url=>{if(token===previewGeneration)image.src=url;}).catch(error=>message(error.message));}else{image.alt=item.name;thumbnails.bind(image,item,fresh=>previewSource(fresh.thumbUrl));}media.append(image);
+  const media=document.createElement('div');media.setAttribute('class','trash-preview-media');const image=document.createElement(item.type==='video'?'video':'img');if(item.type==='video'){image.controls=true;image.playsInline=true;previewVideo=image;const token=previewGeneration;const poster=document.createElement('img');poster.alt=item.name;media.append(poster);thumbnails.bind(poster,item,fresh=>previewSource(fresh.thumbUrl),{retryLookup:true});const loaded=poster.onload;poster.onload=()=>{loaded();if(token===previewGeneration){image.poster=poster.src;poster.hidden=true;}};videoURL(item).then(url=>{if(token===previewGeneration)image.src=url;}).catch(error=>message(error.message));}else{image.alt=item.name;thumbnails.bind(image,item,fresh=>previewSource(fresh.thumbUrl));}media.append(image);
   const caption=document.createElement('div'),details=document.createElement('small');caption.setAttribute('class','trash-preview-caption');caption.textContent=item.name;details.textContent=[item.date?new Date(item.date).toLocaleDateString():'Unknown date',item.type==='video'?videoDuration(item):null,itemSize(item),item.legacy?'Previously marked':null].filter(Boolean).join(' \u00b7 ');caption.append(details);
   const strip=document.createElement('div');strip.setAttribute('class','trash-strip');for(const row of rows){const button=document.createElement('button'),thumb=document.createElement('img');button.setAttribute('class',row.mediaKey===previewKey?'active':'');button.setAttribute('aria-label',`Preview ${row.name}`);thumb.alt='';thumbnails.bind(thumb,row,fresh=>mediaURL(fresh.thumbUrl));button.append(thumb);button.onclick=()=>{previewKey=row.mediaKey;renderTrashReview();};strip.append(button);}
   const bar=document.createElement('div');bar.setAttribute('class','trash-bar');const keep=document.createElement('button'),trash=document.createElement('button');keep.textContent='Keep';trash.textContent='Trash';trash.setAttribute('class','preview-trash');keep.setAttribute('aria-pressed',String(item.decision==='keep'));trash.setAttribute('aria-pressed',String(item.decision==='remove'));keep.onclick=()=>selectTrashItem(item.mediaKey,false);trash.onclick=()=>selectTrashItem(item.mediaKey,true);bar.append(keep,trash);preview.append(nav,media,caption,strip,bar);reviewPanel.append(preview);done.focus();
@@ -1936,7 +1937,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.64":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.65":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.64
+// @version 1.2.65
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -16,9 +16,7 @@
 // @grant GM.getValue
 // @grant GM.setValue
 // @grant GM.deleteValue
-// @grant GM.xmlHttpRequest
 // @grant GM.openInTab
-// @connect photoswiper-sync.sidlakkoju.workers.dev
 // @grant unsafeWindow
 // @inject-into content
 // @noframes
@@ -58,7 +56,7 @@ function showUpdateBanner(environment,version){
  const document=environment.document;
  if(document.getElementById('photoswiper-update'))return false;
  const banner=document.createElement('a');
- banner.id='photoswiper-update';banner.textContent='Update available — tap to update Photos Swipe';
+ banner.id='photoswiper-update';banner.textContent='Update available - tap to update Photos Swipe';
  banner.href=appOrigin+'/photoswiper.user.js';banner.target='_blank';banner.rel='noopener noreferrer';
  banner.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#1967d2;color:white;padding:16px;text-align:center;font:16px system-ui;text-decoration:none;';
  (document.body||document.documentElement).appendChild(banner);
@@ -108,10 +106,14 @@ async function startAutoLoader(environment){
  const get=gm?.getValue?.bind(gm)||environment.GM_getValue,set=gm?.setValue?.bind(gm)||environment.GM_setValue;
  let cached;
  try{cached=await get('photoswiper-app',null);}catch{}
+ if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
  const latest=await requestApp(environment,gm?.xmlHttpRequest?.bind(gm)||environment.GM_xmlhttpRequest);
- if(latest){if(latest.requiredLoaderVersion)showUpdateBanner(environment,latest.requiredLoaderVersion);try{await set('photoswiper-app',latest);}catch{}}
+ if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
+ if(latest){try{await set('photoswiper-app',latest);}catch{}}
  else showUpdateBanner(environment);
  const app=latest||cached;
+ if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
+ if(latest?.requiredLoaderVersion)showUpdateBanner(environment,latest.requiredLoaderVersion);
  if(!app||typeof app.code!=='string'||typeof app.version!=='string'){showUpdateBanner(environment);return false;}
  try{compareVersions(app.version,app.version);const executed=executeApp(environment,app);if(!executed)showUpdateBanner(environment);return executed;}catch{showUpdateBanner(environment);return false;}
 }

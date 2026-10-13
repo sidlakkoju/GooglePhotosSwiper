@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.64
+// @version 1.2.65
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content
@@ -12,8 +12,6 @@
 // @grant GM.getValue
 // @grant GM.setValue
 // @grant GM.deleteValue
-// @grant GM.xmlHttpRequest
-// @grant GM.openInTab
 // @connect photoswiper-sync.sidlakkoju.workers.dev
 // @grant unsafeWindow
 // @grant GM_deleteValue
@@ -21,7 +19,6 @@
 // @grant GM_openInTab
 // @grant GM_getValue
 // @grant GM_setValue
-// @connect photoswiper-sync.sidlakkoju.workers.dev
 // @downloadURL https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js
 // @updateURL https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js
 // ==/UserScript==

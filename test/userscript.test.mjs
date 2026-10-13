@@ -517,13 +517,13 @@ test('Undo after a synced Keep keeps its confirmation through the next sync',asy
  assert.ok(uploads.some(value=>value.decisions?.some(row=>row.id==='synthetic-undo'&&row.decision===null)));
 });
 test('mounted oldest-first preserves the current card and sorts the remaining deck',async()=>{
- const mounted=await mountedReview([item('dated',{date:'1990-01-01T00:00:00.000Z'}),item('missing')]);
- const before=mounted.nodes.get('caption').textContent;
+ const rows=[item('current',{date:'2005-01-01'}),item('newest',{date:'2020-01-01'}),item('oldest',{date:'1990-01-01'}),item('middle',{date:'2000-01-01'}),item('missing')];
+ const mounted=await mountedReview(rows);
+ const before=mounted.nodes.get('caption').textContent,currentKey=before.split(' · ')[0];
  mounted.nodes.get('sort').value='oldest';mounted.nodes.get('sort').onchange();
  assert.equal(mounted.nodes.get('caption').textContent,before);
- await mounted.click('keep');
- assert.match(mounted.nodes.get('caption').textContent,before.startsWith('dated')?/^missing · Unknown date · Unknown size$/:/^dated · /);
- assert.equal((await mounted.read()).items.filter(row=>row.decision==='keep').length,1);
+ const expected=rows.filter(row=>row.name!==currentKey).sort((a,b)=>(a.date?Date.parse(a.date):0)-(b.date?Date.parse(b.date):0));
+ for(const row of expected){await mounted.click('keep');assert.equal(mounted.nodes.get('caption').textContent.split(' · ')[0],row.name);}
 });
 test('Trash writes require confirmation and bounded valid stable identifiers',async()=>{
  const f=fixture(()=>[]);
