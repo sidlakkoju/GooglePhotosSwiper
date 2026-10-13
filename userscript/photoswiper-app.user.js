@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.58
+// @version 1.2.59
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1259,7 +1259,8 @@ function mountPhotosSwipe(environment) {
  const deleteMethod=document.createElement('select');deleteMethod.setAttribute('id','delete-method');deleteMethod.setAttribute('aria-label','Delete method');for(const [value,label] of [['trash','Trash']]){const option=document.createElement('option');option.value=value;option.textContent=label;deleteMethod.append(option);}deleteMethod.hidden=true;const lifetime=document.createElement('p');lifetime.setAttribute('id','lifetime-freed');lifetime.hidden=true;statsElement.hidden=true;sheet.append(statsElement);group('Refresh',refreshElement,loadElement,trashElement);group('Previous transfer',sendElement,albumElement).hidden=true;
  const settingsVersion=document.createElement('p');settingsVersion.setAttribute('id','settings-version');settingsVersion.setAttribute('class','version-label');settingsVersion.textContent=`Photos Swipe v${environment.version}`;sheet.append(settingsVersion);
  const reviewPanel=document.createElement('section');reviewPanel.setAttribute('class','review-panel');reviewPanel.setAttribute('id','review-panel');reviewPanel.hidden=true;reviewPanel.append(queue_detailsElement,trashCandidates,divElement36);divElement4.append(reviewPanel);queue_detailsElement.open=true;trashLabel.hidden=true;trashOptIn.checked=true;pElement40.textContent='Review marked items before moving them to Google Photos Trash.';
- const openSettings=()=>{sheet.hidden=false;settingsPanel.open=true;gear.setAttribute('aria-expanded','true');sheetClose.focus();};const closeSettings=()=>{suppressViewerShortcuts();sheet.hidden=true;gear.setAttribute('aria-expanded','false');gear.focus();};gear.onclick=openSettings;sheetClose.onclick=closeSettings;
+ let cancelGoogleSignIn=null;
+ const openSettings=()=>{sheet.hidden=false;settingsPanel.open=true;gear.setAttribute('aria-expanded','true');sheetClose.focus();};const closeSettings=()=>{cancelGoogleSignIn?.();suppressViewerShortcuts();sheet.hidden=true;gear.setAttribute('aria-expanded','false');gear.focus();};gear.onclick=openSettings;sheetClose.onclick=closeSettings;
  const openReview=()=>{swipeFeedback.reset();const video=mediaElement.querySelector('video');if(video&&!video.paused){video.pause();resumeReviewPlayback=true;}reviewItems=reviewTrashCandidates(state).map(item=>({...item,legacy:!!item.queueSent}));previewKey=null;reviewPanel.hidden=false;reviewStatus.textContent='';reviewStatus.hidden=true;renderTrashReview();moveTrash.focus();};reviewButton.onclick=openReview;
  overlayElement.addEventListener('click',event=>{if(event.target===overlayElement){if(!pairingModal.modal.hidden)return pairingModal.close();if(activePairingDialog())return;return close();}});
  document.documentElement.append(host);
@@ -1295,40 +1296,72 @@ function mountPhotosSwipe(environment) {
  });
  const accountMismatch=document.createElement('p');accountMismatch.hidden=true;divElement4.insertBefore(accountMismatch,cardElement);
  const showSyncAccount=settings=>{pairingNotice.textContent=settings.email?'Sync account: '+settings.email:'';accountMismatch.hidden=!settings.email||!identity?.label||identity.label===settings.email.toLowerCase();accountMismatch.textContent=accountMismatch.hidden?'':'This device syncs as '+settings.email+'; Photos is showing '+identity.label+'. Use Sign in with Google / switch account in Settings.';};
- const googleSignIn=document.createElement('button');googleSignIn.textContent='Sign in with Google';onboarding.insertBefore(googleSignIn,onboardPair);
- const googleSettings=document.createElement('button');googleSettings.textContent='Sign in with Google / switch account';settingsPanel.append(googleSettings);
- const signInGoogle=async()=>{
-  openSettings();
-  const gm=environment.GM,store=await pairingPromise;
-  if(!store.durable||typeof gm?.xmlHttpRequest!=='function'||typeof gm?.openInTab!=='function'){pairingNotice.textContent='Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.';return;}
-  googleSignIn.disabled=true;googleSettings.disabled=true;
-  const state=btoa(String.fromCharCode(...environment.crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
-  const origin='https://photoswiper-sync.sidlakkoju.workers.dev';
+ const googleSignIn=document.createElement('button');googleSignIn.id='google-sign-in';googleSignIn.textContent='Sign in with Google';onboarding.insertBefore(googleSignIn,onboardPair);
+ const googleSettings=document.createElement('button');googleSettings.id='google-settings';googleSettings.textContent='Sign in with Google / switch account';settingsPanel.append(googleSettings);
+ const signInGoogle=async(resumeState)=>{
+  if(cancelGoogleSignIn||googleSignIn.disabled||googleSettings.disabled)return;
+  openSettings();googleSignIn.disabled=true;googleSettings.disabled=true;
+  const gm=environment.GM,origin='https://photoswiper-sync.sidlakkoju.workers.dev';
+  let popup,timer,deadline,cancelled=false,rejectStop,navigating=false,claimCode=resumeState?.code;
+  const receiveCode=event=>{if(!popup||event.origin!==origin||event.source!==popup||event.data?.type!=='photos-swipe-google-sign-in'||event.data.state!==activeState||!/^[A-Za-z0-9_-]{43}$/.test(event.data.code||''))return;claimCode=event.data.code;};
+  let activeState;
+  window.addEventListener?.('message',receiveCode);
+  const stopped=new Promise((resolve,reject)=>{rejectStop=reject;});stopped.catch(()=>{});
+  const stop=reason=>{cancelled=true;rejectStop(Error(reason));};
+  cancelGoogleSignIn=()=>stop('Sign-in cancelled');
+  const cancel=document.createElement('button');cancel.id='google-sign-in-cancel';cancel.textContent='Cancel';cancel.onclick=cancelGoogleSignIn;
   const privateRequest=(path,value,token)=>new Promise((resolve,reject)=>{gm.xmlHttpRequest({method:'POST',url:origin+path,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},data:JSON.stringify(value),timeout:10000,onload:response=>{try{resolve({status:response.status,value:JSON.parse(response.responseText)});}catch(error){reject(error);}},onerror:()=>reject(Error('Sign-in request failed')),ontimeout:()=>reject(Error('Sign-in request timed out'))});});
+  const wait=promise=>Promise.race([promise,stopped]);
   try{
-   await gm.setValue('photos-swipe-google-state',state);
-   const previous=await store.settings();
-   const session=await privateRequest('/auth/session',{state,name:window.navigator?.userAgent?.includes('iPhone')?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token);
-   if(session.status!==200)throw Error('Could not start Google sign-in');
-   gm.openInTab(session.value.url,{active:true,insert:true});
-   pairingNotice.textContent='Complete Google sign-in in the new tab, then paste its sign-in code here.';
-   const code=await new Promise(resolve=>{
-    const input=document.createElement('input'),submit=document.createElement('button');
-    input.placeholder='Sign-in code';input.setAttribute('aria-label','Sign-in code');submit.textContent='Finish sign-in';
-    pairingNotice.append(input,submit);submit.onclick=()=>{const value=input.value.trim();if(value){input.remove();submit.remove();resolve(value);}};
-   });
-   if(await gm.getValue('photos-swipe-google-state')!==state)throw Error('Sign-in cancelled');
-   const claim=await privateRequest('/auth/claim',{state,code},previous.token);
-   if(claim.status!==200)throw Error('Invalid or expired sign-in code. Try again.');
-   await store.saveSettings({url:origin,...claim.value,onboardingDismissed:true});
-   await gm.deleteValue('photos-swipe-google-state');
-   syncClient.configure({url:origin,...claim.value});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(claim.value);await synchronize();return;
-
-  }catch(error){pairingNotice.textContent=error.message;}finally{await gm.deleteValue('photos-swipe-google-state');googleSignIn.disabled=false;googleSettings.disabled=false;}
+   if(typeof gm?.xmlHttpRequest!=='function'||typeof gm?.openInTab!=='function')throw Error('Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.');
+   const ios=/iPhone|iPad|iPod/.test(window.navigator?.userAgent||'')||(window.navigator?.platform==='MacIntel'&&window.navigator?.maxTouchPoints>1);
+   if(!ios&&!resumeState)popup=window.open?.('about:blank','_blank','popup,width=560,height=700');
+   pairingNotice.textContent=resumeState?'Completing Google sign-in\u2026':ios?'Opening Google sign-in\u2026':'Sign-in page opened in a new tab. Waiting for Google sign-in\u2026';pairingNotice.append(cancel);
+   deadline=environment.setTimeout(()=>stop('Google sign-in timed out. Please try again.'),300000);
+   const store=await wait(pairingPromise);
+   if(!store.durable)throw Error('Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.');
+   const state=resumeState?.state||btoa(String.fromCharCode(...environment.crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+   activeState=state;
+   await wait(gm.setValue('photos-swipe-google-state',state));
+   const previous=await wait(store.settings());
+   if(!resumeState){
+    const session=await wait(privateRequest('/auth/session',{state,name:ios?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token));
+    if(session.status!==200)throw Error('Could not start Google sign-in');
+    const target=new URL(session.value.url);
+    if(ios||!popup){target.searchParams.set('return',location.href);window.location.href=target.href;navigating=true;return;}
+    popup.location.href=target.href;
+   }
+   let claim;
+   while(!cancelled){
+    if(!resumeState)await wait(new Promise(resolve=>{timer=environment.setTimeout(resolve,2000);}));
+    resumeState=null;
+    if(sheet.hidden)throw Error('Sign-in cancelled');
+    if(await wait(gm.getValue('photos-swipe-google-state'))!==state)throw Error('Sign-in cancelled');
+    try{claim=await wait(privateRequest('/auth/poll',{state,...(claimCode?{code:claimCode}:{})},previous.token));}catch(error){if(cancelled)throw error;continue;}
+    if(claim.status!==200)continue;
+    if(claim.value.status==='done')break;
+    if(claim.value.status!=='pending')throw Error(claim.value.error||(claim.value.status==='expired'?'Google sign-in timed out. Please try again.':'Google sign-in failed. Please try again.'));
+   }
+   const {status,...credentials}=claim.value;
+   await wait(store.saveSettings({url:origin,...credentials,onboardingDismissed:true}));
+   syncClient.configure({url:origin,...credentials});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(credentials);await synchronize();
+  }catch(error){pairingNotice.textContent=error.message;}finally{
+   window.removeEventListener?.('message',receiveCode);
+   environment.clearTimeout(timer);environment.clearTimeout(deadline);cancel.hidden=true;
+   try{popup?.close();}catch{}
+   try{if(!navigating)await gm?.deleteValue('photos-swipe-google-state');}catch{}finally{if(!navigating){cancelGoogleSignIn=null;googleSignIn.disabled=false;googleSettings.disabled=false;}}
+  }
  };
- googleSignIn.onclick=signInGoogle;googleSettings.onclick=signInGoogle;
+ googleSignIn.onclick=()=>signInGoogle();googleSettings.onclick=()=>signInGoogle();
+ const resumeGoogleSignIn=async()=>{try{
+  const target=new URL(location.href),fragment=new URLSearchParams(target.hash.slice(1)),state=fragment.get('photos-swipe-state'),code=fragment.get('photos-swipe-code');
+  if(fragment.has('photos-swipe-code')){target.hash=fragment.get('photos-swipe-return-hash')||'';window.history?.replaceState(null,'',target.href);}
+  const stored=await environment.GM?.getValue('photos-swipe-google-state');
+  if(state===stored&&/^[A-Za-z0-9_-]{43}$/.test(state||'')&&/^[A-Za-z0-9_-]{43}$/.test(code||''))await signInGoogle({state,code});
+ }catch(error){pairingNotice.textContent=error.message;}};
  const clearCredentials=async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,token:'',unpaired:true});$('sync-token').value='';syncEnabled=false;unpairedBanner.hidden=false;};
  const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,unpaired:clearCredentials,status:value=>{syncSummary=value;syncStatus.textContent=value;const failed=/saved locally; retry|unpaired/i.test(value);gear.classList.toggle('gear-error',failed);gear.setAttribute('aria-label',failed?'Settings \u00b7 sync error':'Settings');if(failed)message(value);pairedNotice.hidden=!value.includes('Device paired');}});
+ void resumeGoogleSignIn();
  async function showDevices(){
   const result=await syncClient.devices();devicesList.replaceChildren();
   for(const device of result.devices.filter(device=>device.revoked_at==null).sort((a,b)=>b.created_at-a.created_at)){
@@ -1443,7 +1476,7 @@ function mountPhotosSwipe(environment) {
   assertLockedAccount();
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){pairSubmit.disabled=busy;for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','pair-submit','google-sign-in','google-settings','google-sign-in-cancel'].includes(button.id)&&!pairingModal.modal.contains(button)&&!receivingPanel?.contains(button))button.disabled=busy||!identity||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer||sessionClosing||!pageVisible()||$('overlay').hidden)return;
   leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
@@ -1943,7 +1976,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.58":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.59":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
