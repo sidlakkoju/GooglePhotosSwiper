@@ -3710,3 +3710,19 @@ test('order capsule cycles approved names, pins the card, opens its menu and res
  await mounted.click('keep');await mounted.click('keep');await mounted.click('keep');const resumed=caption();await mounted.nodes.get('close').onclick();
  const restored=bundleEnvironment();restored.environment.window.indexedDB=indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),restored.environment);await restored.nodes.get('launcher').onclick();assert.match(restored.nodes.get('order-switcher').childNodes[0].textContent,/Flashbacks/);assert.equal(restored.nodes.get('caption').textContent,resumed);await restored.nodes.get('close').onclick();
 });
+
+test('Flashbacks undo restores a card held in the middle after changing order',async()=>{
+ const rows=Array.from({length:320},(_,index)=>item(`undo-order-${index}`,{date:new Date(Date.UTC(2000+Math.floor(index/8),1,1,0,index%8)).toISOString()}));
+ const mounted=await mountedReview(rows),menu=mounted.nodes.get('order-menu');
+ menu.childNodes[1].onclick();
+ await mounted.click('keep');
+ const held=mounted.nodes.get('caption').textContent;
+ menu.childNodes[0].onclick();
+ assert.equal(mounted.nodes.get('caption').textContent,held);
+ await mounted.click('remove');
+ assert.notEqual(mounted.nodes.get('caption').textContent,held);
+ await mounted.click('undo');
+ assert.equal(mounted.nodes.get('caption').textContent,held);
+ assert.equal((await mounted.read()).items.find(row=>held.startsWith(`${row.name} ·`)).decision,null);
+ await mounted.nodes.get('close').onclick();
+});

@@ -26,3 +26,15 @@ test('kept resurfacing respects both cooldowns, doubling, and queued or trashed 
  assert.deepEqual(flashbackDeck({items:[kept],history:Array(500).fill({})},{},random(),now),[kept]);assert.deepEqual(flashbackDeck({items:[kept],history:[]},{},random(),now),[]);
 });
 test('approved order names and cycle are stable',()=>assert.deepEqual(reviewOrders.map(([value,name])=>[value,name]),[['flashbacks','Flashbacks'],['original','Timeline'],['oldest','Oldest first'],['largest','Largest first']]));
+
+test('large libraries retain swipe counts and apply decisions without argument overflow',async()=>{
+ const {reviewSwipeCount,recordReviewDecision}=await import('../lib/userscript-core.mjs');
+ const items=Array.from({length:200000},(_,index)=>({mediaKey:`large-${index}`,decision:null,revision:0,lastDecisionSwipe:index===199999?250000:0}));
+ const state={items,history:[],swipeCount:10};
+ assert.equal(reviewSwipeCount(state),250000);
+ const next=recordReviewDecision(state,items[0],'keep',123);
+ assert.equal(next.swipeCount,250001);
+ assert.equal(next.items[0].decision,'keep');
+ assert.equal(next.items[0].lastDecisionSwipe,250001);
+ assert.equal(next.history.length,1);
+});

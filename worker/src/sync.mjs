@@ -9,10 +9,10 @@ function progressItemsValid(items) {
 function historyValid(entries) {
  return Array.isArray(entries)&&entries.length<=2000&&entries.every(entry=>entry&&Object.keys(entry).every(key=>['key','previous','decision','revision','cooldown'].includes(key))&&(!Object.hasOwn(entry,'cooldown')||entry.cooldown&&Object.keys(entry.cooldown).every(key=>['lastDecisionAt','lastDecisionSwipe','keepCount'].includes(key)&& (entry.cooldown[key]===null||Number.isSafeInteger(entry.cooldown[key])&&entry.cooldown[key]>=0)))&&identifier(entry.key)&&decision(entry.previous)&&['keep','remove'].includes(entry.decision)&&Number.isSafeInteger(entry.revision)&&entry.revision>=0);
 }
-async function body(request) {
- if(Number(request.headers.get('Content-Length'))>262144)throw Error('Input too large');
+async function body(request,limit=262144) {
+ if(Number(request.headers.get('Content-Length'))>limit)throw Error('Input too large');
  const reader=request.body?.getReader();let size=0;const chunks=[];
- if(reader)while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>262144){await reader.cancel();throw Error('Input too large');}chunks.push(value);}
+ if(reader)while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit){await reader.cancel();throw Error('Input too large');}chunks.push(value);}
  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
  const value=JSON.parse(new TextDecoder().decode(bytes));
  if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid input');
@@ -81,7 +81,7 @@ export async function syncRequest(request,env={}) {
   }
   if(route==='/api/progress'&&method==='GET')return respond((await read()).progress);
   if((route==='/api/progress'&&method==='PUT')||(route==='/api/undo'&&['PUT','POST'].includes(method))){
-   const value=await body(request);let result=null;
+   const value=await body(request,route==='/api/undo'&&method==='PUT'?1048576:262144);let result=null;
    const stateScope=route==='/api/undo'?historyScope:scope;
    await db.prepare("INSERT OR IGNORE INTO review_state (scope, progress, history) VALUES (?, '{}', '[]')").bind(stateScope).run();
    if(route==='/api/progress'){
