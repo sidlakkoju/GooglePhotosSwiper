@@ -155,6 +155,9 @@ test('legacy claims require the code and original device token',async()=>{
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_space_links').get().n,0);
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM device_spaces').get().n,0);
  assert.equal((await request(env,'/auth/claim',{state,code})).status,401);
+ assert.equal((await request(env,'/auth/poll',{state,code})).status,401);
+ assert.deepEqual(await (await request(env,'/auth/poll',{state},'legacy-test')).json(),{status:'pending'});
+ assert.equal((await request(env,'/auth/poll',{state,code:'x'.repeat(43)},'legacy-test')).status,400);
  const claims=await Promise.all([request(env,'/auth/claim',{state,code},'legacy-test'),request(env,'/auth/claim',{state,code},'legacy-test')]);
  assert.deepEqual(claims.map(response=>response.status).sort(),[200,400]);
  const device=await claims.find(response=>response.status===200).json();
@@ -231,13 +234,18 @@ test('sign-in page permits GIS styles while restricting scripts and framing',asy
  assert.match(script,/postMessage/);
 });
 
-test('polling is pending until completion, single-use across poll and legacy claim, and expires',async()=>{
+test('state-only polling cannot redeem a completed session; code redemption is single-use and expires',async()=>{
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='p'.repeat(43);
  await request(env,'/auth/session',{state,name:'Test',platform:'test'});
  assert.deepEqual(await (await request(env,'/auth/poll',{state})).json(),{status:'pending'});
  const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
  const {code}=await (await request(env,'/auth/complete',{state,credential:await token(pending.nonce)})).json();
- const results=await Promise.all([request(env,'/auth/poll',{state}),request(env,'/auth/poll',{state})]);
+ for(const value of [{state},{state,code:'x'.repeat(43)}]){
+  const response=await request(env,'/auth/poll',value);assert.equal(response.status,value.code?400:200);if(!value.code)assert.deepEqual(await response.json(),{status:'pending'});
+ }
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,0);
+ assert.equal(env.DB.sqlite.prepare('SELECT claimed_at FROM google_pending').get().claimed_at,null);
+ const results=await Promise.all([request(env,'/auth/poll',{state,code}),request(env,'/auth/poll',{state,code})]);
  const values=await Promise.all(results.map(response=>response.json()));assert.equal(values.filter(value=>value.status==='done').length,1);assert.ok(values.find(value=>value.status==='done').token);
  assert.equal((await request(env,'/auth/claim',{state,code})).status,400);
  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'expired');
@@ -258,7 +266,7 @@ test('sign-in page closes and signals success, and shows errors without a code b
  const html=await (await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env)).text(),script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
  for(const outcome of ['done','failed','network']){
   let callback,closed=0,posted=0,broadcast=0;const status={};
-  runInNewContext(script,{google:{accounts:{id:{initialize:options=>{callback=options.callback;},renderButton(){}}}},document:{getElementById:()=>status},window:{close(){closed++;},opener:{postMessage(message,origin){assert.equal(origin,'https://photos.google.com');posted++;}}},BroadcastChannel:class{postMessage(){broadcast++;}close(){}},fetch:async()=>{if(outcome==='network')throw Error('Network unavailable');return Response.json({}, {status:outcome==='done'?200:400});}});
+  runInNewContext(script,{google:{accounts:{id:{initialize:options=>{callback=options.callback;},renderButton(){}}}},document:{getElementById:()=>status},window:{close(){closed++;},opener:{postMessage(message,origin){assert.equal(origin,'https://photos.google.com');assert.equal(message.state,state);assert.equal(message.code,'r'.repeat(43));posted++;}}},BroadcastChannel:class{postMessage(message){assert.deepEqual(Object.keys(message),['type']);broadcast++;}close(){}},fetch:async()=>{if(outcome==='network')throw Error('Network unavailable');return Response.json({code:'r'.repeat(43)}, {status:outcome==='done'?200:400});}});
   await callback({credential:'synthetic'});assert.equal(closed,outcome==='done'?1:0);assert.equal(posted,closed);assert.equal(broadcast,closed);assert.match(status.textContent,outcome==='done'?/You're signed in/:outcome==='failed'?/Sign-in failed/:/Network unavailable/);
  }
  assert.doesNotMatch(html,/<input|Copy this code/);
@@ -293,14 +301,14 @@ for(const failure of ['network','http','json','keys','import'])test(`Google key 
  unavailable=false;
  await new Promise(resolve=>setTimeout(resolve,2));
  assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
- assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
+ assert.deepEqual(await (await request(env,'/auth/poll',{state})).json(),{status:'pending'});
 });
 
 test('auth start allowlists Photos return URLs and redirects after success',async()=>{
  const env={DB:new D1()},state='r'.repeat(43);await request(env,'/auth/session',{state,name:'Test',platform:'test'});
  for(const target of ['https://evil.test','https://photos.google.com.evil.test/','http://photos.google.com/','https://user@photos.google.com/','javascript:alert(1)','/relative'])assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,400);
  const target='https://photos.google.com/u/0/?test=1#album',response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);assert.equal(response.status,200);
- const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},fetch:async()=>({ok:true}),window:{location:{replace:value=>returned=value}}});await callback({credential:'test'});assert.equal(returned,target);
+ const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},URL,URLSearchParams,fetch:async()=>Response.json({code:'c'.repeat(43)}),window:{location:{replace:value=>returned=value}}});await callback({credential:'test'});const destination=new URL(returned),fragment=new URLSearchParams(destination.hash.slice(1));assert.equal(destination.origin,'https://photos.google.com');assert.equal(destination.pathname,'/u/0/');assert.equal(destination.search,'?test=1');assert.equal(fragment.get('photos-swipe-state'),state);assert.equal(fragment.get('photos-swipe-code'),'c'.repeat(43));assert.equal(fragment.get('photos-swipe-return-hash'),'#album');
 });
 
 for(const outcome of ['rotated','unavailable','missing'])test(`Google missing cached kid refresh handles ${outcome} keys`,async()=>{
@@ -319,11 +327,11 @@ for(const outcome of ['rotated','unavailable','missing'])test(`Google missing ca
  const completion=await request(env,'/auth/complete',{state,credential});
  assert.equal(calls,2);
  assert.equal(completion.status,outcome==='rotated'?200:outcome==='unavailable'?503:400);
- assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,outcome==='rotated'?'done':outcome==='unavailable'?'pending':'failed');
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,outcome==='missing'?'failed':'pending');
  if(outcome==='unavailable'){
   assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
   assert.equal(calls,3);
-  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
+  assert.deepEqual(await (await request(env,'/auth/poll',{state})).json(),{status:'pending'});
  }
  if(outcome!=='missing'){
   const fetched=calls;

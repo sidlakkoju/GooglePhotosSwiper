@@ -1302,7 +1302,10 @@ function mountPhotosSwipe(environment) {
   if(cancelGoogleSignIn||googleSignIn.disabled||googleSettings.disabled)return;
   openSettings();googleSignIn.disabled=true;googleSettings.disabled=true;
   const gm=environment.GM,origin='https://photoswiper-sync.sidlakkoju.workers.dev';
-  let popup,timer,deadline,cancelled=false,rejectStop,navigating=false;
+  let popup,timer,deadline,cancelled=false,rejectStop,navigating=false,claimCode=resumeState?.code;
+  const receiveCode=event=>{if(!popup||event.origin!==origin||event.source!==popup||event.data?.type!=='photos-swipe-google-sign-in'||event.data.state!==activeState||!/^[A-Za-z0-9_-]{43}$/.test(event.data.code||''))return;claimCode=event.data.code;};
+  let activeState;
+  window.addEventListener?.('message',receiveCode);
   const stopped=new Promise((resolve,reject)=>{rejectStop=reject;});stopped.catch(()=>{});
   const stop=reason=>{cancelled=true;rejectStop(Error(reason));};
   cancelGoogleSignIn=()=>stop('Sign-in cancelled');
@@ -1317,14 +1320,16 @@ function mountPhotosSwipe(environment) {
    deadline=environment.setTimeout(()=>stop('Google sign-in timed out. Please try again.'),300000);
    const store=await wait(pairingPromise);
    if(!store.durable)throw Error('Google sync requires private userscript storage, GM.xmlHttpRequest and GM.openInTab.');
-   const state=resumeState||btoa(String.fromCharCode(...environment.crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+   const state=resumeState?.state||btoa(String.fromCharCode(...environment.crypto.getRandomValues(new Uint8Array(32)))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+   activeState=state;
    await wait(gm.setValue('photos-swipe-google-state',state));
    const previous=await wait(store.settings());
    if(!resumeState){
     const session=await wait(privateRequest('/auth/session',{state,name:ios?'iPhone (Safari)':'Browser',platform:window.navigator?.platform||'browser',loginHint:identity?.label||'',sourceScope:identity?.account||'default'},previous.token));
     if(session.status!==200)throw Error('Could not start Google sign-in');
-    if(ios){const target=new URL(session.value.url);target.searchParams.set('return',location.href);window.location.href=target.href;navigating=true;return;}
-    if(popup)popup.location.href=session.value.url;else gm.openInTab(session.value.url,{active:true,insert:true});
+    const target=new URL(session.value.url);target.searchParams.set('return',location.href);
+    if(ios){window.location.href=target.href;navigating=true;return;}
+    if(popup)popup.location.href=target.href;else gm.openInTab(target.href,{active:true,insert:true});
    }
    let claim;
    while(!cancelled){
@@ -1332,7 +1337,7 @@ function mountPhotosSwipe(environment) {
     resumeState=null;
     if(sheet.hidden)throw Error('Sign-in cancelled');
     if(await wait(gm.getValue('photos-swipe-google-state'))!==state)throw Error('Sign-in cancelled');
-    try{claim=await wait(privateRequest('/auth/poll',{state},previous.token));}catch(error){if(cancelled)throw error;continue;}
+    try{claim=await wait(privateRequest('/auth/poll',{state,...(claimCode?{code:claimCode}:{})},previous.token));}catch(error){if(cancelled)throw error;continue;}
     if(claim.status!==200)continue;
     if(claim.value.status==='done')break;
     if(claim.value.status!=='pending')throw Error(claim.value.error||(claim.value.status==='expired'?'Google sign-in timed out. Please try again.':'Google sign-in failed. Please try again.'));
@@ -1341,13 +1346,19 @@ function mountPhotosSwipe(environment) {
    await wait(store.saveSettings({url:origin,...credentials,onboardingDismissed:true}));
    syncClient.configure({url:origin,...credentials});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(credentials);await synchronize();
   }catch(error){pairingNotice.textContent=error.message;}finally{
+   window.removeEventListener?.('message',receiveCode);
    environment.clearTimeout(timer);environment.clearTimeout(deadline);cancel.hidden=true;
    try{popup?.close();}catch{}
    try{if(!navigating)await gm?.deleteValue('photos-swipe-google-state');}catch{}finally{cancelGoogleSignIn=null;googleSignIn.disabled=false;googleSettings.disabled=false;}
   }
  };
  googleSignIn.onclick=()=>signInGoogle();googleSettings.onclick=()=>signInGoogle();
- const resumeGoogleSignIn=async()=>{try{const state=await environment.GM?.getValue('photos-swipe-google-state');if(typeof state==='string'&&/^[A-Za-z0-9_-]{43}$/.test(state))await signInGoogle(state);}catch(error){pairingNotice.textContent=error.message;}};
+ const resumeGoogleSignIn=async()=>{try{
+  const target=new URL(location.href),fragment=new URLSearchParams(target.hash.slice(1)),state=fragment.get('photos-swipe-state'),code=fragment.get('photos-swipe-code');
+  if(fragment.has('photos-swipe-code')){target.hash=fragment.get('photos-swipe-return-hash')||'';window.history?.replaceState(null,'',target.href);}
+  const stored=await environment.GM?.getValue('photos-swipe-google-state');
+  if(state===stored&&/^[A-Za-z0-9_-]{43}$/.test(state||'')&&/^[A-Za-z0-9_-]{43}$/.test(code||''))await signInGoogle({state,code});
+ }catch(error){pairingNotice.textContent=error.message;}};
  const clearCredentials=async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,token:'',unpaired:true});$('sync-token').value='';syncEnabled=false;unpairedBanner.hidden=false;};
  const syncClient=createSyncClient({fetch:environment.syncFetch||environment.fetch,unpaired:clearCredentials,status:value=>{syncSummary=value;syncStatus.textContent=value;const failed=/saved locally; retry|unpaired/i.test(value);gear.classList.toggle('gear-error',failed);gear.setAttribute('aria-label',failed?'Settings \u00b7 sync error':'Settings');if(failed)message(value);pairedNotice.hidden=!value.includes('Device paired');}});
  void resumeGoogleSignIn();
