@@ -3450,6 +3450,18 @@ test('order capsule cycles approved names, pins the card, opens its menu and res
  const restored=bundleEnvironment();restored.environment.window.indexedDB=indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),restored.environment);await restored.nodes.get('launcher').onclick();assert.match(restored.nodes.get('order-switcher').childNodes[0].textContent,/Flashbacks/);assert.equal(restored.nodes.get('caption').textContent,resumed);await restored.nodes.get('close').onclick();
 });
 
+test('Flashbacks memory label includes the full date and appears only at memory starts',async()=>{
+ const date='2020-06-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-memory-first',{date}),item('synthetic-memory-next',{date:'2020-06-17T12:01:00.000Z'})]),label=mounted.nodes.get('card').querySelector('.memory-label');
+ assert.equal(label.hidden,false);
+ assert.equal(label.textContent,new Date(date).toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'}));
+ mounted.nodes.get('order-menu').childNodes[1].onclick();assert.equal(label.hidden,true);
+ mounted.nodes.get('order-menu').childNodes[0].onclick();assert.equal(label.hidden,false);
+ await mounted.click('keep');assert.equal(label.hidden,true);
+ await mounted.click('undo');assert.equal(label.hidden,false);
+ assert.equal(label.textContent,new Date(date).toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'}));
+ await mounted.nodes.get('close').onclick();
+});
+
 test('Flashbacks undo restores a card held in the middle after changing order',async()=>{
  const rows=Array.from({length:320},(_,index)=>item(`undo-order-${index}`,{date:new Date(Date.UTC(2000+Math.floor(index/8),1,1,0,index%8)).toISOString()}));
  const mounted=await mountedReview(rows),menu=mounted.nodes.get('order-menu');
