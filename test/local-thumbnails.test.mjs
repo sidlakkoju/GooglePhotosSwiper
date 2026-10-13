@@ -58,3 +58,21 @@ test('failed retry lookup produces the filename fallback',async()=>{
  const f=fixture(true),image={};await f.thumbnails.bind(image,{...item,urlFetchedAt:1},value=>value.thumbUrl);
  await image.onerror();assert.deepEqual(f.calls,[item.mediaKey]);assert.deepEqual(f.placeholders,['Fixture.jpg']);assert.equal(image.onerror,null);
 });
+test('a dead initially refreshed URL stays a placeholder on later binds',async()=>{
+ const f=fixture(),image={};await f.thumbnails.bind(image,item,value=>value.thumbUrl);
+ await image.onerror();
+ for(let pass=0;pass<5;pass++){
+  const next={};await f.thumbnails.bind(next,item,value=>value.thumbUrl);
+  assert.equal(next.src,null);assert.equal(next.onerror,null);
+ }
+ assert.deepEqual(f.calls,[item.mediaKey]);assert.equal(f.placeholders.length,6);
+});
+test('failed thumbnails are isolated by account scope',async()=>{
+ let account='synthetic-account-a';const calls=[];
+ const thumbnails=createLocalThumbnails({scope:()=>account,stale:()=>false,refresh:async value=>{calls.push(account);return {...value,thumbUrl:'https://fixture.invalid/fresh'};},placeholder:image=>{image.src=null;}});
+ const first={};await thumbnails.bind(first,item,value=>value.thumbUrl);await first.onerror();await first.onerror();
+ const failed={};await thumbnails.bind(failed,item,value=>value.thumbUrl);assert.equal(failed.src,null);
+ account='synthetic-account-b';
+ const second={};await thumbnails.bind(second,item,value=>value.thumbUrl);assert.equal(second.src,item.thumbUrl);
+ await second.onerror();assert.deepEqual(calls,['synthetic-account-a','synthetic-account-b']);
+});
