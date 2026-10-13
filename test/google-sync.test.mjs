@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
-import {googleAuthRequest,verifyGoogleToken,googleClientId,syncOrigin} from '../worker/src/google-auth.mjs';
+import {googleAuthRequest as handleGoogleAuthRequest,verifyGoogleToken,googleClientId,syncOrigin} from '../worker/src/google-auth.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 import {runInNewContext} from 'node:vm';
@@ -16,6 +16,12 @@ const jwk={...await crypto.subtle.exportKey('jwk',keys.publicKey),kid:'test'};
 const fetchKeys=async url=>{assert.equal(url,'https://www.googleapis.com/oauth2/v3/certs');return Response.json({keys:[jwk]});};
 const encode=value=>Buffer.from(typeof value==='string'?value:JSON.stringify(value)).toString('base64url');
 async function token(nonce,overrides={},key=keys.privateKey,kid='test'){const message=encode({alg:'RS256',kid})+'.'+encode({sub:'account-one',aud:googleClientId,iss:'https://accounts.google.com',exp:Math.floor(Date.now()/1000)+300,nonce,email:'one@example.test',...overrides});return message+'.'+Buffer.from(await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,new TextEncoder().encode(message))).toString('base64url');}
+async function googleAuthRequest(request,env){
+ if(env.browserCookie&&!request.headers.has('Cookie'))request.headers.set('Cookie',env.browserCookie);
+ const response=await handleGoogleAuthRequest(request,env);
+ const cookie=response.headers.get('Set-Cookie');if(cookie)env.browserCookie=cookie.split(';')[0];
+ return response;
+}
 const request=(env,path,value,bearer)=>googleAuthRequest(new Request(syncOrigin+path,{method:'POST',headers:{Origin:syncOrigin,...(bearer?{Authorization:'Bearer '+bearer}:{})},body:JSON.stringify(value)}),env);
 async function signIn(env,state,bearer,sub='account-one'){
  assert.equal((await request(env,'/auth/session',{state,name:'Test device',platform:'test'},bearer)).status,200);
@@ -308,7 +314,7 @@ for(const openerMode of ['absent','present','throws'])test(`auth start allowlist
  const env={DB:new D1()},state='r'.repeat(43);await request(env,'/auth/session',{state,name:'Test',platform:'test'});
  for(const target of ['https://evil.test','https://photos.google.com.evil.test/','http://photos.google.com/','https://user@photos.google.com/','javascript:alert(1)','/relative'])assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env)).status,400);
  const target='https://photos.google.com/u/0/?test=1#album',response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);assert.equal(response.status,200);
- const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},URL,URLSearchParams,fetch:async()=>Response.json({code:'c'.repeat(43)}),window:{opener:openerMode==='absent'?null:{postMessage(){if(openerMode==='throws')throw Error('Opener unavailable');}},close:()=>assert.fail('Return flow must keep the tab open'),location:{replace:value=>returned=value}}});await callback({credential:'test'});assert.equal(returned,'/auth/return?state='+state);
+ const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},URL,URLSearchParams,fetch:async()=>Response.json({code:'c'.repeat(43)}),window:{opener:openerMode==='absent'?null:{postMessage(){if(openerMode==='throws')throw Error('Opener unavailable');}},close:()=>assert.fail('Return flow must keep the tab open'),location:{replace:value=>returned=value}}});await callback({credential:'test'});const returnedURL=new URL(returned);assert.equal(returnedURL.origin,'https://photos.google.com');const fragment=new URLSearchParams(returnedURL.hash.slice(1));assert.equal(fragment.get('photos-swipe-state'),state);assert.equal(fragment.get('photos-swipe-code'),'c'.repeat(43));assert.equal(fragment.get('photos-swipe-return-hash'),'album');
 });
 
 for(const outcome of ['rotated','unavailable','missing'])test(`Google missing cached kid refresh handles ${outcome} keys`,async()=>{
@@ -388,4 +394,32 @@ for(const automatic of [undefined,false])test(`Photos return URL cannot enable s
  assert.equal((await request(env,'/auth/poll',{state,code:'x'.repeat(43)})).status,400);
  const claim=await request(env,'/auth/poll',{state,code});assert.equal(claim.status,200);assert.equal((await claim.json()).status,'done');
  assert.equal((await (await request(env,'/auth/poll',{state,code})).json()).status,'expired');
+});
+
+test('a shared automatic sign-in link cannot be claimed by its creator',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='S'.repeat(43);
+ await request(env,'/auth/session',{state,automatic:true,name:'Browser',platform:'test'});
+ await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ const attackerCookie=env.browserCookie;
+ await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ const credential=await token(pending.nonce);
+ const attackerRequest=path=>new Request(syncOrigin+path,{method:'POST',headers:{Origin:syncOrigin,Cookie:attackerCookie},body:JSON.stringify({state,credential})});
+ assert.equal((await handleGoogleAuthRequest(attackerRequest('/auth/complete'),env)).status,401);
+ assert.equal((await request(env,'/auth/complete',{state,credential})).status,200);
+ assert.equal((await handleGoogleAuthRequest(attackerRequest('/auth/poll'),env)).status,401);
+ assert.equal((await handleGoogleAuthRequest(new Request(syncOrigin+'/auth/poll',{method:'POST',body:JSON.stringify({state})}),env)).status,401);
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,0);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'done');
+ });
+
+test('changing the browser during Google verification prevents completion',async()=>{
+ const env={DB:new D1()},state='R'.repeat(43);
+ env.GOOGLE_FETCH=async url=>{await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);return fetchKeys(url);};
+ await request(env,'/auth/session',{state,automatic:true,name:'Browser',platform:'test'});
+ await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env);
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ assert.equal((await request(env,'/auth/complete',{state,credential:await token(pending.nonce)})).status,400);
+ assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'pending');
+ assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_accounts').get().n,0);
 });
