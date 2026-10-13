@@ -423,3 +423,25 @@ test('changing the browser during Google verification prevents completion',async
  assert.equal((await (await request(env,'/auth/poll',{state})).json()).status,'pending');
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM google_accounts').get().n,0);
 });
+
+for(const openerMode of ['same-tab','opener-less tab'])test(`userscript ${openerMode} return claims without sharing the browser cookie`,async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='Q'.repeat(43),target='https://photos.google.com/u/2/?test=1#album';
+ const privateRequest=value=>handleGoogleAuthRequest(new Request(syncOrigin+'/auth/poll',{method:'POST',body:JSON.stringify(value)}),env);
+ await request(env,'/auth/session',{state,name:'Safari',platform:'iPhone'});
+ const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state+'&return='+encodeURIComponent(target)),env);
+ const script=(await response.text()).match(/<script>([\s\S]*?)<\/script>/)[1];let callback,returned;
+ runInNewContext(script,{google:{accounts:{id:{initialize:value=>callback=value.callback,renderButton(){}}}},document:{getElementById:()=>({})},URL,URLSearchParams,fetch:async(path,options)=>{
+  assert.equal(path,'/auth/complete');
+  return request(env,path,JSON.parse(options.body));
+ },window:{opener:null,close:()=>assert.fail('Must return to Photos'),location:{replace:value=>returned=value}}});
+ const pending=await env.DB.prepare('SELECT nonce,state_claim FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ assert.equal(pending.state_claim,0);
+ await callback({credential:await token(pending.nonce)});
+ assert.ok(env.browserCookie);assert.deepEqual(await (await privateRequest({state})).json(),{status:'pending'});
+ const returnURL=new URL(returned),fragment=new URLSearchParams(returnURL.hash.slice(1));
+ assert.equal(returnURL.origin,'https://photos.google.com');assert.equal(fragment.get('photos-swipe-state'),state);assert.equal(fragment.get('photos-swipe-return-hash'),'album');
+ const code=fragment.get('photos-swipe-code');assert.match(code,/^[A-Za-z0-9_-]{43}$/);
+ assert.equal((await privateRequest({state,code:'x'.repeat(43)})).status,400);
+ const claim=await privateRequest({state,code});assert.equal(claim.status,200);assert.equal((await claim.json()).status,'done');
+ assert.equal((await (await privateRequest({state,code})).json()).status,'expired');
+});
