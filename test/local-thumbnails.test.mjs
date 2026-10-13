@@ -146,3 +146,38 @@ test('a newer saved thumbnail recovers failed queue and grid binds and gets its 
  await queue.onerror();
  assert.deepEqual(calls,[original.thumbUrl,updated.thumbUrl]);
 });
+
+for(const outcome of ['reject','dead'])test(`a newer saved URL arriving during a refresh survives a ${outcome} refresh`,async()=>{
+ let finishRefresh,rejectRefresh;
+ const pending=new Promise((resolve,reject)=>{finishRefresh=resolve;rejectRefresh=reject;});
+ const thumbnails=createLocalThumbnails({stale:()=>false,refresh:()=>pending,placeholder:image=>{image.src=null;}});
+ const original={},updated={...item,thumbUrl:'https://fixture.invalid/newer'},queue={},grid={};
+ await thumbnails.bind(original,item,value=>value.thumbUrl);
+ const retry=original.onerror();
+ await Promise.all([thumbnails.bind(queue,updated,value=>value.thumbUrl),thumbnails.bind(grid,updated,value=>`${value.thumbUrl}=w100`)]);
+ assert.equal(queue.src,updated.thumbUrl);
+ assert.equal(grid.src,`${updated.thumbUrl}=w100`);
+ if(outcome==='reject')rejectRefresh(Error('Temporary lookup failure'));
+ else finishRefresh({...item,thumbUrl:'https://fixture.invalid/dead'});
+ await retry;
+ if(outcome==='dead'){
+  assert.equal(original.src,updated.thumbUrl);
+ }
+ const later={};await thumbnails.bind(later,updated,value=>value.thumbUrl);
+ assert.equal(later.src,updated.thumbUrl);
+});
+
+for(const staleInitially of [false,true])test(`a transient ${staleInitially?'initial':'retry'} lookup failure allows later queue and grid recovery`,async()=>{
+ const calls=[],original={...item,urlFetchedAt:staleInitially?0:1};
+ const thumbnails=createLocalThumbnails({stale:value=>!value.urlFetchedAt,refresh:async value=>{calls.push(value.mediaKey);if(calls.length===1)throw Error('Temporary lookup failure');return {...value,thumbUrl:'https://fixture.invalid/recovered',urlFetchedAt:2};},placeholder:image=>{image.src=null;}});
+ const first={};await thumbnails.bind(first,original,value=>value.thumbUrl);
+ if(!staleInitially)await first.onerror();
+ assert.equal(first.src,null);
+ const queue={},grid={};
+ await Promise.all([thumbnails.bind(queue,original,value=>value.thumbUrl),thumbnails.bind(grid,original,value=>`${value.thumbUrl}=w100`)]);
+ if(!staleInitially)await queue.onerror();
+ assert.equal(queue.src,'https://fixture.invalid/recovered');
+ if(!staleInitially)await grid.onerror();
+ assert.equal(grid.src,'https://fixture.invalid/recovered=w100');
+ assert.deepEqual(calls,[item.mediaKey,item.mediaKey]);
+});
