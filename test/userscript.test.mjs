@@ -3782,6 +3782,43 @@ for(const event of ['pagehide','hidden'])test(`${event} releases the lease while
  }finally{release();mounted.environment.document.hidden=false;await db.lease(account,'synthetic-other',true);await mounted.nodes.get('close').onclick();}
 });
 
+test('Flashbacks shows and swipes loaded cards while older pages are still pending',async()=>{
+ const secondPage=Promise.withResolvers(),finalPage=Promise.withResolvers(),cursors=[];
+ const rows=Array.from({length:113},(_,index)=>({key:`QA${String(index).padStart(4,'0')}`,date:Date.UTC(2008+Math.floor(index/13),0,1,0,index%13)})).reverse();
+ const mounted=await mountedReview([],{fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');
+  const cursor=JSON.parse(entry[1])[0];cursors.push(cursor);
+  const offset=Number(cursor)||0;
+  if(offset===50)await secondPage.promise;
+  if(offset===100)await finalPage.promise;
+  return {ok:true,text:async()=>envelope(entry[0],[rows.slice(offset,offset+50).map(row=>[row.key,['https://lh3.googleusercontent.com/synthetic'],row.date,`${row.key}-dedup`,0,{}]),offset+50<rows.length?String(offset+50):null])};
+ }});
+ try{
+  assert.equal(mounted.nodes.get('sort').value,'flashbacks');
+  mounted.nodes.get('load').onclick();
+  await waitForReview(()=>cursors.length===2);
+  assert.deepEqual(cursors,[null,'50']);
+  assert.match(mounted.nodes.get('caption').textContent,/^Memory /);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+  mounted.nodes.get('keep').onclick();
+  await waitForReview(async()=>(await mounted.read()).items.some(row=>row.decision==='keep'));
+  const held=mounted.nodes.get('caption').textContent;
+  assert.equal((await mounted.read()).items.length,50);
+  secondPage.resolve();
+  await waitForReview(()=>cursors.length===3);
+  assert.equal((await mounted.read()).items.length,100);
+  assert.equal(mounted.nodes.get('caption').textContent,held);
+  finalPage.resolve();
+  await waitForReview(async()=>(await mounted.read()).exhausted);
+  await mounted.settle();
+  assert.equal((await mounted.read()).items.length,113);
+  assert.equal(mounted.nodes.get('caption').textContent,held);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+ }finally{secondPage.resolve();finalPage.resolve();await mounted.nodes.get('close').onclick();}
+});
+
 test('Flashbacks shows loaded memories and swipes work in Flashbacks and Timeline while the library loads',async()=>{
  const finalPage=Promise.withResolvers(),cursors=[];
  const rows=Array.from({length:113},(_,index)=>({key:`QA${String(index).padStart(4,'0')}`,date:Date.UTC(2008+Math.floor(index/13),0,1,0,index%13)})).reverse();
@@ -3855,4 +3892,32 @@ test('Flashbacks exposes saved cards after a preload page fails',async()=>{
  mounted.nodes.get('keep').onclick();
  await mounted.settle();
  assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='saved-photo').decision,'keep');
+});
+
+test('Flashbacks shows and swipes an incomplete boundary memory while the rest loads',async()=>{
+ const boundaryPage=Promise.withResolvers(),cursors=[],date=Date.UTC(2025,0,1);
+ const mounted=await mountedReview([],{fetch:async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  if(entry[0]==='EWgK9e')return {ok:true,text:async()=>envelope(entry[0],[[]])};
+  assert.equal(entry[0],'lcxiM');
+  const cursor=JSON.parse(entry[1])[0];cursors.push(cursor);
+  if(cursor)await boundaryPage.promise;
+  const indexes=cursor?[0,1]:[2,3,4];
+  return {ok:true,text:async()=>envelope(entry[0],[indexes.map(index=>[`synthetic-boundary-${index}`,['https://lh3.googleusercontent.com/synthetic'],date+index*60000,`synthetic-boundary-dedup-${index}`,0,{}]),cursor?null:'synthetic-boundary-page'])};
+ }});
+ try{
+  mounted.nodes.get('load').onclick();
+  await waitForReview(()=>cursors.length===2);
+  assert.equal((await mounted.read()).items.length,3);
+  assert.match(mounted.nodes.get('caption').textContent,/^Memory /);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+  mounted.nodes.get('keep').onclick();
+  await waitForReview(async()=>(await mounted.read()).items.filter(item=>item.decision==='keep').length===1);
+  boundaryPage.resolve();
+  await waitForReview(async()=>(await mounted.read()).exhausted);
+  await mounted.settle();
+  assert.equal((await mounted.read()).items.length,5);
+  assert.equal(mounted.nodes.get('keep').disabled,false);
+  assert.match(mounted.nodes.get('caption').textContent,/^Memory /);
+ }finally{boundaryPage.resolve();await mounted.nodes.get('close').onclick();}
 });

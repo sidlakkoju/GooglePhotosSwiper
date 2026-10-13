@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.70
+// @version 1.2.71
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -299,16 +299,19 @@ function keptEligible(item,swipes,now=Date.now()){
  return item.decision==='keep'&&Number.isFinite(item.lastDecisionAt)&&now-item.lastDecisionAt>=30*86400000*multiplier&&swipes-(item.lastDecisionSwipe||0)>=500*multiplier;
 }
 function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null,allowPartial=false){
- if(state.started&&!state.exhausted&&!allowPartial)return [];
- const swipes=reviewSwipeCount(state),eligible=state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,swipes,now))),byKey=new Map(eligible.map(item=>[item.mediaKey,item]));
+ const previousOrder=saved.keys||[],previousKeys=new Set(previousOrder);
+ const memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash')),boundary=state.started&&!state.exhausted&&!allowPartial?memories[0]:null;
+ const boundaryStarted=boundary?.some(item=>item.mediaKey===focused||(saved.seen||[]).includes(item.mediaKey)||item.decision&&(saved.starts||[]).includes(item.mediaKey));
+ const held=new Set(boundary&&!boundaryStarted?boundary.map(item=>item.mediaKey):[]);
+ const swipes=reviewSwipeCount(state),eligible=state.items.filter(item=>!held.has(item.mediaKey)&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||keptEligible(item,swipes,now))),byKey=new Map(eligible.map(item=>[item.mediaKey,item]));
  const seen=(saved.seen||[]).filter(key=>byKey.get(key)?.decision!=='keep');
- let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...seen]),memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash'));
+ let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...seen]);
  const unreviewed=eligible.filter(item=>!item.decision&&!known.has(item.mediaKey)),kept=eligible.filter(item=>item.decision==='keep'&&!known.has(item.mediaKey)).sort((a,b)=>a.lastDecisionAt-b.lastDecisionAt),remainingUnswiped=eligible.filter(item=>!item.decision).length;
  const allowance=remainingUnswiped?Math.max(0,Math.floor(remainingUnswiped/19)-keys.filter(key=>byKey.get(key)?.decision==='keep').length):kept.length;
  const selected=new Set([...unreviewed,...kept.slice(0,allowance)].map(item=>item.mediaKey));
  saved.seen=(saved.seen||[]).filter(key=>!selected.has(key)||byKey.get(key)?.decision!=='keep');
  const headMemory=memories.find(group=>group.some(item=>item.mediaKey===keys[0]));
- const activeMemory=headMemory?.some(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey))?headMemory:null;
+ const activeMemory=memories.find(group=>group.some(item=>item.mediaKey===focused))||(headMemory?.some(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey))?headMemory:null);
  const reshuffle=keys.length>0&&unreviewed.length>0;
  const fresh=memories.map(memory=>memory.filter(item=>selected.has(item.mediaKey))).filter(memory=>memory.length);
  for(let i=reshuffle?0:fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
@@ -322,7 +325,7 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  }
 
  for(const group of memories){
-  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey);
+  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.some(item=>keys.includes(item.mediaKey)&&!previousKeys.has(item.mediaKey))?group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey):keys.filter(key=>members.has(key));
   const playedStart=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
   const continuation=playedStart&&group.some(item=>!item.decision&&keys.includes(item.mediaKey)&&group.indexOf(item)<group.indexOf(playedStart));
   if(!continuation)continue;
@@ -334,14 +337,15 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
  if(memory&&keys.includes(focused)){
   const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
-  keys=[...ordered.slice(index),...keys.filter(key=>!members.has(key)),...ordered.slice(0,index)];
+  const earlier=ordered.slice(0,index),remaining=keys.filter(key=>!members.has(key)),previousRemaining=previousOrder.find(key=>!members.has(key));
+  keys=earlier.some(key=>!previousKeys.has(key))||earlier.length&&earlier.every(key=>previousOrder.indexOf(key)>previousOrder.indexOf(focused)&&(!previousRemaining||previousOrder.indexOf(key)<previousOrder.indexOf(previousRemaining)))?[...ordered.slice(index),...earlier,...remaining]:[...ordered.slice(index),...remaining,...earlier];
  }
  const loadedKeys=new Set(state.items.map(item=>item.mediaKey));
  saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>loadedKeys.has(key));
  for(const group of memories){
   const members=new Set(group.map(item=>item.mediaKey)),start=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
   if(start)continue;
-  const first=group.find(item=>keys.includes(item.mediaKey));
+  const first=byKey.get(keys.find(key=>members.has(key)));
   saved.starts=(saved.starts||[]).filter(key=>!members.has(key));
   if(first)saved.starts.push(first.mediaKey);
  }
@@ -1653,7 +1657,7 @@ function mountPhotosSwipe(environment) {
   stopMedia(shown!==(item?.mediaKey||null));$('zoom').value='1';$('card').classList.remove('zoomed');mediaElement.style.touchAction='';shown=item?.mediaKey||null;const token=generation;
   $('media').style.color='var(--ps-label)';$('media').setAttribute('aria-busy','false');
   if(otherTab||leaseError?.message.includes('busy in another tab')){showLockCard();return;}
-  if(!item){$('media').textContent='No items to review. Load more or refresh latest.';return;}
+  if(!item){$('media').textContent=$('sort').value==='flashbacks'&&state.started&&!state.exhausted&&!libraryFailure?'Loading more items\u2026':'No items to review. Load more or refresh latest.';return;}
   let handlingError=false;
   const failed=async()=>{
    if(token!==generation||handlingError)return;
@@ -1894,17 +1898,17 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   let cancel;
   const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
   cancelLibraryLoading=cancel;
-  try{await load(refresh,cancelled);}finally{if(cancelLibraryLoading===cancel)cancelLibraryLoading=null;}
+  try{await load(refresh,cancelled,$('sort').value==='flashbacks'?1:Infinity);}finally{if(cancelLibraryLoading===cancel)cancelLibraryLoading=null;}
  }
- async function load(refresh=false,cancelled=null) {
+ async function load(refresh=false,cancelled=null,maxPages=Infinity) {
   const token=leaseGeneration;
   const assertLoadSession=()=>{if(token!==leaseGeneration||(cancelled&&sessionClosing))throw Error('Library loading session changed.');};
   const loadCall=async(operation,args)=>{assertLoadSession();const request=call(operation,args);const result=await (cancelled?Promise.race([request,cancelled]):request);assertLoadSession();return result;};
   buffer.clear();previousKey=null;
   libraryFailure=null;deckItems=null;
-  const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));renderCard();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
+  const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));render();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
   let result;
-  try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,target:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){libraryFailure=error;deckItems=null;}throw error;}
+  try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,maxPages,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;libraryFailure=error;deckItems=null;}throw error;}
   assertLoadSession();
   message(`${result.added} new items to review \u00b7 ${result.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
@@ -1991,7 +1995,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.70":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.71":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
