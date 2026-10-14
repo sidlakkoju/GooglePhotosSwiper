@@ -75,9 +75,7 @@ export async function syncRequest(request,env={}) {
    return {decisions:rows.results,progress,history:ownHistory?JSON.parse(ownHistory.history):[],...(mapping&&mapping.space!=='legacy'?{decisionOwners:Object.fromEntries(versions.results.map(row=>[row.id,row.device_id===device.id]))}:{})};
   };
   if(route==='/api/state'&&method==='GET'){
-   const state=await read();
-   const migration=await db.prepare('SELECT id FROM devices WHERE is_legacy = 1 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM devices WHERE is_legacy = 0 AND revoked_at IS NULL)').first();
-   return respond({...state,...(migration?{suggestRevokeLegacy:true}:{})});
+   return respond(await read());
   }
   if(route==='/api/decisions'&&method==='PUT'){
    const value=await body(request);
