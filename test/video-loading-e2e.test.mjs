@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {emptyReview} from '../lib/userscript-core.mjs';
+import {fulfillVideo} from './fixtures/video-route.mjs';
 
 const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
 
@@ -22,7 +23,7 @@ test('a slow-starting video shows a loading spinner over its poster until playba
    if(request[0]==='VrseUb')return route.fulfill({contentType:'text/plain',body:envelope('VrseUb',[[JSON.parse(request[1])[0],null],'https://lh3.googleusercontent.com/clip-video=dv'])});
    return route.fulfill({status:500,body:''});
   }
-  if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/clip-video')){requests.push(url.pathname);await held;return route.fulfill({status:200,contentType:'video/quicktime',body:video});}
+  if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/clip-video')){requests.push(url.pathname);await held;return fulfillVideo(route,video,'video/quicktime');}
   if(url.hostname==='lh3.googleusercontent.com')return route.fulfill({contentType:'image/png',body:poster});
   return route.abort();
  });
@@ -49,6 +50,5 @@ test('a slow-starting video shows a loading spinner over its poster until playba
  await page.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot;return !root.getElementById('card').classList.contains('video-loading');},null,{timeout:30000});
  const started=await state();
  assert.equal(started.loading,false);assert.equal(started.playing,true);
- await page.waitForTimeout(300);
- assert.equal((await state()).visibility,'hidden');
+ await page.waitForFunction(()=>getComputedStyle(document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.video-spinner')).visibility==='hidden',null,{timeout:5000});
 });
