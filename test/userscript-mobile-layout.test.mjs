@@ -253,13 +253,19 @@ test('Flashbacks long place leaves the memory count clear of fullscreen on narro
    memoryDate.textContent='September 2025';
    memoryPlace.textContent=' · Synthetic city with a very long location name repeated across the card';
    memoryPosition.textContent=' · 12 of 99';
+   const labels=[];
+   for(const place of ['', ' · Seoul']){
+    memoryDate.textContent='May 2017';memoryPlace.textContent=place;memoryPlace.hidden=!place;memoryPosition.textContent=' · 1 of 12';
+    labels.push([...memoryLabel.children].filter(span=>!span.hidden).map(span=>span.innerText).join(''));
+   }
+   memoryDate.textContent='September 2025';memoryPlace.hidden=false;memoryPlace.textContent=' · Synthetic city with a very long location name repeated across the card';memoryPosition.textContent=' · 12 of 99';
    const snapshots=[];
    for(const expanded of [false,true]){
     cardElement.classList.toggle('expanded',expanded);
     const pill=memoryLabel.getBoundingClientRect(),button=enlargeElement.getBoundingClientRect(),place=memoryPlace.getBoundingClientRect();
     const range=document.createRange();range.selectNodeContents(memoryPosition);
     const count=range.getBoundingClientRect();
-    snapshots.push({expanded,gap:button.left-pill.right,countInside:count.left>=pill.left&&count.right<=pill.right,countClear:count.right<button.left,placeShrinks:memoryPlace.scrollWidth>memoryPlace.clientWidth,ellipsis:getComputedStyle(memoryPlace).textOverflow,placeWidth:place.width});
+    snapshots.push({labels,expanded,gap:button.left-pill.right,countInside:count.left>=pill.left&&count.right<=pill.right,countClear:count.right<button.left,placeShrinks:memoryPlace.scrollWidth>memoryPlace.clientWidth,ellipsis:getComputedStyle(memoryPlace).textOverflow,placeWidth:place.width});
    }
    document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(snapshots)}));
   </script></body></html>`);
@@ -270,6 +276,7 @@ test('Flashbacks long place leaves the memory count clear of fullscreen on narro
    assert.equal(result.status,0,result.stderr);
    const snapshots=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);
    for(const snapshot of snapshots){
+    assert.deepEqual(snapshot.labels,['May 2017 · 1 of 12','May 2017 · Seoul · 1 of 12']);
     const label=`width=${width}, expanded=${snapshot.expanded}`;
     assert.ok(snapshot.gap>=8,label+': pill clears fullscreen');
     assert.equal(snapshot.countInside,true,label+': count inside pill');
