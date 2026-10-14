@@ -1047,6 +1047,25 @@ async function availableUpdate({fetch,version,setTimeout,clearTimeout,timeout=30
   return releaseNewer(latest,version)?latest:null;
  }catch{return null;}finally{clearTimeout(timer);}
 }
+function downloadRelease({GM,version,setTimeout,clearTimeout,timeout=30000}){
+ const request=GM?.xmlHttpRequest?.bind(GM),store=GM?.setValue?.bind(GM);
+ if(typeof request!=='function'||typeof store!=='function')return Promise.resolve(false);
+ return new Promise(resolve=>{
+  let settled=false;
+  const finish=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value);};
+  const timer=setTimeout(()=>finish(false),timeout);
+  const loaded=async response=>{
+   try{
+    const headers=response?.responseHeaders||'';
+    const served=/^x-photoswiper-version:\s*(\S+)/im.exec(headers)?.[1],required=/^x-photoswiper-required-loader-version:\s*(\S+)/im.exec(headers)?.[1];
+    if(response.status!==200||served!==version||!response.responseText?.trim()){finish(false);return;}
+    await store('photoswiper-app',{code:response.responseText,version,...(required?{requiredLoaderVersion:required}:{})});
+    finish(true);
+   }catch{finish(false);}
+  };
+  try{const result=request({method:'GET',url:updateOrigin+'/app.js?t='+Date.now(),timeout,onload:loaded,onerror:()=>finish(false),ontimeout:()=>finish(false),onabort:()=>finish(false)});result?.then?.(loaded,()=>finish(false));}catch{finish(false);}
+ });
+}
 function claimUpdateReload(storage,latest){
  try{
   if(storage.getItem(updateTargetKey)===latest)return false;
@@ -1938,14 +1957,19 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   }
   buffer.clear();
  }
- async function openLatest(){
+ function openLatest(){
   const opening=open();
-  if(!environment.autoUpdating)return opening;
+  if(environment.autoUpdating)updateAfterOpen(opening).catch(()=>{});
+  return opening;
+ }
+ async function updateAfterOpen(opening){
   const check=availableUpdate({fetch:environment.syncFetch,version:environment.version,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)});
   await opening?.catch?.(()=>{});
   const swipes=reviewSwipeCount(state),latest=await check;
   if(!latest)return;
-  if(reviewSwipeCount(state)!==swipes||$('overlay').hidden||!claimUpdateReload(window.sessionStorage,latest)){message(`Photos Swipe ${latest} is available. Reload Google Photos to update.`);return;}
+  const available=()=>message(`Photos Swipe ${latest} is available. Reload Google Photos to update.`);
+  if(reviewSwipeCount(state)!==swipes||$('overlay').hidden){available();return;}
+  if(!await downloadRelease({GM:environment.GM,version:latest,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)})||reviewSwipeCount(state)!==swipes||$('overlay').hidden||!claimUpdateReload(window.sessionStorage,latest)){available();return;}
   message(`Updating to Photos Swipe ${latest}\u2026`);
   await close();
   window.location.reload();

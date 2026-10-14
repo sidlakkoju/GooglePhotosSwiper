@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {availableUpdate,claimUpdateReload,consumeOpenAfterUpdate,releaseNewer,updateOrigin,updateTargetKey,openAfterUpdateKey} from '../lib/userscript-update.mjs';
+import {availableUpdate,claimUpdateReload,consumeOpenAfterUpdate,downloadRelease,releaseNewer,updateOrigin,updateTargetKey,openAfterUpdateKey} from '../lib/userscript-update.mjs';
 
 const storage=()=>{const values=new Map();return {values,getItem:key=>values.has(key)?values.get(key):null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)};};
 const respond=(body,ok=true)=>async url=>{assert.ok(url.startsWith(updateOrigin+'/version?t='));return {ok,json:async()=>body};};
@@ -50,4 +50,19 @@ test('the launcher checks for updates and auto-updating builds expose their mode
  const app=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  assert.match(app,/autoUpdating:typeof photosSwipeReleaseVersion!=='undefined'/);
  assert.match(app,/function availableUpdate\(/);
+});
+
+test('a release is cached for the loader only when the served version matches',async()=>{
+ const timers={setTimeout,clearTimeout};
+ const gm=(response,writes=[])=>({writes,setValue:async(key,value)=>writes.push({key,value}),xmlHttpRequest(options){assert.ok(options.url.startsWith(updateOrigin+'/app.js?t='));queueMicrotask(()=>response?options.onload(response):options.onerror());}});
+ const good=gm({status:200,responseText:'app();',responseHeaders:'content-type: text/javascript\r\nX-Photoswiper-Version: 1.2.77\r\nX-Photoswiper-Required-Loader-Version: 1.0.0'});
+ assert.equal(await downloadRelease({...timers,GM:good,version:'1.2.77'}),true);
+ assert.deepEqual(good.writes,[{key:'photoswiper-app',value:{code:'app();',version:'1.2.77',requiredLoaderVersion:'1.0.0'}}]);
+ for(const response of [null,{status:500,responseText:'x',responseHeaders:'X-Photoswiper-Version: 1.2.77'},{status:200,responseText:'app();',responseHeaders:'X-Photoswiper-Version: 1.2.78'},{status:200,responseText:' ',responseHeaders:'X-Photoswiper-Version: 1.2.77'}]){
+  const fake=gm(response);assert.equal(await downloadRelease({...timers,GM:fake,version:'1.2.77'}),false);assert.equal(fake.writes.length,0);
+ }
+ const failing={setValue:async()=>{throw Error('quota');},xmlHttpRequest:options=>queueMicrotask(()=>options.onload({status:200,responseText:'app();',responseHeaders:'X-Photoswiper-Version: 1.2.77'}))};
+ assert.equal(await downloadRelease({...timers,GM:failing,version:'1.2.77'}),false);
+ assert.equal(await downloadRelease({...timers,GM:{xmlHttpRequest:()=>{},setValue:async()=>{}},version:'1.2.77',timeout:20}),false);
+ assert.equal(await downloadRelease({...timers,GM:undefined,version:'1.2.77'}),false);
 });

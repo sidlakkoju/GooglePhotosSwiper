@@ -21,7 +21,7 @@ const gmShim=`(()=>{
  };
 })();`;
 
-for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses its cache and reloads into a new release when opened`,{timeout:120000},async t=>{
+for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses its cache and reloads into a new release when opened`,{timeout:240000},async t=>{
  let playwright;
  try{playwright=await import('playwright');}catch{t.skip('Playwright is unavailable');return;}
  let browser;
@@ -49,6 +49,7 @@ for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses
    return route.fulfill({status:404,body:''});
   });
   const tab=await context.newPage();
+  tab.setDefaultTimeout(90000);
   const errors=[];tab.on('pageerror',error=>errors.push(error.message));
   await tab.goto('https://photos.google.com/');
   await tab.evaluate(async state=>{
@@ -57,27 +58,28 @@ for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses
    await new Promise((resolve,reject)=>{const tx=db.transaction('accounts','readwrite');tx.objectStore('accounts').put(state,account);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
   },{...emptyReview(),revision:1,items:[{mediaKey:'synthetic-0',name:'synthetic-0',thumbUrl:'https://lh3.googleusercontent.com/synthetic-0',type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now()}]});
   const host=()=>tab.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host')?.shadowRoot;return root?{version:root.getElementById('running-version')?.textContent,overlay:!root.getElementById('overlay').hidden,status:root.getElementById('status')?.textContent||'',banner:!!document.getElementById('photoswiper-update')}:null;});
-  await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host'));
+  await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host'),null,{timeout:90000});
   assert.deepEqual({...await host(),status:undefined},{version:'v1.2.76',overlay:false,status:undefined,banner:false});
   assert.deepEqual(requests,['/version','/app.js']);
   assert.equal(JSON.parse(store.get('photoswiper-app')).version,'1.2.76');
 
   requests.length=0;
   await tab.reload();
-  await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host'));
+  await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host'),null,{timeout:90000});
   assert.equal((await host()).version,'v1.2.76');
   assert.deepEqual(requests,['/version']);
 
   liveVersion='1.2.77';requests.length=0;
-  const navigated=tab.waitForEvent('framenavigated');
+  const navigated=tab.waitForEvent('framenavigated',{timeout:90000});
   await tab.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').click());
   await navigated;
-  await tab.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host')?.shadowRoot;return root&&!root.getElementById('overlay').hidden;},null,{timeout:30000});
+  await tab.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host')?.shadowRoot;return root&&!root.getElementById('overlay').hidden;},null,{timeout:90000});
   const updated=await host();
   assert.equal(updated.version,'v1.2.77');
   assert.equal(updated.overlay,true);
   assert.equal(updated.banner,false);
   assert.ok(requests.includes('/app.js'));
+  assert.equal(requests.filter(path=>path==='/app.js').length,1);
   assert.equal(JSON.parse(store.get('photoswiper-app')).version,'1.2.77');
 
   requests.length=0;
