@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {emptyReview} from '../lib/userscript-core.mjs';
 
 let chromium;
-try{({chromium}=await import('playwright'));}catch{}
+try{const playwright=await import('playwright');chromium=playwright[process.env.PS_ENGINE||'chromium'];}catch{}
 const item=(index,extra={})=>({mediaKey:`synthetic-${index}`,name:`synthetic-${index}.jpg`,date:new Date(2020,0,1+index).toISOString(),size:2e7,thumbUrl:`https://lh3.googleusercontent.com/synthetic-${index}`,type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now(),...extra});
 
 async function mount(t,{width,height,items,state={},scheme='light'}){
