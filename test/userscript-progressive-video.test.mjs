@@ -160,3 +160,23 @@ test('desktop starts at 720p and upgrades to the original',()=>{
  video.readyState=2;video.emit('loadeddata');
  assert.equal(full.src,url);
 });
+
+for(const compact of [false,true])for(const event of ['playing','timeupdate'])test(`warmed ${compact?'phone':'desktop'} video upgrades on ${event} when loadeddata never fires`,async()=>{
+ const video=fakeVideo(),swaps=[];let created=0;video.src=smallerVideoURL(url,compact);video.readyState=1;
+ const full=fakeVideo();
+ startProgressiveVideo({video,url,compact,createVideo:()=>{created++;return full;},onSwap:value=>swaps.push(value),onError:()=>{},isActive:()=>true});
+ assert.equal(video.src,smallerVideoURL(url,compact));assert.equal(video.playCalls,1);assert.equal(created,0);
+ video.readyState=4;video.currentTime=.5;video.emit(event);
+ assert.equal(created,1);assert.equal(full.src,compact?smallerVideoURL(url):url);assert.equal(full.loads,1);
+ for(const other of ['loadeddata','playing','timeupdate'])video.emit(other);
+ assert.equal(created,1);assert.equal(full.loads,1);
+ full.readyState=2;full.emit('canplay');full.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full]);assert.equal(full.currentTime,.5);
+});
+
+test('warmed video events from a passed card do not start an upgrade',()=>{
+ const video=fakeVideo();let created=0,active=true;video.src=smallerVideoURL(url);video.readyState=1;
+ startProgressiveVideo({video,url,createVideo:()=>{created++;return fakeVideo();},onSwap:()=>{},onError:()=>{},isActive:()=>active});
+ active=false;video.readyState=4;video.emit('playing');video.emit('timeupdate');
+ assert.equal(created,0);
+});
