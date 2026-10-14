@@ -197,3 +197,38 @@ test('a failed later page retains the first-page deck and releases its held boun
  saved.seen.push(shown.mediaKey);state.items=state.items.map(item=>item===shown?{...item,decision:'remove'}:item);
  assert.equal(flashbackDeck(state,saved,()=>0,Date.now(),null,true).length,state.items.length-1);
 });
+
+test('kept photos resurface one in twenty outside Flashbacks and fill the deck once nothing is unreviewed',async()=>{
+ const {resurfaceKept}=await import('../lib/userscript-order.mjs');
+ const unreviewed=Array.from({length:45},(_,index)=>({mediaKey:`u${index}`})),kept=[{mediaKey:'k0'},{mediaKey:'k1'},{mediaKey:'k2'},{mediaKey:'k3'}];
+ const merged=resurfaceKept(unreviewed,kept);
+ assert.deepEqual(merged.map((item,index)=>item.mediaKey.startsWith('k')?index:null).filter(index=>index!==null),[19,39]);
+ assert.equal(merged.length,47);
+ assert.deepEqual(resurfaceKept([],kept),kept);
+ assert.deepEqual(resurfaceKept(unreviewed,kept,20,0).slice(0,2).map(item=>item.mediaKey),['k0','u0']);
+ assert.deepEqual(resurfaceKept(unreviewed,kept,20,0).map((item,index)=>item.mediaKey.startsWith('k')?index:null).filter(index=>index!==null),[0,20,40]);
+ assert.equal(resurfaceKept(unreviewed,[]),unreviewed);
+});
+
+test('ready kept photos respect cooldowns and the next return date ignores photos still inside their swipe cooldown',async()=>{
+ const {keptReady,nextKeptReturn,flashbackDeck}=await import('../lib/userscript-order.mjs');
+ const day=86400000,now=Date.UTC(2026,9,14);
+ const items=[
+  {mediaKey:'old',decision:'keep',lastDecisionAt:now-60*day,lastDecisionSwipe:0,keepCount:1,state:'active'},
+  {mediaKey:'older',decision:'keep',lastDecisionAt:now-90*day,lastDecisionSwipe:0,keepCount:1,state:'active'},
+  {mediaKey:'recent',decision:'keep',lastDecisionAt:now-5*day,lastDecisionSwipe:10,keepCount:1,state:'active'},
+  {mediaKey:'fresh-swipe',decision:'keep',lastDecisionAt:now-90*day,lastDecisionSwipe:590,keepCount:1,state:'active'},
+  {mediaKey:'trashed',decision:'keep',lastDecisionAt:now-90*day,lastDecisionSwipe:0,keepCount:1,state:'in_trash'},
+  {mediaKey:'u',decision:null,state:'active',lastDecisionSwipe:600}
+ ];
+ const state={items,swipeCount:600};
+ assert.deepEqual(keptReady(state,now).map(item=>item.mediaKey),['older','old']);
+ assert.equal(nextKeptReturn({items:items.filter(item=>item.mediaKey==='recent'||item.mediaKey==='u'),swipeCount:600},now),now-5*day+30*day);
+ assert.equal(nextKeptReturn({items:[{mediaKey:'fresh-swipe',decision:'keep',lastDecisionAt:now-90*day,lastDecisionSwipe:590,state:'active'}],swipeCount:600},now),null);
+ assert.equal(nextKeptReturn(state,now),now);
+ const reviewed=items.filter(item=>item.decision);
+ const on=flashbackDeck({items:reviewed,swipeCount:600,started:true,exhausted:true},{},()=>0,now).map(item=>item.mediaKey);
+ const off=flashbackDeck({items:reviewed,swipeCount:600,started:true,exhausted:true},{keptOff:true},()=>0,now).map(item=>item.mediaKey);
+ assert.deepEqual(on.slice().sort(),['old','older']);
+ assert.deepEqual(off,[]);
+});
