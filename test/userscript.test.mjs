@@ -2925,7 +2925,7 @@ test('queue pill grows beyond 25 while swipe decisions continue without opening 
  await mounted.settle();assert.equal(reviewQueue(await mounted.read()).length,31);assert.match(mounted.nodes.get('caption').textContent,/^queue-31 · /);
  pill.childNodes.at(-1).onclick();assert.equal(mounted.nodes.get('review-panel').hidden,false);assert.equal(mounted.nodes.get('trash-review-grid').childNodes.length,31);
  mounted.nodes.get('remove').onclick();mounted.nodes.get('keep').onclick();assert.equal(reviewQueue(await mounted.read()).length,31);
- mounted.nodes.get('review-panel').childNodes.at(-1).childNodes[0].onclick();mounted.nodes.get('remove').onclick();await mounted.settle();assert.equal(reviewQueue(await mounted.read()).length,32);
+ mounted.nodes.get('review-panel').childNodes.find(node=>node.class==='trash-bar').childNodes[0].onclick();mounted.nodes.get('remove').onclick();await mounted.settle();assert.equal(reviewQueue(await mounted.read()).length,32);
 });
 
 test('unticking keeps items immediately and only the remaining selection reaches Trash',async()=>{
@@ -4026,4 +4026,38 @@ test('sync stays off when the saved sign-in belongs to another Google Photos acc
   }
   await mounted.nodes.get('close').onclick();
  }
+});
+
+test('a completed Move to Trash shows Done with the space freed, then Keep swiping returns to the deck',async()=>{
+ const trashed=new Set();
+ const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf')for(const key of args[2])trashed.add(key);return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
+ const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6}),item('b',{decision:'remove',dedupKey:'stable-b',size:2e6}),item('c',{size:5e6})],{fetch,confirm:()=>true});
+ mounted.nodes.get('review').onclick();
+ assert.equal(mounted.nodes.get('trash-done').hidden,true);
+ const keepB=mounted.nodes.get('trash-review-grid').childNodes.map(tile=>tile.childNodes[1]).find(check=>check.dataset.key==='b');keepB.onclick();
+ await mounted.settle();
+ await mounted.click('move-trash');
+ assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='a').state,'in_trash');
+ assert.equal(mounted.nodes.get('trash-done').hidden,false);
+ assert.equal(mounted.nodes.get('trash-done-freed').textContent,'38.2 MB freed');
+ assert.equal(mounted.nodes.get('trash-done-counts').textContent,'1 moved to Trash · 1 kept');
+ assert.equal(mounted.nodes.get('trash-done-next').textContent,'Up next: 1 to review');
+ assert.match(mounted.nodes.get('open-trash').href,/^https:\/\/photos\.google\.com\/u\/\d+\/trash$/);
+ mounted.nodes.get('keep-swiping').onclick();
+ assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(mounted.nodes.get('trash-done').hidden,true);
+ assert.match(mounted.nodes.get('caption').textContent,/^c · /);
+ mounted.nodes.get('review').onclick();assert.equal(mounted.nodes.get('trash-done').hidden,true);
+ await mounted.nodes.get('close').onclick();
+});
+
+test('a Move to Trash that fails after a verified batch reports how many moved and how many remain queued',async()=>{
+ const trashed=new Set();let moves=0;
+ const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf'){if(++moves>1)throw Error('Synthetic network failure');for(const key of args[2])trashed.add(key);}return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
+ const items=Array.from({length:30},(_,index)=>item(`t${index}`,{decision:'remove',dedupKey:`stable-t${index}`,size:1e6}));
+ const mounted=await mountedReview(items,{fetch,confirm:()=>true});
+ await mounted.click('move-trash');
+ assert.match(mounted.nodes.get('status').textContent,/^25 of 30 moved to Trash; 5 still queued\./);
+ assert.equal((await mounted.read()).items.filter(row=>row.state==='in_trash').length,25);
+ assert.equal(mounted.nodes.get('trash-done').hidden,true);
+ await mounted.nodes.get('close').onclick();
 });
