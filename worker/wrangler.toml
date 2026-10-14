@@ -13,3 +13,6 @@ binding = "DB"
 database_name = "photoswiper-sync"
 database_id = "REPLACE_DATABASE_ID"
 migrations_dir = "migrations"
+
+[vars]
+LEGACY_FULL_PULL_SECONDS = "1800"

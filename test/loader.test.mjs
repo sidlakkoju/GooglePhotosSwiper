@@ -104,7 +104,7 @@ test('verified loader Google credentials stay in GM storage and restore server s
  assert.equal(await startLoader(env,key),true);await env.window.completed;
  assert.equal(storage.get('photos-swipe-pairing').token,'loader-private-token');
  assert.deepEqual(env.window.restored.history,remote.history);assert.deepEqual(env.window.restored.syncProgress,remote.progress);assert.deepEqual(env.window.restored.syncDecisions,{photo:'keep'});
- assert.equal(calls.length,1);assert.match(calls[0].url,/\/api\/state\?scope=synthetic-account$/);assert.equal(calls[0].options.headers.Authorization,'Bearer loader-private-token');
+ assert.equal(calls.length,1);assert.match(calls[0].url,/\/api\/state\?scope=synthetic-account&cursor=$/);assert.equal(calls[0].options.headers.Authorization,'Bearer loader-private-token');
  for(const value of [pageWorld,env.document.documentElement,env.window.parent,persisted])assert.ok(!JSON.stringify(value).includes('loader-private-token'));
  assert.equal(scripts.length,0);
  const {createPairingStore}=await import('../lib/userscript-settings.mjs');
