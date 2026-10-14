@@ -843,13 +843,15 @@ function smallerVideoURL(value,compact=false){
  return url.href;
 }
 function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,isActive}){
- let original=null,finished=false,seeking=false,hasFrame=false;
+ let original=null,finished=false,seeking=false,hasFrame=false,wantsPlayback=true;
  const release=element=>{element.pause();element.removeAttribute('src');element.load();};
  const cancel=()=>{finished=true;if(original){release(original);original=null;}};
  video.cancelUpgrade=cancel;
+ video.addEventListener('play',()=>{wantsPlayback=true;});
+ video.addEventListener('pause',()=>{if(!video.error)wantsPlayback=false;});
  const fallback=()=>{
   if(finished||!isActive())return;
-  const time=video.currentTime,paused=video.paused,restoreTime=video.dataset.resumeReady!=='pending';
+  const time=video.currentTime,paused=!wantsPlayback,restoreTime=video.dataset.resumeReady!=='pending';
   cancel();video.onerror=onError;
   video.addEventListener('loadedmetadata',()=>{if(isActive()&&restoreTime&&Number.isFinite(time))video.currentTime=time;},{once:true});
   video.src=url;video.load();if(!paused)video.play().catch(()=>{});
@@ -858,9 +860,11 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,isA
   if(finished||original||!isActive())return;
   original=createVideo();const full=original;
   full.hidden=true;full.preload='auto';full.muted=true;full.loop=video.loop;full.playsInline=true;full.poster=video.poster;
+  let seekStart=0,seekAttempts=0;
+  const abandon=()=>{release(full);original=null;};
   const align=()=>{
    if(finished||original!==full||!isActive()||full.readyState<2||seeking)return;
-   if(Math.abs(full.currentTime-video.currentTime)>.04){seeking=true;full.currentTime=video.currentTime;return;}
+   if(Math.abs(full.currentTime-video.currentTime)>.04){if(seekAttempts>=8){abandon();return;}seekAttempts++;seekStart=full.currentTime;seeking=true;full.currentTime=video.currentTime;return;}
    const paused=video.paused;
    full.playbackRate=video.playbackRate;full.volume=video.volume;
    const swap=()=>{
@@ -873,7 +877,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,isA
    if(paused){swap();return;}
    full.play().then(()=>{if(full.requestVideoFrameCallback)full.requestVideoFrameCallback(swap);else swap();}).catch(()=>{});
   };
-  full.addEventListener('seeked',()=>{seeking=false;align();});
+  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
   full.addEventListener('canplay',align);
   full.onerror=()=>{release(full);original=null;};
   full.src=url;full.load();

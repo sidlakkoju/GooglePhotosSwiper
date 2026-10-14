@@ -7,7 +7,7 @@ function fakeVideo(){
  return {src:'',currentTime:0,readyState:0,paused:true,muted:true,volume:1,playbackRate:1,loop:true,dataset:{},loads:0,
   addEventListener(type,handler,options){const list=listeners.get(type)||[];list.push({handler,once:options?.once});listeners.set(type,list);},
   emit(type){for(const entry of [...(listeners.get(type)||[])]){if(entry.once)listeners.set(type,listeners.get(type).filter(value=>value!==entry));entry.handler();}},
-  play(){this.paused=false;return Promise.resolve();},pause(){this.paused=true;},load(){this.loads++;},removeAttribute(name){this[name]='';}
+  play(){this.playCalls=(this.playCalls||0)+1;this.paused=false;this.emit('play');return Promise.resolve();},pause(){this.paused=true;this.emit('pause');},load(){this.loads++;},removeAttribute(name){this[name]='';}
  };
 }
 const url='https://fixture.invalid/synthetic=original?authuser=0';
@@ -70,4 +70,34 @@ test('fallback before metadata keeps the saved resume position owned by the disp
 test('normal initial waiting does not abandon the smaller rendition',()=>{
  const {video}=setup();video.emit('waiting');assert.equal(video.src,smallerVideoURL(url));
  video.emit('stalled');assert.equal(video.src,url);
+});
+
+for(const event of ['error','stalled','waiting'])test(`small ${event} resumes original after a browser error forces paused`,()=>{
+ const {video}=setup();video.readyState=2;video.emit('loadeddata');
+ video.error={code:4};video.paused=true;video.emit('pause');
+ if(event==='error')video.onerror();else video.emit(event);
+ assert.equal(video.src,url);assert.equal(video.playCalls,2);assert.equal(video.paused,false);
+});
+
+test('fallback respects a user pause before the rendition fails',()=>{
+ const {video}=setup();video.pause();video.error={code:4};video.onerror();
+ assert.equal(video.src,url);assert.equal(video.playCalls,1);assert.equal(video.paused,true);
+});
+
+test('a clamped no-op seek abandons the hidden upgrade without repeated seeks',()=>{
+ const {video,full,swaps}=setup();let seeks=0;
+ Object.defineProperty(full,'currentTime',{get:()=>0,set:()=>{seeks++;}});
+ video.currentTime=12;video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
+ for(let index=0;index<20;index++){full.emit('seeked');full.emit('canplay');}
+ assert.equal(seeks,1);assert.equal(full.src,'');assert.equal(full.paused,true);
+ assert.equal(video.src,smallerVideoURL(url));assert.equal(video.paused,false);assert.deepEqual(swaps,[]);
+});
+
+test('alignment attempts stay bounded when seeks progress without reaching the target',()=>{
+ const {video,full,swaps}=setup();let time=0,seeks=0;
+ Object.defineProperty(full,'currentTime',{get:()=>time,set:()=>{seeks++;time+=.01;}});
+ video.currentTime=12;video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
+ for(let index=0;index<20;index++)full.emit('seeked');
+ assert.equal(seeks,8);assert.equal(full.src,'');assert.deepEqual(swaps,[]);
+ assert.equal(video.src,smallerVideoURL(url));assert.equal(video.paused,false);
 });
