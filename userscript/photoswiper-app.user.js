@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.74
+// @version 1.2.75
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1702,15 +1702,19 @@ function mountPhotosSwipe(environment) {
     media.hidden=true;$('media').replaceChildren(poster,media);addVideoControls(media);$('media').setAttribute('aria-busy','true');
     if(poster.complete&&poster.naturalWidth)painted(poster,token);
     const started=window.performance?.now();
-    media.oncanplay=()=>{if(token===generation&&!handlingError)$('media').setAttribute('aria-busy','false');};
-    media.onloadeddata=()=>{
-     if(token!==generation||handlingError)return;
-     media.hidden=false;$('media').replaceChildren(media);addVideoControls(media);painted(media,token);
+    const initialTime=media.currentTime;
+    const reveal=()=>{
+     if(token!==generation||handlingError||!media.hidden)return;
+     $('media').setAttribute('aria-busy','false');media.hidden=false;$('media').replaceChildren(media);addVideoControls(media);painted(media,token);
      if(window.localStorage?.psDebug==='1')window.console?.table({videoFirstFrameMs:window.performance.now()-started});
     };
+    media.onloadeddata=media.oncanplay=media.onplaying=reveal;
+    media.addEventListener('timeupdate',()=>{if(media.currentTime>initialTime)reveal();});
+    if(media.readyState>=2)reveal();
+    if(warmed)media.play().catch(()=>{});
     if(retried||forceRefresh)videoURLs.delete(item.mediaKey);const url=await videoURL(item);if(token!==generation||handlingError)return;
-    if(media.src!==url)media.src=url;media.play().catch(()=>{});
-    if(media.readyState>=2)media.onloadeddata();
+    const sourceChanged=media.src!==url;if(sourceChanged)media.src=url;if(!warmed||sourceChanged)media.play().catch(()=>{});
+    if(media.readyState>=2)reveal();
    }
    else {media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='';media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}};$('media').append(media);const reused=!!cached;$('media').setAttribute('aria-busy',String(!reused));if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}else await failed();}}
   }catch{await failed();}
@@ -2013,7 +2017,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.74":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.75":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
