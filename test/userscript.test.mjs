@@ -4061,3 +4061,18 @@ test('a Move to Trash that fails after a verified batch reports how many moved a
  assert.equal(mounted.nodes.get('trash-done').hidden,true);
  await mounted.nodes.get('close').onclick();
 });
+
+test('Timeline order resurfaces an eligible kept photo as card twenty with a Kept before label, and the Settings toggle turns it off',async()=>{
+ const old=Date.now()-60*86400000;
+ const items=[...Array.from({length:30},(_,index)=>item(`u${String(index).padStart(2,'0')}`,{date:new Date(Date.UTC(2020,0,30-index)).toISOString()})),item('kept-photo',{decision:'keep',revision:1,lastDecisionAt:old,lastDecisionSwipe:0,keepCount:1,date:new Date(Date.UTC(2019,0,1)).toISOString()}),item('anchor',{decision:'keep',revision:1,lastDecisionAt:Date.now(),lastDecisionSwipe:600,keepCount:1})];
+ const mounted=await mountedReview(items);
+ mounted.nodes.get('sort').value='original';mounted.nodes.get('sort').onchange();
+ for(let index=0;index<19;index++)mounted.nodes.get('keep').onclick();
+ await mounted.settle();
+ assert.match(mounted.nodes.get('caption').textContent,/^Kept before · kept-photo · /);
+ const toggle=mounted.nodes.get('bring-back-kept');
+ assert.equal(toggle.checked,true);
+ toggle.checked=false;toggle.onchange();
+ assert.doesNotMatch(mounted.nodes.get('caption').textContent,/Kept before/);
+ await mounted.nodes.get('close').onclick();
+});
