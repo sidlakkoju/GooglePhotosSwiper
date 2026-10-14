@@ -1702,15 +1702,19 @@ function mountPhotosSwipe(environment) {
     media.hidden=true;$('media').replaceChildren(poster,media);addVideoControls(media);$('media').setAttribute('aria-busy','true');
     if(poster.complete&&poster.naturalWidth)painted(poster,token);
     const started=window.performance?.now();
-    media.oncanplay=()=>{if(token===generation&&!handlingError)$('media').setAttribute('aria-busy','false');};
-    media.onloadeddata=()=>{
-     if(token!==generation||handlingError)return;
-     media.hidden=false;$('media').replaceChildren(media);addVideoControls(media);painted(media,token);
+    const initialTime=media.currentTime;
+    const reveal=()=>{
+     if(token!==generation||handlingError||!media.hidden)return;
+     $('media').setAttribute('aria-busy','false');media.hidden=false;$('media').replaceChildren(media);addVideoControls(media);painted(media,token);
      if(window.localStorage?.psDebug==='1')window.console?.table({videoFirstFrameMs:window.performance.now()-started});
     };
+    media.onloadeddata=media.oncanplay=media.onplaying=reveal;
+    media.addEventListener('timeupdate',()=>{if(media.currentTime>initialTime)reveal();});
+    if(media.readyState>=2)reveal();
+    if(warmed)media.play().catch(()=>{});
     if(retried||forceRefresh)videoURLs.delete(item.mediaKey);const url=await videoURL(item);if(token!==generation||handlingError)return;
-    if(media.src!==url)media.src=url;media.play().catch(()=>{});
-    if(media.readyState>=2)media.onloadeddata();
+    if(media.src!==url)media.src=url;if(!warmed)media.play().catch(()=>{});
+    if(media.readyState>=2)reveal();
    }
    else {media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='';media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}};$('media').append(media);const reused=!!cached;$('media').setAttribute('aria-busy',String(!reused));if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}else await failed();}}
   }catch{await failed();}

@@ -12,7 +12,7 @@ const displaySource=source.slice(source.indexOf(' async function display(item,')
 function fixture(reuse){
  const item={mediaKey:'next',name:'Next',type:reuse==='video'?'video':'photo',thumbUrl:'https://fixture.invalid/next'};
  const created=[],refreshes=[],played=[],cleared=[];
- const element=tag=>({tag,style:{},dataset:{},complete:true,naturalWidth:640,hidden:false,src:item.thumbUrl,readyState:2,duration:60,currentTime:0,addEventListener(){},setAttribute(){},pause(){this.paused=true;},removeAttribute(name){delete this[name];},load(){this.loads=(this.loads||0)+1;},play(){played.push(this);return Promise.resolve();}});
+ const element=tag=>({tag,style:{},dataset:{},complete:true,naturalWidth:640,hidden:false,src:item.thumbUrl,readyState:2,duration:60,currentTime:0,listeners:{},addEventListener(type,listener){(this.listeners[type]??=[]).push(listener);},setAttribute(){},pause(){this.paused=true;},removeAttribute(name){delete this[name];},load(){this.loads=(this.loads||0)+1;},play(){played.push(this);return Promise.resolve();}});
  const broken=element('img');broken.naturalWidth=0;broken.dataset.key=item.mediaKey;
  const ready=element(item.type==='video'?'video':'img');
  let assignments=0;Object.defineProperty(ready,'src',{get:()=>item.thumbUrl,set:()=>{assignments++;}});
@@ -99,11 +99,48 @@ for(const retried of [false,true])test(`failed video cannot restart or reattach 
  finishLink('https://fixture.invalid/late-video');
  await displaying;
  assert.equal(video.src,undefined);
- assert.deepEqual(f.played,[]);
+ assert.deepEqual(f.played,retried?[]:[video]);
  assert.ok(!f.media.children.includes(video));
  if(!retried){
   f.context.generation++;
   finishRefresh(f.item);
  }
  await failed;
+});
+
+for(const warmed of [false,true])for(const event of ['loadeddata','canplay','playing','timeupdate'])test(`${warmed?'warmed':'fresh'} video reveals and clears loading on ${event}`,async()=>{
+ const f=fixture(warmed?'video':'none');f.item.type='video';f.ready.readyState=1;
+ if(!warmed){const create=f.context.document.createElement;f.context.document.createElement=tag=>{const node=create(tag);node.readyState=1;return node;};}
+ await f.context.display(f.item);
+ const video=f.media.querySelector('video');
+ assert.equal(video.hidden,true);assert.equal(f.media['aria-busy'],'true');
+ if(event==='timeupdate'){
+  for(const listener of video.listeners.timeupdate)listener();
+  assert.equal(video.hidden,true);assert.equal(f.media['aria-busy'],'true');
+  video.currentTime=1;
+  for(const listener of video.listeners.timeupdate)listener();
+ }else video[`on${event}`]();
+ assert.equal(video.hidden,false);assert.equal(f.media['aria-busy'],'false');
+ assert.deepEqual(f.media.children,[video]);
+ video.oncanplay();video.onplaying();video.onloadeddata();
+ assert.deepEqual(f.media.children,[video]);
+});
+
+test('ready warmed video reveals and attempts autoplay before its pending link resolves',async()=>{
+ const f=fixture('video');let finishLink;
+ f.context.videoURL=()=>new Promise(resolve=>{finishLink=resolve;});
+ const displaying=f.context.display(f.item);
+ assert.equal(f.ready.hidden,false);assert.equal(f.media['aria-busy'],'false');
+ assert.deepEqual(f.media.children,[f.ready]);assert.deepEqual(f.played,[f.ready]);
+ finishLink(f.item.thumbUrl);await displaying;
+ assert.deepEqual(f.played,[f.ready]);
+});
+
+for(const event of ['loadeddata','canplay','playing','timeupdate'])test(`superseded video ignores ${event}`,async()=>{
+ const f=fixture('video');f.ready.readyState=1;
+ await f.context.display(f.item);f.context.generation++;
+ f.ready.currentTime=1;
+ if(event==='timeupdate')for(const listener of f.ready.listeners.timeupdate)listener();
+ else f.ready[`on${event}`]();
+ assert.equal(f.ready.hidden,true);assert.equal(f.media['aria-busy'],'true');
 });
