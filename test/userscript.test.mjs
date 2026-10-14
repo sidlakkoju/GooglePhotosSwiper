@@ -3476,6 +3476,7 @@ test('Flashbacks single-item memory keeps long place text in a shrinking ellipsi
  assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${place} · 1 of 1`);
  assert.equal(label.querySelector('.memory-place').title,place);
  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('');
+ assert.match(styles,/memory-label>span\{flex:none;white-space:pre\}/);
  assert.match(styles,/max-width:calc\(100% - 72px\)/);assert.match(styles,/memory-place\{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis/);
  await mounted.nodes.get('close').onclick();
 });
@@ -3819,7 +3820,7 @@ test('Flashbacks shows and swipes loaded cards while older pages are still pendi
  }finally{secondPage.resolve();finalPage.resolve();await mounted.nodes.get('close').onclick();}
 });
 
-test('Flashbacks shows loaded memories and swipes work in Flashbacks and Timeline while the library loads',async()=>{
+for(const pendingAction of [null,'load','refresh'])test(`Flashbacks swipes work while the library loads with pending action ${pendingAction}`,async()=>{
  const finalPage=Promise.withResolvers(),cursors=[];
  const rows=Array.from({length:113},(_,index)=>({key:`QA${String(index).padStart(4,'0')}`,date:Date.UTC(2008+Math.floor(index/13),0,1,0,index%13)})).reverse();
  const mounted=await mountedReview([],{fetch:async(url,options)=>{
@@ -3836,6 +3837,8 @@ test('Flashbacks shows loaded memories and swipes work in Flashbacks and Timelin
   mounted.nodes.get('load').onclick();
   await waitForReview(()=>cursors.length===3);
   await mounted.settle();
+  const pendingOperation=pendingAction?mounted.nodes.get(pendingAction).onclick():null;
+  await mounted.settle();
   assert.equal((await mounted.read()).exhausted,false);
   assert.match(mounted.nodes.get('caption').textContent,/^Memory /);
   assert.equal(mounted.nodes.get('keep').disabled,false);
@@ -3850,6 +3853,7 @@ test('Flashbacks shows loaded memories and swipes work in Flashbacks and Timelin
   assert.equal((await mounted.read()).exhausted,false);
   mounted.nodes.get('sort').value='flashbacks';mounted.nodes.get('sort').onchange();
   finalPage.resolve();
+  await pendingOperation;
   await waitForReview(async()=>(await mounted.read()).exhausted);
   await mounted.settle();
   assert.equal((await mounted.read()).items.length,113);
