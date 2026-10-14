@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.78
+// @version 1.2.79
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -98,13 +98,13 @@ function executeApp(environment,app){
  let trusted=source,execute;
  try{
   const types=environment.trustedTypes||environment.window.trustedTypes||page.trustedTypes;
-  if(types){let policy=appPolicies.get(types);if(!policy){policy=types.createPolicy('photoswiper-auto-loader',{createScript:value=>value});appPolicies.set(types,policy);}trusted=policy.createScript(source);}
+  if(types){let policy=appPolicies.get(types);if(!policy){for(const name of ['photoswiper-auto-loader','photoswiper-auto-loader-'+environment.crypto.randomUUID()]){try{policy=types.createPolicy(name,{createScript:value=>value});break;}catch{}}if(policy)appPolicies.set(types,policy);}if(policy)trusted=policy.createScript(source);}
   try{execute=(0,environment.eval||eval)(trusted);}catch{
    const key='__photoswiperExecute'+environment.crypto.randomUUID().replaceAll('-','');
    const script=environment.document.createElement('script');
    const nonce=environment.document.querySelector('script[nonce]')?.nonce;
    if(nonce)script.nonce=nonce;
-   try{script.text=types?appPolicies.get(types).createScript('window['+JSON.stringify(key)+']='+source+';'):'window['+JSON.stringify(key)+']='+source+';';(environment.document.head||root).appendChild(script);execute=page[key];}finally{delete page[key];script.remove();}
+   try{script.text=appPolicies.get(types)?appPolicies.get(types).createScript('window['+JSON.stringify(key)+']='+source+';'):'window['+JSON.stringify(key)+']='+source+';';(environment.document.head||root).appendChild(script);execute=page[key];}finally{delete page[key];script.remove();}
   }
   if(typeof execute!=='function')return false;
  }catch{return false;}

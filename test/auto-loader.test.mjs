@@ -109,6 +109,18 @@ test('a failed download of a newer app runs the cached app without a banner',asy
  assert.equal(await startAutoLoader(env),true);
  assert.equal(env.window.version,app.version);assert.equal(nodes.length,0);
 });
+test('a taken policy name falls back to a unique Trusted Types policy',async()=>{
+ const {env,trusted}=fixture(app);const names=[];
+ env.trustedTypes={createPolicy(name,rules){names.push(name);if(name==='photoswiper-auto-loader')throw new TypeError('Policy exists');return {createScript(source){const value={};trusted.set(value,rules.createScript(source));return value;}};}};
+ assert.equal(await startAutoLoader(env),true);assert.equal(env.window.runs,1);
+ assert.equal(names[0],'photoswiper-auto-loader');assert.match(names[1],/^photoswiper-auto-loader-[0-9a-f-]{36}$/);
+});
+test('without Trusted Types the app runs through plain string eval and requests /app.js',async()=>{
+ const {env,requests}=fixture(app);delete env.trustedTypes;
+ env.eval=value=>{assert.equal(typeof value,'string');return vm.runInNewContext(value);};
+ assert.equal(await startAutoLoader(env),true);assert.equal(env.window.runs,1);
+ assert.deepEqual(requests,['/version','/app.js']);
+});
 test('install artifacts use ASCII and unique grants and connect entries',async()=>{
  for(const name of ['photoswiper.user.js','photoswiper-loader.user.js','photoswiper-app.user.js']){
   const source=await readFile(new URL('../userscript/'+name,import.meta.url),'utf8');
