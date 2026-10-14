@@ -553,7 +553,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
      const patch=historyBase&&historyPatch(historyBase,history),body=patch&&{action:'patch',base:cursorKey(JSON.stringify(historyBase)),...patch};
      let patched=false;
      if(body&&new TextEncoder().encode(JSON.stringify(body)).length<=262144){
-      try{patched=(await syncRequest(scope,'api/undo','POST',body)).length===history.length;}catch(error){if(error.status!==409)throw error;}
+      try{patched=(await syncRequest(scope,'api/undo','POST',body)).length===history.length;}catch(error){if(error.status!==409&&error.status!==400)throw error;}
      }
      if(!patched)await syncRequest(scope,'api/undo','PUT',{history});
      historySynced=true;
@@ -586,7 +586,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
 const SYNC_POLL_MS=60000,SYNC_IDLE_POLL_MS=300000,SYNC_IDLE_AFTER_MS=120000,SYNC_PUSH_DELAY_MS=5000,SYNC_BACKOFF_MS=5000,SYNC_BACKOFF_MAX_MS=300000;
 function heartbeatSync(state,lastPullAt,now,activeAt=now){
  if(now-lastPullAt>=(now-activeAt<SYNC_IDLE_AFTER_MS?SYNC_POLL_MS:SYNC_IDLE_POLL_MS))return 'pull';
- return state.syncDirty||Object.keys(state.syncPending||{}).length?'push':null;
+ return now-activeAt>=SYNC_PUSH_DELAY_MS&&(state.syncDirty||Object.keys(state.syncPending||{}).length)?'push':null;
 }
 function markSyncChanges(previous,next) {
  const pending={...previous.syncPending},times={...previous.syncPendingTimes},undos={...previous.syncPendingUndo};

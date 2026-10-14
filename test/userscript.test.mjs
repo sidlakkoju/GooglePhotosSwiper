@@ -3771,7 +3771,10 @@ test('lease heartbeats between polls send unsent changes without pulling the ful
   for(let tick=0;tick<5;tick++){await heartbeat();await mounted.settle();}
   assert.deepEqual(requests,[]);
   await mounted.click('keep');
-  await heartbeat();
+  await heartbeat();await mounted.settle();
+  assert.ok(!requests.includes('PUT /api/decisions'));
+  const now=Date.now;Date.now=()=>now()+SYNC_PUSH_DELAY_MS;
+  try{await heartbeat();}finally{Date.now=now;}
   await waitForReview(async()=>!(await mounted.read()).syncDirty);
   assert.ok(requests.includes('PUT /api/decisions'));
   assert.ok(!requests.includes('GET /api/state'));

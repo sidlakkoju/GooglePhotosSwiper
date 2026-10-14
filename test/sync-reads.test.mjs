@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
 import {syncRequest,digest} from '../worker/src/sync.mjs';
-import {createSyncClient,heartbeatSync,historyPatch,mergeSyncResult,SYNC_POLL_MS,SYNC_IDLE_POLL_MS,SYNC_IDLE_AFTER_MS,SYNC_BACKOFF_MS,SYNC_BACKOFF_MAX_MS} from '../lib/userscript-sync.mjs';
+import {createSyncClient,heartbeatSync,historyPatch,mergeSyncResult,SYNC_POLL_MS,SYNC_IDLE_POLL_MS,SYNC_IDLE_AFTER_MS,SYNC_BACKOFF_MS,SYNC_BACKOFF_MAX_MS,SYNC_PUSH_DELAY_MS} from '../lib/userscript-sync.mjs';
 
 const large=['decisions','decision_versions','decision_keeps','review_items'];
 class CountingD1 {
@@ -111,13 +111,17 @@ test('old clients keep the full response shapes while new clients receive deltas
 
 test('legacy full pulls are limited per device while pushes and cursor pulls continue',async()=>{
  const e={...env(),LEGACY_FULL_PULL_SECONDS:'1800'};seed(e,200);
+ const prepare=e.DB.prepare.bind(e.DB);let broken=true;
+ e.DB.prepare=sql=>{if(broken&&sql==='SELECT id, decision FROM decisions WHERE scope = ?')throw Error('synthetic outage');return prepare(sql);};
+ assert.equal((await call(e,'state')).status,500);
+ broken=false;
  assert.equal((await call(e,'state')).status,200);
  e.DB.reset();
  const paused=await call(e,'state');
  assert.equal(paused.status,429);assert.ok(Number(paused.headers.get('Retry-After'))>1700);
  assert.deepEqual(e.DB.stats.unbounded,[]);assert.ok(e.DB.stats.rowsRead<=5,`rows read ${e.DB.stats.rowsRead}`);
  assert.equal((await call(e,'decisions','PUT',{decisions:[{id:'synthetic-1',decision:'remove'}]})).status,200);
- assert.equal((await call(e,'state?since=1')).status,200);
+ assert.equal((await call(e,'state?since=1')).status,429);
  const {cursor}=await (await call(e,'state?cursor=')).json();
  assert.equal((await (await call(e,`state?cursor=${cursor}`)).json()).delta,true);
  e.DB.sqlite.exec('UPDATE devices SET full_pull_at = full_pull_at - 1800');
@@ -230,6 +234,8 @@ test('polling slows down while idle and pushes only pending work between polls',
  assert.equal(heartbeatSync(clean,now-SYNC_POLL_MS,now,now-SYNC_IDLE_AFTER_MS),null);
  assert.equal(heartbeatSync(clean,now-SYNC_IDLE_POLL_MS,now,now-SYNC_IDLE_AFTER_MS),'pull');
  assert.equal(heartbeatSync({syncPending:{synthetic:'keep'}},now,now,now-SYNC_IDLE_AFTER_MS),'push');
+ assert.equal(heartbeatSync({syncPending:{synthetic:'keep'}},now,now,now-SYNC_PUSH_DELAY_MS+1),null);
+ assert.equal(heartbeatSync({syncPending:{synthetic:'keep'}},now,now,now-SYNC_PUSH_DELAY_MS),'push');
  assert.equal(heartbeatSync(clean,now-SYNC_POLL_MS,now),'pull');
 });
 
