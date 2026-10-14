@@ -61,12 +61,13 @@ export async function syncRequest(request,env={}) {
   const writeDecision=(id,value,updatedAt,undo)=>db.batch(decisionStatements(id,value,updatedAt,undo));
 
   const route=url.pathname,method=request.method;
-  const read=async()=>{
+  const read=async({items:includeItems=true}={})=>{
    const rows=await db.prepare('SELECT id, decision FROM decisions WHERE scope = ?').bind(scope).all();
    const record=await db.prepare('SELECT progress, history FROM review_state WHERE scope = ?').bind(scope).first();
    const ownHistory=await db.prepare('SELECT history FROM review_state WHERE scope = ?').bind(historyScope).first();
    const progress=record?JSON.parse(record.progress):{};
-   if(Object.hasOwn(progress,'items')){
+   if(Object.hasOwn(progress,'items')&&!includeItems)delete progress.items;
+   else if(Object.hasOwn(progress,'items')){
     const items=await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all();
     progress.items=items.results.map(item=>JSON.parse(item.data));
    }
@@ -82,7 +83,7 @@ export async function syncRequest(request,env={}) {
    const value=await body(request);
    if(Object.keys(value).length!==1||!Array.isArray(value.decisions)||value.decisions.length>2000||!value.decisions.every(entry=>entry&&Object.keys(entry).every(key=>['id','decision','updatedAt','undo'].includes(key))&&identifier(entry.id)&&decision(entry.decision)&&(entry.updatedAt===undefined||Number.isSafeInteger(entry.updatedAt)&&entry.updatedAt>=0)&&(entry.undo===undefined||typeof entry.undo==='boolean')))throw Error('Invalid decisions');
    if(value.decisions.length)await db.batch(value.decisions.flatMap(entry=>decisionStatements(entry.id,entry.decision,entry.updatedAt,entry.undo)));
-   const state=await read();return respond({ok:true,merged:true,decisions:state.decisions,...(state.decisionOwners?{decisionOwners:state.decisionOwners}:{})});
+   const state=await read({items:false});return respond({ok:true,merged:true,decisions:state.decisions,...(state.decisionOwners?{decisionOwners:state.decisionOwners}:{})});
   }
   const match=route.match(/^\/api\/decisions\/([^/]+)$/);
   if(match&&['PUT','DELETE'].includes(method)){

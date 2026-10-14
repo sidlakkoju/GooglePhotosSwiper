@@ -3925,3 +3925,14 @@ test('Flashbacks shows and swipes an incomplete boundary memory while the rest l
   assert.match(mounted.nodes.get('caption').textContent,/^Memory /);
  }finally{boundaryPage.resolve();await mounted.nodes.get('close').onclick();}
 });
+
+test('opening while a close is still finishing reopens the overlay',async()=>{
+ const mounted=await mountedReview([item('a'),item('b')]);
+ assert.equal(mounted.nodes.get('overlay').hidden,false);
+ const closing=mounted.nodes.get('close').onclick();
+ const reopening=mounted.nodes.get('launcher').onclick();
+ await closing;await reopening;
+ assert.equal(mounted.nodes.get('overlay').hidden,false);
+ await mounted.click('keep');
+ assert.equal((await mounted.read()).items[0].decision,'keep');
+});
