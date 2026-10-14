@@ -38,6 +38,7 @@ test('Play and Mute button clicks bubble without toggling media playback again',
 test('display and zoom reset preserve swipe touch actions when expanded, while zoom above one allows pan and pinch',async()=>{
  const f=fixture();
  vm.runInContext(source.slice(source.indexOf(' async function display(item,'),source.indexOf(' function updateVideoControls()')),f.context);
+ f.context.renderEmpty=()=>{};
  f.mediaElement.style.color='';
  await f.context.display(null);
  assert.equal(f.mediaElement.style.touchAction,'');
