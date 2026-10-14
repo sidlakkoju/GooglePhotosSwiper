@@ -1735,7 +1735,7 @@ test('a delayed save failure preserves the active lease failure status',async()=
   return transaction.call(this,name,...args);
  };
  mounted.nodes.get('keep').onclick();await saving;
- failLease=true;mounted.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ failLease=true;mounted.environment.document.listeners.visibilitychange();await until(()=>mounted.nodes.get('status').textContent==='Synthetic lease failure');
  assert.equal(mounted.nodes.get('status').textContent,'Synthetic lease failure');
  finish();await new Promise(resolve=>setTimeout(resolve,10));
  assert.equal(mounted.nodes.get('status').textContent,'Synthetic lease failure');
@@ -3962,4 +3962,68 @@ test('an unstarted library offers Load library instead of claiming it is loading
  fail=false;failed.childNodes.at(-1).onclick();
  for(let count=0;count<200&&mounted.nodes.get('media').childNodes[0]?.dataset?.kind==='failed';count++)await new Promise(resolve=>setTimeout(resolve,5));
  assert.notEqual(mounted.nodes.get('media').childNodes[0].dataset.kind,'failed');
+});
+
+test('a pagehide during the startup lock claim keeps the saved owner handoff',async()=>{
+ const {createLeaseOwner}=await import('../lib/userscript-db.mjs');
+ const stored=new Map([['photos-swipe-lease-owner','saved-owner']]),listeners={};let grant;
+ const window={addEventListener:(type,listener)=>{listeners[type]=listener;},sessionStorage:{getItem:key=>stored.get(key)??null,setItem:(key,value)=>stored.set(key,value),removeItem:key=>stored.delete(key)},navigator:{locks:{request:(name,options,callback)=>new Promise(resolve=>{grant=()=>resolve(callback({name}));})}}};
+ const starting=createLeaseOwner(window,webcrypto);
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(stored.has('photos-swipe-lease-owner'),false);
+ listeners.pagehide();
+ assert.equal(stored.get('photos-swipe-lease-owner'),'saved-owner');
+ grant();
+ assert.equal(await starting,'saved-owner');
+ stored.delete('photos-swipe-lease-owner');listeners.pagehide();
+ assert.equal(stored.get('photos-swipe-lease-owner'),'saved-owner');
+});
+
+test('Use here interrupted by hide and show still claims the lease',async()=>{
+ const syncFetch=async()=>({ok:true,json:async()=>({decisions:[],history:[],progress:{}})});
+ const first=await mountedReview([item('a'),item('b')],{fetch:syncFetch});
+ const second=bundleEnvironment();second.environment.window.indexedDB=first.environment.window.indexedDB;second.environment.window.fetch=syncFetch;
+ vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),second.environment);
+ first.environment.document.hidden=true;first.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ await second.nodes.get('launcher').onclick();
+ first.environment.document.hidden=false;first.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(first.nodes.get('use-here').hidden,false);
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(first.environment.window.indexedDB);
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const claiming=first.nodes.get('use-here').onclick();
+ first.environment.document.hidden=true;first.environment.document.listeners.visibilitychange();
+ first.environment.document.hidden=false;first.environment.document.listeners.visibilitychange();
+ await claiming;
+ for(let count=0;count<200&&(!first.nodes.get('use-here').hidden||first.nodes.get('overlay')['aria-busy']!=='false');count++)await new Promise(resolve=>setTimeout(resolve,5));
+ const lease=await db.readLease(account);
+ for(let count=0;count<200&&first.nodes.get('overlay')['aria-busy']!=='false';count++)await new Promise(resolve=>setTimeout(resolve,5));
+ assert.equal(first.nodes.get('use-here').hidden,true);
+ assert.doesNotMatch(first.nodes.get('status').textContent,/busy in another tab|Open in another tab/);
+ assert.equal(first.nodes.get('keep').disabled,false);
+ await first.nodes.get('keep').onclick();
+ assert.equal((await db.readLease(account)).owner,lease.owner);
+ second.environment.document.hidden=false;second.environment.document.listeners.visibilitychange();await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(second.nodes.get('status').textContent,'Open in another tab');
+});
+
+test('sync stays off when the saved sign-in belongs to another Google Photos account and older installs adopt the current account',async()=>{
+ const account=Buffer.from(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(tokens.oPEP7c))).toString('hex');
+ for(const photosAccount of ['another-photos-account',undefined]){
+  const requests=[];
+  const fetch=async url=>{requests.push(String(url));return {ok:true,json:async()=>({decisions:[],history:[],progress:{},itemsCursor:0})};};
+  const mounted=await mountedReview([item('a')],{fetch},{onboardingDismissed:true,...{url:'https://sync.example',token:'synthetic-token'},...(photosAccount?{photosAccount}:{})});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB);
+  if(photosAccount){
+   assert.equal(requests.some(url=>url.includes('/api/')),false);
+   assert.match(mounted.nodes.get('sync-status').textContent,/Sync off for this account/);
+   assert.ok(mounted.nodes.get('sync-settings').childNodes.some(node=>/linked to another Google Photos account/.test(node.textContent||'')));
+   assert.equal((await db.settings()).photosAccount,photosAccount);
+  }else{
+   assert.ok(requests.some(url=>url.includes('/api/state')));
+   assert.equal((await db.settings()).photosAccount,account);
+  }
+  await mounted.nodes.get('close').onclick();
+ }
 });

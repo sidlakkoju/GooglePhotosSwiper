@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.83
+// @version 1.2.84
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -359,6 +359,9 @@ async function createLeaseOwner(window,crypto) {
  const key='photos-swipe-lease-owner';
  let owner=crypto.randomUUID(),saved;
  try{saved=window.sessionStorage.getItem(key);window.sessionStorage.removeItem(key);}catch{}
+ let handoff=saved||owner;
+ window.addEventListener?.('pagehide',()=>{try{window.sessionStorage.setItem(key,handoff);}catch{}});
+ window.addEventListener?.('pageshow',()=>{try{window.sessionStorage.removeItem(key);}catch{}});
  const locks=window.navigator?.locks;
  if(locks){
   const claim=candidate=>new Promise((resolve,reject)=>{
@@ -369,8 +372,7 @@ async function createLeaseOwner(window,crypto) {
   });
   try{if(saved&&await claim(saved))owner=saved;else await claim(owner);}catch{owner=crypto.randomUUID();}
  }
- window.addEventListener?.('pagehide',()=>{try{window.sessionStorage.setItem(key,owner);}catch{}});
- window.addEventListener?.('pageshow',()=>{try{window.sessionStorage.removeItem(key);}catch{}});
+ handoff=owner;
  return owner;
 }
 async function openReviewDatabase(indexedDB) {
@@ -514,7 +516,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    }catch(error){writeError=error;}
    next=await save({...next,syncPending:{},syncPendingTimes:{},syncPendingUndo:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:Object.fromEntries(Object.entries(remote.progress||{}).filter(([key])=>key!=='items')),syncCheckpoint:writeError?state.syncCheckpoint:{...progress,items:progress.items.filter(syncedItemWorthKeeping)},...(pull&&Number.isSafeInteger(remote.itemsCursor)?{syncItemsCursor:{key:itemsKey,at:remote.itemsCursor}}:{})});
    if(writeError){if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
-   status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
+   status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
  return {configure,sync,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST')};
@@ -606,7 +608,7 @@ async function createPairingStore({GM,database,crypto}) {
  const key='photos-swipe-pairing';
  const dismissalKey='photos-swipe-onboarding-dismissed';
  const complete=value=>typeof value?.url==='string'&&!!value.url&&typeof value?.token==='string'&&!!value.token;
- const select=value=>Object.fromEntries(['url','token','deviceId','deviceName','email'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
+ const select=value=>Object.fromEntries(['url','token','deviceId','deviceName','email','photosAccount'].filter(name=>typeof value?.[name]==='string').map(name=>[name,value[name]]));
  async function settings() {
   const db=await database();
   if(!durable)return db.settings();
@@ -1539,7 +1541,7 @@ function mountPhotosSwipe(environment) {
    }
    const {status,...credentials}=claim.value;
    await wait(syncRunning);
-   await wait(store.saveSettings({url:origin,...credentials,onboardingDismissed:true}));
+   await wait(store.saveSettings({url:origin,...credentials,photosAccount:identity?.account,onboardingDismissed:true}));
    syncClient.configure({url:origin,...credentials});syncEnabled=true;onboarding.hidden=true;syncLocal.hidden=true;showSyncAccount(credentials);await synchronize();
   }catch(error){pairingNotice.textContent=error.message;}finally{
    window.removeEventListener?.('message',receiveCode);
@@ -2019,9 +2021,11 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    }
    identity=result.data;$('account').textContent=identity.label;db=await database();
    let settings={},settingsError;try{settings=await (await pairingPromise).settings();}catch(error){settingsError=error;}
-   syncEnabled=!!(settings.url&&settings.token);syncClient.configure(settings);
+   const linkedElsewhere=!!(settings.url&&settings.token&&settings.photosAccount&&settings.photosAccount!==identity.account);
+   if(settings.url&&settings.token&&!settings.photosAccount){try{await (await pairingPromise).saveSettings({...settings,photosAccount:identity.account});settings={...settings,photosAccount:identity.account};}catch{}}
+   syncEnabled=!!(settings.url&&settings.token)&&!linkedElsewhere;syncClient.configure(linkedElsewhere?{}:settings);
    settingsPanel.open=true;onboarding.hidden=syncEnabled||!!settings.onboardingDismissed;
-   showSyncAccount(settings);if(settingsError)pairingNotice.textContent=`Sync storage unavailable: ${settingsError.message}`;
+   showSyncAccount(settings);if(settingsError)pairingNotice.textContent=`Sync storage unavailable: ${settingsError.message}`;else if(linkedElsewhere){pairingNotice.textContent='Sync is linked to another Google Photos account. Progress in this account is saved on this device only.';syncStatus.textContent='Sync off for this account \u00b7 saved locally';}
    if(!await renewLease(true,claim))return;
    const sessionGeneration=leaseGeneration;
    if(!changed){
@@ -2198,7 +2202,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.83":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.84":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

@@ -347,7 +347,7 @@ test('short claim works and per-IP, global short and start limits return Retry-A
 });
 test('device management revokes immediately, legacy stays revoked and last_seen is throttled',async()=>{
  const e=env(),pairing=await start(e),device=await (await claim(e,{code:pairing.code})).json(),headers=withToken(device.token);
- const list=await (await call(e,'devices')).json();assert.equal(list.suggestRevokeLegacy,true);assert.equal(list.devices.find(row=>row.id==='legacy').is_legacy,1);assert.equal(JSON.stringify(list).includes('token_hash'),false);
+ const list=await (await call(e,'devices')).json();assert.equal(list.suggestRevokeLegacy,true);assert.equal(Object.hasOwn(await (await call(e,'state')).json(),'suggestRevokeLegacy'),false);assert.equal(Object.hasOwn(await (await call(e,'state','GET',undefined,headers)).json(),'suggestRevokeLegacy'),false);assert.equal(list.devices.find(row=>row.id==='legacy').is_legacy,1);assert.equal(JSON.stringify(list).includes('token_hash'),false);
  await call(e,`devices/${device.deviceId}`,'PATCH',{name:'Renamed'});
  assert.equal((await (await call(e,'devices')).json()).devices.find(row=>row.id===device.deviceId).name,'Renamed');
  const initial=e.DB.sqlite.prepare('SELECT last_seen_at FROM devices WHERE id = ?').get(device.deviceId).last_seen_at;
