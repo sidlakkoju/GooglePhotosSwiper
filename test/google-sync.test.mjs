@@ -43,6 +43,7 @@ test('one-time Google claims share a sub space, isolate other accounts and prese
  assert.equal(env.DB.sqlite.prepare('SELECT count(*) AS n FROM devices').get().n,3);
  const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
  await api(a,'decisions/photo?scope=first','PUT',{decision:'remove'});
+ await new Promise(resolve=>setTimeout(resolve,2));
  await api(b,'decisions/photo?scope=second','PUT',{decision:'keep'});
  assert.equal((await (await api(b,'state?scope=first')).json()).decisions[0].decision,'remove');
  assert.equal((await (await api(c,'state?scope=first')).json()).decisions.length,0);
