@@ -95,6 +95,8 @@ export async function syncRequest(request,env={}) {
     if(!parsed)return respond({error:'Invalid cursor'},400);
     return respond(parsed[1]&&parsed[2]===tag?await changes(Number(parsed[1])):await read({cursor:true}));
    }
+   const pause=Number(env.LEGACY_FULL_PULL_SECONDS)||0,seconds=Math.floor(Date.now()/1000);
+   if(since===null&&pause>0&&(seconds-(device.full_pull_at||0)<pause||!await db.prepare('UPDATE devices SET full_pull_at = ? WHERE id = ? AND full_pull_at <= ? RETURNING id').bind(seconds,device.id,seconds-pause).first()))return respond({error:'Reload Photos Swipe to update sync'},429,{'Retry-After':String(Math.max(1,(device.full_pull_at||0)+pause-seconds))});
    return respond(await read({since:since===null?undefined:Number(since)}));
   }
   if(route==='/api/decisions'&&method==='PUT'){

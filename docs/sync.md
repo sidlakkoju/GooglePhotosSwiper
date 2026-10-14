@@ -42,7 +42,7 @@ An optional `scope` query parameter isolates unlinked legacy records (default `d
 
 | Route | Payload/result |
 | --- | --- |
-| `GET /api/state` | `{decisions: [{id, decision}], progress, history}` |
+| `GET /api/state` | `{decisions: [{id, decision}], progress, history}`. Clients from before cursor pulls send neither `cursor` nor `since`; each device gets one such full pull per `LEGACY_FULL_PULL_SECONDS` (1800 in `wrangler.toml`), and extra requests return 429 with `Retry-After` |
 | `GET /api/state?cursor=` | Same as above plus an opaque `cursor`. With a cursor from the same scope, returns `{delta: true, decisions, progress, cursor}` where `decisions` and `progress.items` hold only rows changed since the cursor (`decision: null` means cleared) and history is omitted |
 | `PUT /api/decisions/:id` | `{decision: "keep" or "remove"}` |
 | `DELETE /api/decisions/:id` | Remove the decision |

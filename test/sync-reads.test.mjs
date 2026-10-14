@@ -109,6 +109,22 @@ test('old clients keep the full response shapes while new clients receive deltas
  for(const cursor of ['abc','1.','1.UPPER','.abc','1.abcdefgh'])assert.equal((await call(e,`state?cursor=${cursor}`)).status,400);
 });
 
+test('legacy full pulls are limited per device while pushes and cursor pulls continue',async()=>{
+ const e={...env(),LEGACY_FULL_PULL_SECONDS:'1800'};seed(e,200);
+ assert.equal((await call(e,'state')).status,200);
+ e.DB.reset();
+ const paused=await call(e,'state');
+ assert.equal(paused.status,429);assert.ok(Number(paused.headers.get('Retry-After'))>1700);
+ assert.deepEqual(e.DB.stats.unbounded,[]);assert.ok(e.DB.stats.rowsRead<=5,`rows read ${e.DB.stats.rowsRead}`);
+ assert.equal((await call(e,'decisions','PUT',{decisions:[{id:'synthetic-1',decision:'remove'}]})).status,200);
+ assert.equal((await call(e,'state?since=1')).status,200);
+ const {cursor}=await (await call(e,'state?cursor=')).json();
+ assert.equal((await (await call(e,`state?cursor=${cursor}`)).json()).delta,true);
+ e.DB.sqlite.exec('UPDATE devices SET full_pull_at = full_pull_at - 1800');
+ assert.equal((await call(e,'state')).status,200);
+ assert.equal((await call(e,'state')).status,429);
+});
+
 test('an unchanged delta pull is answered by one index-only check',async()=>{
  const e=env();seed(e,500);
  const {cursor}=await (await call(e,'state?cursor=')).json();
