@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.75
+// @version 1.2.76
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1027,6 +1027,42 @@ const TURN=550;
  },reset(){stop();current=target=from=0;chip.classList.remove('go');render();this.update(0);}};
 }
 
+const updateOrigin='https://photoswiper-sync.sidlakkoju.workers.dev';
+const updateTargetKey='photoswiper-update-target';
+const openAfterUpdateKey='photoswiper-open-after-update';
+function releaseNewer(candidate,current){
+ const parse=value=>/^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
+ const a=parse(candidate),b=parse(current);
+ if(!a||!b)return false;
+ for(let index=0;index<3;index++)if(a[index]!==b[index])return a[index]>b[index];
+ return false;
+}
+async function availableUpdate({fetch,version,setTimeout,clearTimeout,timeout=3000}){
+ if(typeof fetch!=='function')return null;
+ let timer;
+ try{
+  const response=await Promise.race([fetch(updateOrigin+'/version?t='+Date.now(),{method:'GET'}),new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('Update check timed out')),timeout);})]);
+  if(!response?.ok)return null;
+  const latest=(await response.json())?.version;
+  return releaseNewer(latest,version)?latest:null;
+ }catch{return null;}finally{clearTimeout(timer);}
+}
+function claimUpdateReload(storage,latest){
+ try{
+  if(storage.getItem(updateTargetKey)===latest)return false;
+  storage.setItem(updateTargetKey,latest);
+  storage.setItem(openAfterUpdateKey,'1');
+  return true;
+ }catch{return false;}
+}
+function consumeOpenAfterUpdate(storage){
+ try{
+  const pending=storage.getItem(openAfterUpdateKey)==='1';
+  storage.removeItem(openAfterUpdateKey);
+  return pending;
+ }catch{return false;}
+}
+
 function restoreVideoTime(video,savedTime){
  if(video.dataset.resumeReady!=='pending')return;
  if(Number.isFinite(savedTime))video.currentTime=Math.max(0,Math.min(savedTime,Number.isFinite(video.duration)?video.duration:savedTime));
@@ -1902,6 +1938,20 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   }
   buffer.clear();
  }
+ async function openLatest(){
+  const opening=open();
+  if(!environment.autoUpdating)return opening;
+  const check=availableUpdate({fetch:environment.syncFetch,version:environment.version,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)});
+  await opening?.catch?.(()=>{});
+  const swipes=reviewSwipeCount(state),latest=await check;
+  if(!latest)return;
+  if(reviewSwipeCount(state)!==swipes||$('overlay').hidden||!claimUpdateReload(window.sessionStorage,latest)){message(`Photos Swipe ${latest} is available. Reload Google Photos to update.`);return;}
+  message(`Updating to Photos Swipe ${latest}\u2026`);
+  await close();
+  window.location.reload();
+ }
+ try{if(!releaseNewer(window.sessionStorage.getItem(updateTargetKey),environment.version))window.sessionStorage.removeItem(updateTargetKey);}catch{}
+ if(consumeOpenAfterUpdate(window.sessionStorage))window.setTimeout(()=>openLatest(),0);
  function close(){
   if(closingPromise)return closingPromise;
   closingPromise=closeSession().finally(()=>{sessionClosing=false;closingPromise=null;});
@@ -1941,7 +1991,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  window.addEventListener('resize',refreshPreviews);
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
 
- $('launcher').onclick=()=>open();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>loadRequested());$('refresh').onclick=()=>run(()=>loadRequested(true));$('enlarge').onclick=toggleEnlarge;
+ $('launcher').onclick=()=>openLatest();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>loadRequested());$('refresh').onclick=()=>run(()=>loadRequested(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=()=>{inspected=null;focused=null;deckItems=null;buffer.clear();render();};
  $('sort').onchange=()=>{focused=shown||null;inspected=null;deckItems=null;buffer.clear();updateOrder();render();};
@@ -2017,7 +2067,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.75":photosSwipeReleaseVersion,window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.76":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

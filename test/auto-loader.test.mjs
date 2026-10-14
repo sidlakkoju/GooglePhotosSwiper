@@ -6,10 +6,10 @@ import {readFile} from 'node:fs/promises';
 import {compareVersions} from '../lib/userscript-loader.mjs';
 import {startAutoLoader,showUpdateBanner,loaderAPIVersion} from '../lib/userscript-auto-loader.mjs';
 function fixture(latest,cached){
- const nodes=[],writes=[],trusted=new WeakMap(),window={};
- const env={window,crypto:webcrypto,setTimeout,clearTimeout,document:{documentElement:{dataset:{}},body:{appendChild:node=>nodes.push(node)},getElementById:id=>nodes.find(node=>node.id===id),querySelector:()=>({nonce:'synthetic-nonce'}),createElement:()=>({style:{},remove(){}})},GM:{info:{script:{version:'1.2.51'}},getValue:async()=>cached,setValue:async(key,value)=>writes.push({key,value}),xmlHttpRequest(options){queueMicrotask(()=>latest?options.onload({status:200,responseText:latest.code,responseHeaders:'X-Photoswiper-Version: '+latest.version+(latest.requiredLoaderVersion?'\r\nX-Photoswiper-Required-Loader-Version: '+latest.requiredLoaderVersion:'')}):options.onerror());}},trustedTypes:{createPolicy(name,rules){return {createScript(source){const value={};trusted.set(value,rules.createScript(source));return value;}};}}};
+ const nodes=[],writes=[],requests=[],trusted=new WeakMap(),window={};
+ const env={window,crypto:webcrypto,setTimeout,clearTimeout,document:{documentElement:{dataset:{}},body:{appendChild:node=>nodes.push(node)},getElementById:id=>nodes.find(node=>node.id===id),querySelector:()=>({nonce:'synthetic-nonce'}),createElement:()=>({style:{},remove(){}})},GM:{info:{script:{version:'1.2.51'}},getValue:async()=>cached,setValue:async(key,value)=>writes.push({key,value}),xmlHttpRequest(options){requests.push(new URL(options.url).pathname);queueMicrotask(()=>{if(!latest)return options.onerror();if(new URL(options.url).pathname==='/version')return options.onload({status:200,responseText:JSON.stringify({version:latest.version,...(latest.requiredLoaderVersion?{requiredLoaderVersion:latest.requiredLoaderVersion}:{})})});options.onload({status:200,responseText:latest.code,responseHeaders:'X-Photoswiper-Version: '+latest.version+(latest.requiredLoaderVersion?'\r\nX-Photoswiper-Required-Loader-Version: '+latest.requiredLoaderVersion:'')});});}},trustedTypes:{createPolicy(name,rules){return {createScript(source){const value={};trusted.set(value,rules.createScript(source));return value;}};}}};
  env.eval=value=>{assert.ok(trusted.has(value));return vm.runInNewContext(trusted.get(value));};
- return {env,nodes,writes,trusted};
+ return {env,nodes,writes,requests,trusted};
 }
 const app={version:'1.2.10',code:'window.runs=(window.runs||0)+1;window.version=photosSwipeReleaseVersion;window.storage=GM;'};
 test('auto loader uses TrustedScript eval, caches app and preserves desktop GM context',async()=>{
@@ -19,10 +19,10 @@ test('auto loader uses TrustedScript eval, caches app and preserves desktop GM c
  assert.deepEqual(writes,[{key:'photoswiper-app',value:app}]);assert.equal(nodes.length,0);
  assert.equal(await startAutoLoader(env),false);
 });
-test('offline request uses GM app cache and no cache fails gracefully',async()=>{
+test('offline request runs the GM app cache without a banner and no cache fails gracefully',async()=>{
  for(const cached of [app,null]){
   const {env,writes,nodes}=fixture(null,cached);
-  assert.equal(await startAutoLoader(env),Boolean(cached));assert.equal(env.window.runs,cached?1:undefined);assert.equal(writes.length,0);assert.equal(nodes.length,1);
+  assert.equal(await startAutoLoader(env),Boolean(cached));assert.equal(env.window.runs,cached?1:undefined);assert.equal(writes.length,0);assert.equal(nodes.length,cached?0:1);
  }
 });
 test('eval denial falls back to a nonce-bearing TrustedScript element',async()=>{
@@ -84,6 +84,30 @@ for(const marker of ['psLoaded','psLoaderInjected'])for(const stage of ['cache',
  assert.equal(await startAutoLoader(env),false);
  assert.equal(env.window.runs,undefined);
  assert.equal(nodes.length,0);
+});
+test('a cached app matching the live version runs without downloading the app',async()=>{
+ const {env,writes,requests,nodes}=fixture(app,app);
+ assert.equal(await startAutoLoader(env),true);
+ assert.deepEqual(requests,['/version']);assert.equal(writes.length,0);assert.equal(nodes.length,0);assert.equal(env.window.version,app.version);
+});
+test('a newer or rolled-back live version replaces the cached app',async()=>{
+ for(const version of ['1.2.11','1.2.9']){
+  const {env,writes,requests}=fixture({...app,version},app);
+  assert.equal(await startAutoLoader(env),true);
+  assert.deepEqual(requests,['/version','/app.js']);assert.equal(env.window.version,version);assert.equal(writes[0].value.version,version);
+ }
+});
+test('a failed version check still downloads when nothing is cached',async()=>{
+ const {env,requests}=fixture(app,null);
+ const request=env.GM.xmlHttpRequest;env.GM.xmlHttpRequest=options=>new URL(options.url).pathname==='/version'?(requests.push('/version'),queueMicrotask(()=>options.onerror())):request(options);
+ assert.equal(await startAutoLoader(env),true);
+ assert.deepEqual(requests,['/version','/app.js']);assert.equal(env.window.version,app.version);
+});
+test('a failed download of a newer app runs the cached app without a banner',async()=>{
+ const {env,nodes}=fixture({...app,version:'1.2.11'},app);
+ const request=env.GM.xmlHttpRequest;env.GM.xmlHttpRequest=options=>new URL(options.url).pathname==='/app.js'?queueMicrotask(()=>options.onerror()):request(options);
+ assert.equal(await startAutoLoader(env),true);
+ assert.equal(env.window.version,app.version);assert.equal(nodes.length,0);
 });
 test('install artifacts use ASCII and unique grants and connect entries',async()=>{
  for(const name of ['photoswiper.user.js','photoswiper-loader.user.js','photoswiper-app.user.js']){

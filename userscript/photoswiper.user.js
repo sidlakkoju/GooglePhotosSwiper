@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.75
+// @version 1.2.76
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -62,19 +62,31 @@ function showUpdateBanner(environment,version){
  (document.body||document.documentElement).appendChild(banner);
  return true;
 }
-function requestApp(environment,request){
+function requestPath(environment,request,path,timeout,parse){
  return new Promise(resolve=>{
   let settled=false;
   const finish=value=>{if(settled)return;settled=true;environment.clearTimeout(timer);resolve(value);};
-  const timer=environment.setTimeout(()=>finish(null),5000);
-  const loaded=response=>{
-   const version=/^x-photoswiper-version:\s*(\S+)/im.exec(response.responseHeaders||'')?.[1];
-   try{compareVersions(version,version);}catch{finish(null);return;}
-   const requiredLoaderVersion=/^x-photoswiper-required-loader-version:\s*(\S+)/im.exec(response.responseHeaders||'')?.[1];
-   if(requiredLoaderVersion!==undefined){try{compareVersions(requiredLoaderVersion,requiredLoaderVersion);}catch{finish(null);return;}}
-   finish(response.status===200&&response.responseText?.trim()&&version?{code:response.responseText,version,...(requiredLoaderVersion===undefined?{}:{requiredLoaderVersion})}:null);
-  };
-  try{const result=request({method:'GET',url:appOrigin+'/app.js?t='+Date.now(),timeout:5000,onload:loaded,onerror:()=>finish(null),ontimeout:()=>finish(null),onabort:()=>finish(null)});result?.then?.(loaded,()=>finish(null));}catch{finish(null);}
+  const timer=environment.setTimeout(()=>finish(null),timeout);
+  const loaded=response=>{try{finish(parse(response));}catch{finish(null);}};
+  try{const result=request({method:'GET',url:appOrigin+path+'?t='+Date.now(),timeout,onload:loaded,onerror:()=>finish(null),ontimeout:()=>finish(null),onabort:()=>finish(null)});result?.then?.(loaded,()=>finish(null));}catch{finish(null);}
+ });
+}
+function requestVersion(environment,request,timeout=3000){
+ return requestPath(environment,request,'/version',timeout,response=>{
+  if(response.status!==200)return null;
+  const value=JSON.parse(response.responseText);
+  compareVersions(value.version,value.version);
+  if(value.requiredLoaderVersion!==undefined)compareVersions(value.requiredLoaderVersion,value.requiredLoaderVersion);
+  return {version:value.version,...(value.requiredLoaderVersion===undefined?{}:{requiredLoaderVersion:value.requiredLoaderVersion})};
+ });
+}
+function requestApp(environment,request,timeout=30000){
+ return requestPath(environment,request,'/app.js',timeout,response=>{
+  const version=/^x-photoswiper-version:\s*(\S+)/im.exec(response.responseHeaders||'')?.[1];
+  compareVersions(version,version);
+  const requiredLoaderVersion=/^x-photoswiper-required-loader-version:\s*(\S+)/im.exec(response.responseHeaders||'')?.[1];
+  if(requiredLoaderVersion!==undefined)compareVersions(requiredLoaderVersion,requiredLoaderVersion);
+  return response.status===200&&response.responseText?.trim()?{code:response.responseText,version,...(requiredLoaderVersion===undefined?{}:{requiredLoaderVersion})}:null;
  });
 }
 function executeApp(environment,app){
@@ -101,21 +113,31 @@ function executeApp(environment,app){
  return true;
 }
 async function startAutoLoader(environment){
- if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
+ const root=environment.document.documentElement,started=()=>root.dataset.psLoaded||root.dataset.psLoaderInjected;
+ if(started())return false;
  const gm=environment.GM;
  const get=gm?.getValue?.bind(gm)||environment.GM_getValue,set=gm?.setValue?.bind(gm)||environment.GM_setValue;
- let cached;
+ const request=gm?.xmlHttpRequest?.bind(gm)||environment.GM_xmlhttpRequest;
+ const runnable=app=>{try{return Boolean(app&&typeof app.code==='string'&&typeof app.version==='string'&&compareVersions(app.version,app.version)===0);}catch{return false;}};
+ let cached=null;
  try{cached=await get('photoswiper-app',null);}catch{}
- if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
- const latest=await requestApp(environment,gm?.xmlHttpRequest?.bind(gm)||environment.GM_xmlhttpRequest);
- if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
- if(latest){try{await set('photoswiper-app',latest);}catch{}}
- else showUpdateBanner(environment);
- const app=latest||cached;
- if(environment.document.documentElement.dataset.psLoaded||environment.document.documentElement.dataset.psLoaderInjected)return false;
- if(latest?.requiredLoaderVersion)showUpdateBanner(environment,latest.requiredLoaderVersion);
- if(!app||typeof app.code!=='string'||typeof app.version!=='string'){showUpdateBanner(environment);return false;}
- try{compareVersions(app.version,app.version);const executed=executeApp(environment,app);if(!executed)showUpdateBanner(environment);return executed;}catch{showUpdateBanner(environment);return false;}
+ if(!runnable(cached))cached=null;
+ if(started())return false;
+ const live=await requestVersion(environment,request);
+ if(started())return false;
+ let app=cached,required=live?.requiredLoaderVersion;
+ if(!cached||(live&&compareVersions(live.version,cached.version)!==0)){
+  const latest=await requestApp(environment,request);
+  if(started())return false;
+  if(latest){
+   app=latest;required=required||latest.requiredLoaderVersion;
+   try{await set('photoswiper-app',latest);}catch{}
+   if(started())return false;
+  }
+ }
+ if(required)showUpdateBanner(environment,required);
+ if(!app){showUpdateBanner(environment);return false;}
+ try{const executed=executeApp(environment,app);if(!executed)showUpdateBanner(environment);return executed;}catch{showUpdateBanner(environment);return false;}
 }
 await startAutoLoader({document,window,location,GM_info:typeof GM_info==='undefined'?undefined:GM_info,crypto:window.crypto,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),fetch:fetch.bind(globalThis),unsafeWindow:typeof unsafeWindow==='undefined'?window:unsafeWindow,GM:typeof GM==='undefined'?undefined:GM,GM_getValue:typeof GM_getValue==='undefined'?undefined:GM_getValue,GM_setValue:typeof GM_setValue==='undefined'?undefined:GM_setValue,GM_deleteValue:typeof GM_deleteValue==='undefined'?undefined:GM_deleteValue,GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='undefined'?undefined:GM_xmlhttpRequest,GM_openInTab:typeof GM_openInTab==='undefined'?undefined:GM_openInTab});
 })();
