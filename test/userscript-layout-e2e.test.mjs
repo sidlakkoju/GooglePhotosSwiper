@@ -102,7 +102,7 @@ test('the first-run coach shows on an untouched deck and leaves after the first 
 });
 
 test('routine messages fade out while errors stay until tapped, and delete is red',async t=>{
- const page=await mount(t,{width:1280,height:900,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const page=await mount(t,{width:1280,height:900,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:true}});if(!page)return;
  await measure(page,`root.getElementById('keep').click();`);
  await page.waitForTimeout(50);
  const routine=await measure(page,`const status=q('#status');const animations=status.getAnimations();for(const animation of animations)animation.finish();return {text:status.textContent,classes:status.className,animations:animations.length,opacity:getComputedStyle(status).opacity};`);

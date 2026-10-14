@@ -1,4 +1,5 @@
 import {LEASE_HEARTBEAT_MS,LEASE_EXPIRY_MS} from '../lib/userscript-db.mjs';
+import {SYNC_POLL_MS} from '../lib/userscript-sync.mjs';
 import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -3716,12 +3717,47 @@ for(const trigger of ['heartbeat','focus','visible'])test(`open devices drop rem
  },{url:'https://sync.example',token:'synthetic-token'},{setInterval:(handler,delay)=>{assert.equal(delay,LEASE_HEARTBEAT_MS);timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
  try{
   reviewed=true;const before=pulls;
-  if(trigger==='heartbeat')await [...timers.values()][0]();
+  if(trigger==='heartbeat'){
+   await [...timers.values()][0]();await mounted.settle();
+   assert.equal(pulls,before);
+   const now=Date.now;Date.now=()=>now()+SYNC_POLL_MS;
+   try{await [...timers.values()][0]();}finally{Date.now=now;}
+  }
   else if(trigger==='focus')await mounted.environment.window.listeners.focus();
   else mounted.environment.document.listeners.visibilitychange();
   await waitForReview(async()=> (await mounted.read()).items[0].decision==='keep');
   assert.ok(pulls>before);
   assert.match(mounted.nodes.get('caption').textContent,/synthetic-next/);
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('lease heartbeats between polls send unsent changes without pulling the full state',async()=>{
+ const timers=new Map(),requests=[];let timerId=0;
+ const remote={decisions:[],history:[],progress:{}};
+ const mounted=await mountedReview([item('synthetic-first'),item('synthetic-second')],{
+  setTimeout(callback,delay){if(delay===2000)return {unref(){}};return setTimeout(callback,delay);},
+  clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
+  fetch:async(url,options)=>{
+   const path=new URL(url).pathname,value=options.body?JSON.parse(options.body):null;
+   requests.push(`${options.method||'GET'} ${path}`);
+   if(path==='/api/decisions'&&value)remote.decisions=value.decisions.filter(entry=>entry.decision!==null);
+   if(path==='/api/undo'&&value)remote.history=value.history;
+   if(path==='/api/progress'&&value)remote.progress=value;
+   return {ok:true,json:async()=>path==='/api/progress'&&options.method==='PUT'?{items:value.items}:remote};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'},{setInterval:(handler,delay)=>{assert.equal(delay,LEASE_HEARTBEAT_MS);timers.set(++timerId,handler);return timerId;},clearInterval:id=>timers.delete(id)});
+ try{
+  const heartbeat=()=>[...timers.values()][0]();
+  await waitForReview(async()=>requests.includes('GET /api/state'));await mounted.settle();
+  requests.length=0;
+  for(let tick=0;tick<5;tick++){await heartbeat();await mounted.settle();}
+  assert.deepEqual(requests,[]);
+  await mounted.click('keep');
+  await heartbeat();
+  await waitForReview(async()=>!(await mounted.read()).syncDirty);
+  assert.ok(requests.includes('PUT /api/decisions'));
+  assert.ok(!requests.includes('GET /api/state'));
+  assert.deepEqual(remote.decisions.map(({id,decision})=>({id,decision})),[{id:'synthetic-first',decision:'keep'}]);
  }finally{await mounted.nodes.get('close').onclick();}
 });
 
