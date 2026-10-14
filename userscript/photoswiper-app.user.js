@@ -852,7 +852,7 @@ function smallerVideoURL(value,compact=false){
  return url.href;
 }
 function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onFallback=()=>{},isActive}){
- let original=null,finished=false,seeking=false,hasFrame=false,wantsPlayback=true;
+ let original=null,finished=false,seeking=false,wantsPlayback=true;
  const release=element=>{element.pause();element.removeAttribute('src');element.load();if(element!==video)element.remove();};
  const cancel=()=>{finished=true;if(original){release(original);original=null;}};
  video.cancelUpgrade=cancel;
@@ -893,12 +893,11 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
  };
  video.onerror=fallback;
  video.addEventListener('stalled',fallback);
- video.addEventListener('waiting',()=>{if(hasFrame)fallback();});
- video.addEventListener('loadeddata',()=>{hasFrame=true;prepare();},{once:true});
+ video.addEventListener('loadeddata',prepare,{once:true});
  const small=smallerVideoURL(url,compact);
  if(video.src!==small)video.src=small;
  video.play().catch(()=>{});
- if(video.readyState>=2){hasFrame=true;prepare();}
+ if(video.readyState>=2)prepare();
  return cancel;
 }
 
@@ -1789,11 +1788,12 @@ function mountPhotosSwipe(environment) {
  function addVideoControls(video){
   for(const action of ['play','mute']){
    const button=document.createElement('button');button.dataset.videoControl=action;
-   button.textContent=action==='play'?(video.paused?'Play':'Pause'):'Unmute';
+   button.textContent=action==='play'?(video.paused?'Play':'Pause'):(video.muted?'Unmute':'Mute');
    button.style.cssText=`position:absolute;bottom:12px;${action==='play'?'left':'right'}:12px;z-index:2`;
    button.addEventListener('pointerdown',event=>event.stopPropagation());
    button.onclick=()=>{if(action==='play'){if(video.paused)video.play().catch(()=>{});else video.pause();button.textContent=video.paused?'Play':'Pause';}else{video.muted=!video.muted;button.textContent=video.muted?'Unmute':'Mute';}};
    if(action==='play')for(const type of ['play','pause'])video.addEventListener(type,()=>{button.textContent=video.paused?'Play':'Pause';});
+   if(action==='mute')video.addEventListener('volumechange',()=>{button.textContent=video.muted?'Unmute':'Mute';});
    mediaElement.append(button);
   }
   for(const control of createVideoTimeline({document,video,onSeek:captureVideo}))mediaElement.append(control);

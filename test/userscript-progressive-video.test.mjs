@@ -32,7 +32,7 @@ test('small starts first and hidden original upgrades at current playback time w
  assert.deepEqual(swaps,[full]);assert.equal(full.currentTime,12.5);assert.equal(video.paused,true);assert.equal(video.src,'');assert.equal(full.muted,false);assert.equal(full.paused,false);
 });
 
-for(const event of ['error','stalled','waiting'])test(`small ${event} immediately falls back to original and preserves time`,()=>{
+for(const event of ['error','stalled'])test(`small ${event} immediately falls back to original and preserves time`,()=>{
  const {video,full,errors}=setup();video.currentTime=7;video.readyState=2;video.emit('loadeddata');
  if(event==='error')video.onerror();else video.emit(event);
  assert.equal(video.src,url);assert.equal(full.src,'');video.currentTime=0;video.emit('loadedmetadata');assert.equal(video.currentTime,7);
@@ -72,7 +72,7 @@ test('normal initial waiting does not abandon the smaller rendition',()=>{
  video.emit('stalled');assert.equal(video.src,url);
 });
 
-for(const event of ['error','stalled','waiting'])test(`small ${event} resumes original after a browser error forces paused`,()=>{
+for(const event of ['error','stalled'])test(`small ${event} resumes original after a browser error forces paused`,()=>{
  const {video}=setup();video.readyState=2;video.emit('loadeddata');
  video.error={code:4};video.paused=true;video.emit('pause');
  if(event==='error')video.onerror();else video.emit(event);
@@ -129,4 +129,13 @@ test('fallback clears loading without waiting for canplay',()=>{
  const video=fakeVideo();let busy=true;
  startProgressiveVideo({video,url,createVideo:fakeVideo,isActive:()=>true,onSwap:()=>{},onError:()=>{},onFallback:()=>{busy=false;}});
  video.onerror();assert.equal(busy,false);
+});
+
+for(const time of [0,18])test(`waiting after loadeddata at ${time} preserves the hidden upgrade and same-time swap`,async()=>{
+ const {video,full,swaps}=setup();video.readyState=2;video.emit('loadeddata');
+ video.currentTime=time;video.emit('waiting');
+ assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,0);
+ assert.equal(full.src,url);assert.equal(full.isConnected,true);assert.equal(full.loads,1);
+ full.readyState=2;full.emit('canplay');if(time)full.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full]);assert.equal(full.currentTime,time);assert.equal(full.paused,false);
 });
