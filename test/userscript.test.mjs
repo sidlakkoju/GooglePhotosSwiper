@@ -2423,6 +2423,7 @@ test('revoked userscript shows recovery, keeps local swipes and clears credentia
 
 
 const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
+const until=async(predicate,timeout=2000)=>{const end=Date.now()+timeout;while(!predicate()){if(Date.now()>end)return false;await new Promise(resolve=>setTimeout(resolve,5));}await settlePreviews();return true;};
 
 test('stale saved previews refresh only the current and preload window on open and resume',async()=>{
  const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
@@ -2430,7 +2431,7 @@ test('stale saved previews refresh only the current and preload window on open a
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
   return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
  });
- await settlePreviews();
+ await until(()=>new Set(calls).size>=4&&/fresh-saved0/.test(mounted.nodes.get('media').querySelector('img')?.src||'')&&mounted.nodes.get('next-card').querySelector('img')?.dataset.key==='saved1');
  assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
  assert.equal(calls.length,4);
  assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
@@ -2441,7 +2442,7 @@ test('stale saved previews refresh only the current and preload window on open a
  mounted.environment.document.listeners.visibilitychange();await settlePreviews();
  assert.equal(calls.length,0);
  const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
- try{mounted.environment.document.listeners.visibilitychange();await settlePreviews();}finally{Date.now=actualNow;}
+ try{mounted.environment.document.listeners.visibilitychange();await until(()=>calls.length>=4&&mounted.nodes.get('next-card').querySelector('img')?.dataset.key==='saved1');}finally{Date.now=actualNow;}
  assert.equal(calls.length,4);
  assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
  mounted.nodes.get('close').onclick();calls.length=0;

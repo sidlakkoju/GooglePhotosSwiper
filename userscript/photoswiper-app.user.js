@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.80
+// @version 1.2.81
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -939,27 +939,38 @@ function cardPreviewURL(value,{width,height,authuser='0'}={}) {
 function reusablePreview(element,source) {
  return element?.src===source&&element.complete&&element.naturalWidth>0?element:null;
 }
-function createPreloadBuffer({load,concurrency=2,size=3}) {
+function pendingPreview(element,source) {
+ return element?.src===source&&!element.complete?element:null;
+}
+function createPreloadBuffer({load,source=item=>item.thumbUrl,concurrency=2,size=3}) {
  const entries=new Map();let active=0;
  function pump(){
   for(const entry of entries.values()){
    if(active>=concurrency)break;
    if(entry.state!=='queued')continue;
    entry.state='loading';active++;
-   Promise.resolve().then(()=>load(entry.item,entry.controller.signal)).then(el=>{
+   Promise.resolve().then(()=>load(entry.item,entry.controller.signal,entry.source)).then(el=>{
     if(entries.get(entry.key)===entry&&!entry.controller.signal.aborted){entry.el=el;entry.state='ready';}
    },()=>{entry.state='failed';}).finally(()=>{active--;pump();});
   }
  }
- function update(items,previous){
+ const drop=(key,entry)=>{entry.controller.abort();if(entry.el)entry.el.src='';entries.delete(key);};
+ const current=(entry,item)=>entry.item.thumbUrl===item.thumbUrl&&entry.source===source(item);
+ function update(items,previous,keep){
   const wanted=items.slice(0,size),keys=new Set(wanted.map(item=>item.mediaKey));
   if(previous)keys.add(previous);
-  for(const [key,entry] of entries)if(!keys.has(key)){entry.controller.abort();if(entry.el)entry.el.src='';entries.delete(key);}
-  for(const item of wanted)if(!entries.has(item.mediaKey)||entries.get(item.mediaKey).state==='failed')entries.set(item.mediaKey,{key:item.mediaKey,item,state:'queued',controller:new AbortController()});
+  if(keep)keys.add(keep);
+  for(const [key,entry] of entries)if(!keys.has(key))drop(key,entry);
+  for(const item of wanted){
+   const entry=entries.get(item.mediaKey);
+   if(entry&&entry.state!=='failed'&&current(entry,item))continue;
+   if(entry)drop(item.mediaKey,entry);
+   entries.set(item.mediaKey,{key:item.mediaKey,item,source:source(item),state:'queued',controller:new AbortController()});
+  }
   pump();
  }
- function clear(items=[]){const wanted=new Map(items.map(item=>[item.mediaKey,item]));for(const [key,entry] of entries){if(wanted.has(key)&&wanted.get(key).thumbUrl===entry.item.thumbUrl)continue;entry.controller.abort();if(entry.el)entry.el.src='';entries.delete(key);}}
- return {update,clear,retain(item,el){const existing=entries.get(item.mediaKey);if(existing?.el!==el)existing?.controller.abort();entries.set(item.mediaKey,{key:item.mediaKey,item,el,state:'ready',controller:new AbortController()});},get:key=>entries.get(key)?.state==='ready'?entries.get(key).el:null,take(key){const entry=entries.get(key);if(entry?.state!=='ready')return null;entries.delete(key);return entry.el;},entries};
+ function clear(items=[]){const wanted=new Map(items.map(item=>[item.mediaKey,item]));for(const [key,entry] of entries){if(wanted.has(key)&&current(entry,wanted.get(key)))continue;drop(key,entry);}}
+ return {update,clear,retain(item,el){const existing=entries.get(item.mediaKey);if(existing?.el!==el)existing?.controller.abort();entries.set(item.mediaKey,{key:item.mediaKey,item,source:el.src,el,state:'ready',controller:new AbortController()});},get:key=>entries.get(key)?.state==='ready'?entries.get(key).el:null,take(key,wanted){const entry=entries.get(key);if(entry?.state!=='ready'||(wanted!==undefined&&entry.source!==wanted))return null;entries.delete(key);return entry.el;},entries};
 }
 function createWriteQueue({write,snapshot,committed,error=()=>{}}) {
  let pending=false,running=null;
@@ -1743,13 +1754,13 @@ function mountPhotosSwipe(environment) {
  const smallBuffer=mobile||window.navigator?.deviceMemory<=4||window.navigator?.connection?.saveData;
  let previousKey=null,swipeAt=null,idlePending=false,reopenAfterClose=null;
  const metrics={paint:[],hits:0,misses:0};
- const buffer=createPreloadBuffer({size:smallBuffer?2:3,load:(item,signal)=>new Promise((resolve,reject)=>{
+ const buffer=createPreloadBuffer({size:smallBuffer?2:3,source:item=>previewSource(item.thumbUrl),load:(item,signal,source)=>new Promise((resolve,reject)=>{
   const image=previewImage(window.Image?new window.Image():document.createElement('img'));
   const abort=()=>{image.src='';reject(Error('Aborted'));};
   signal.addEventListener('abort',abort,{once:true});
   image.onload=async()=>{try{if(image.decode)await image.decode();signal.removeEventListener('abort',abort);if(!signal.aborted)resolve(image);}catch(error){reject(error);}};
   image.onerror=()=>reject(Error('Preview unavailable'));
-  image.src=previewSource(item.thumbUrl);
+  image.src=source;
  })});
  const videoURLs=new Map(),videoRequests=new Map();
  function videoURL(item){
@@ -1779,7 +1790,7 @@ function mountPhotosSwipe(environment) {
   idle(()=>{
    idlePending=false;if($('overlay').hidden)return;
    const upcoming=deck().filter(item=>item.mediaKey!==shown&&!reviewURLStale(item)).slice(0,smallBuffer?2:3);
-   buffer.update(smallBuffer&&previousKey?upcoming.slice(0,1):upcoming,previousKey);
+   buffer.update(smallBuffer&&previousKey?upcoming.slice(0,1):upcoming,previousKey,shown);
   });
  }
  function painted(media,token){
@@ -1821,7 +1832,7 @@ function mountPhotosSwipe(environment) {
     if(token!==generation)return;
     $('media').replaceChildren();
    }
-   const source=previewSource(item.thumbUrl);const buffered=!retried&&!forceRefresh?buffer.take(item.mediaKey):null;const cached=!retried&&!forceRefresh?(reusablePreview(buffered,source)||reusablePreview(preloaded,source)||preloader.take(item.mediaKey,source)):null;const warmed=item.type==='video'&&!retried&&!forceRefresh?preloader.takeVideo(item.mediaKey):null;const media=item.type==='video'?(warmed||document.createElement('video')):(cached||previewImage());if(cached||warmed)metrics.hits++;else metrics.misses++;
+   const source=previewSource(item.thumbUrl);const buffered=!retried&&!forceRefresh?buffer.take(item.mediaKey,source):null;const cached=!retried&&!forceRefresh?(reusablePreview(buffered,source)||reusablePreview(preloaded,source)||preloader.take(item.mediaKey,source)||(item.type==='video'?null:pendingPreview(preloaded,source))):null;const warmed=item.type==='video'&&!retried&&!forceRefresh?preloader.takeVideo(item.mediaKey):null;const media=item.type==='video'?(warmed||document.createElement('video')):(cached||previewImage());if(cached||warmed)metrics.hits++;else metrics.misses++;
    media.onerror=failed;
    if(item.type==='video'){const savedTime=resume.video?.key===item.mediaKey?resume.video.time:0;media.dataset.resumeReady='pending';media.addEventListener('loadedmetadata',()=>{if(token!==generation)return;restoreVideoTime(media,savedTime);});media.addEventListener('timeupdate',()=>{if(Date.now()-videoSavedAt>=1000){videoSavedAt=Date.now();captureVideo();}});media.addEventListener('pause',captureVideo);if(media.readyState>=1)restoreVideoTime(media,savedTime);
     media.controls=false;media.muted=true;media.loop=true;media.playsInline=true;media.preload='metadata';media.poster=previewSource(item.thumbUrl);
@@ -1845,7 +1856,7 @@ function mountPhotosSwipe(environment) {
     startProgressiveVideo({video:media,url,compact:previewSize().compact,createVideo:()=>document.createElement('video'),isActive:()=>token===generation&&!handlingError,onError:failed,onFallback:clearLoading,onSwap:full=>{if(token!==generation||handlingError)return;clearLoading();full.addEventListener('timeupdate',()=>{if(Date.now()-videoSavedAt>=1000){videoSavedAt=Date.now();captureVideo();}});full.addEventListener('pause',captureVideo);$('media').replaceChildren(full);addVideoControls(full);}});
     if(media.readyState>=2)reveal();
    }
-   else {media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='';media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}};$('media').append(media);const reused=!!cached;$('media').setAttribute('aria-busy',String(!reused));if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}else await failed();}}
+   else {media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='';media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}};$('media').append(media);const reused=!!cached;$('media').setAttribute('aria-busy',String(!(reused&&media.complete)));if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}else await failed();}}
   }catch{await failed();}
  }
  function updateVideoControls(){
@@ -2076,9 +2087,8 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   const token=leaseGeneration;
   const assertLoadSession=()=>{if(token!==leaseGeneration||(cancelled&&sessionClosing))throw Error('Library loading session changed.');};
   const loadCall=async(operation,args)=>{assertLoadSession();const request=call(operation,args);const result=await (cancelled?Promise.race([request,cancelled]):request);assertLoadSession();return result;};
-  buffer.clear();previousKey=null;
   libraryFailure=null;deckItems=null;
-  const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));render();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
+  const savePage=async(next,page,cursor,refresh)=>{assertLoadSession();await syncRunning;assertLoadSession();await assertSaveAccount();assertLoadSession();if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;state=markSyncChanges(state,mergeReviewPage(state,page,cursor,refresh));buffer.clear(state.items);render();await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;};
   let result;
   try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,maxPages,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${scanned} rows checked\u2026`)});}catch(error){if(token===leaseGeneration&&!sessionClosing&&pageVisible()){if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;libraryFailure=error;deckItems=null;}throw error;}
   assertLoadSession();
@@ -2087,7 +2097,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 
  mediaElement.addEventListener('wheel',event=>{if(!$('card').classList.contains('expanded'))return;event.preventDefault();$('zoom').value=String(Math.max(1,Math.min(3,Number($('zoom').value)+(event.deltaY<0?.25:-.25))));$('zoom').oninput();},{passive:false});
  function toggleEnlarge(){swipeFeedback.reset();const before=$('card').getBoundingClientRect?.();const expanded=$('card').classList.toggle('expanded');updateVideoControls();if($('enlarge').setAttribute)$('enlarge').setAttribute('aria-label',expanded?'Exit fullscreen':'Fullscreen photo');if($('card').animate&&!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)$('card').animate([{transform:before?`translate(${before.left-$('card').getBoundingClientRect().left}px,${before.top-$('card').getBoundingClientRect().top}px) scale(${before.width/$('card').getBoundingClientRect().width},${before.height/$('card').getBoundingClientRect().height})`:'scale(.92)',transformOrigin:'top left'},{transform:'none',transformOrigin:'top left'}],{duration:350,easing:'cubic-bezier(.34,1.56,.64,1)'});refreshPreviews();}
- function refreshPreviews(){const next=underCard.querySelector('img'),candidate=state.items.find(item=>item.mediaKey===next?.dataset?.key);if(candidate)next.src=previewSource(candidate.thumbUrl);if($('overlay').hidden)return;const item=current(),media=$('media').querySelector('img')||$('media').querySelector('video');if(item&&item.mediaKey===shown&&media?.tagName===(item.type==='video'?'VIDEO':'IMG')){const url=previewSource(item.thumbUrl);if(item.type==='video')media.poster=url;else media.src=url;}preloadReview(item);}
+ function refreshPreviews(){const next=underCard.querySelector('img'),candidate=state.items.find(item=>item.mediaKey===next?.dataset?.key);if(candidate)next.src=previewSource(candidate.thumbUrl);if($('overlay').hidden)return;const item=current(),media=$('media').querySelector('img')||$('media').querySelector('video');if(item&&item.mediaKey===shown&&media?.tagName===(item.type==='video'?'VIDEO':'IMG')){const url=previewSource(item.thumbUrl);if(item.type==='video')media.poster=url;else media.src=url;}preloadReview(item);refill();}
  window.addEventListener('resize',refreshPreviews);
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
 
@@ -2167,7 +2177,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.80":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.81":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

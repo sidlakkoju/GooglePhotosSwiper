@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cardPreviewURL,reusablePreview,previewURL,createPreloadBuffer,createWriteQueue} from '../lib/userscript-performance.mjs';
+import {cardPreviewURL,reusablePreview,pendingPreview,previewURL,createPreloadBuffer,createWriteQueue} from '../lib/userscript-performance.mjs';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const item=mediaKey=>({mediaKey});
 test('preview sizes use capped DPR and CDN buckets without original downloads',()=>{
@@ -87,7 +87,7 @@ test('buffer and display share an exact synthetic preview URL and reuse without 
  assert.equal(assignments,1);
  assert.equal(reusablePreview(cached,previewSource(photo.thumbUrl.replace('synthetic-photo','other'))),null);
  assert.equal(reusablePreview({...image,complete:false},displayURL),null);
- assert.match(ui,/image.src=previewSource\(item.thumbUrl\);/);
+ assert.match(ui,/source:item=>previewSource\(item.thumbUrl\)/);assert.match(ui,/image.src=source;/);
  assert.match(ui,/const source=previewSource\(item.thumbUrl\);/);
  assert.match(ui,/const reused=!!cached;[\s\S]*?if\(!reused\)media.src=source/);
 });
@@ -106,4 +106,44 @@ test('clearing preserves upcoming in-flight downloads and evicts replaced URLs',
  assert.equal(loads[2].signal.aborted,true);
  loads[0].resolve({src:'late'});loads[2].resolve({src:'late'});await tick();
  assert.equal(buffer.entries.size,0);
+});
+
+test('buffer reloads entries whose preview size changed and only hands out the current size',async()=>{
+ let size=360;const loads=[],elements=[];
+ const buffer=createPreloadBuffer({source:item=>`${item.thumbUrl}=w${size}`,load:async(item,signal,source)=>{loads.push(source);const el={src:source,signal};elements.push(el);return el;}});
+ const a={mediaKey:'a',thumbUrl:'https://fixture.invalid/a'};
+ buffer.update([a]);await new Promise(resolve=>setTimeout(resolve,0));
+ assert.deepEqual(loads,['https://fixture.invalid/a=w360']);
+ size=720;
+ assert.equal(buffer.take('a','https://fixture.invalid/a=w720'),null);
+ assert.ok(buffer.entries.has('a'));
+ buffer.update([a]);await new Promise(resolve=>setTimeout(resolve,0));
+ assert.deepEqual(loads,['https://fixture.invalid/a=w360','https://fixture.invalid/a=w720']);
+ assert.equal(elements[0].src,'');
+ assert.equal(buffer.take('a','https://fixture.invalid/a=w720'),elements[1]);
+ buffer.update([a]);size=360;buffer.clear([a]);assert.equal(buffer.entries.has('a'),false);
+});
+test('refill keeps the in-flight load for the card being shown and pending under-card previews are reusable',async()=>{
+ const signals=[];
+ const buffer=createPreloadBuffer({load:(item,signal)=>{signals.push([item.mediaKey,signal]);return new Promise(()=>{});}});
+ const a={mediaKey:'a',thumbUrl:'a'},b={mediaKey:'b',thumbUrl:'b'},c={mediaKey:'c',thumbUrl:'c'};
+ buffer.update([a,b]);await new Promise(resolve=>setTimeout(resolve,0));
+ buffer.update([b,c],null,'a');
+ assert.equal(signals.find(([key])=>key==='a')[1].aborted,false);
+ buffer.update([b,c]);
+ assert.equal(signals.find(([key])=>key==='a')[1].aborted,true);
+ assert.equal(pendingPreview({src:'x',complete:false},'x')?.src,'x');
+ assert.equal(pendingPreview({src:'x',complete:true,naturalWidth:0},'x'),null);
+ assert.equal(pendingPreview({src:'y',complete:false},'x'),null);
+});
+test('background library pages keep the ready swipe buffer',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
+ const load=ui.slice(ui.indexOf(' async function load(refresh=false'),ui.indexOf(' mediaElement.addEventListener(\'wheel\''));
+ assert.doesNotMatch(load,/buffer\.clear\(\);/);
+ assert.match(load,/mergeReviewPage\(state,page,cursor,refresh\)\);buffer\.clear\(state\.items\);/);
+ const kept=createPreloadBuffer({load:async item=>({src:item.thumbUrl})});
+ const a={mediaKey:'a',thumbUrl:'a'};kept.update([a]);await new Promise(resolve=>setTimeout(resolve,0));
+ kept.clear([a,{mediaKey:'new',thumbUrl:'new'}]);assert.equal(kept.get('a').src,'a');
+ kept.clear([{...a,thumbUrl:'refreshed'}]);assert.equal(kept.get('a'),null);
 });
