@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
+import {restoreVideoTime} from '../lib/userscript-ui.mjs';
 import {reusablePreview} from '../lib/userscript-performance.mjs';
 
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
@@ -10,13 +11,13 @@ const displaySource=source.slice(source.indexOf(' async function display(item,')
 function fixture(reuse){
  const item={mediaKey:'next',name:'Next',type:reuse==='video'?'video':'photo',thumbUrl:'https://fixture.invalid/next'};
  const created=[],refreshes=[],played=[],cleared=[];
- const element=tag=>({tag,style:{},dataset:{},complete:true,naturalWidth:640,hidden:false,src:item.thumbUrl,readyState:2,addEventListener(){},setAttribute(){},play(){played.push(this);return Promise.resolve();}});
+ const element=tag=>({tag,style:{},dataset:{},complete:true,naturalWidth:640,hidden:false,src:item.thumbUrl,readyState:2,duration:60,currentTime:0,addEventListener(){},setAttribute(){},play(){played.push(this);return Promise.resolve();}});
  const broken=element('img');broken.naturalWidth=0;broken.dataset.key=item.mediaKey;
  const ready=element(item.type==='video'?'video':'img');
  let assignments=0;Object.defineProperty(ready,'src',{get:()=>item.thumbUrl,set:()=>{assignments++;}});
- const media={style:{},children:[],setAttribute(name,value){this[name]=value;},replaceChildren(...children){this.children=children;},append(child){this.children.push(child);}};
+ const media={querySelector:()=>null,style:{},children:[],setAttribute(name,value){this[name]=value;},replaceChildren(...children){this.children=children;},append(child){this.children.push(child);}};
  const nodes={media,zoom:{},card:{classList:{remove(){},contains:()=>false}}};
- const context=vm.createContext({otherTab:false,leaseError:null,underCard:{querySelector:()=>broken},stopMedia(){},$:id=>nodes[id],mediaElement:media,shown:null,generation:0,reviewURLStale:()=>false,previewSource:url=>url,buffer:{take:()=>reuse==='buffer'?ready:null},preloader:{take:()=>reuse==='preloader'?ready:null},reusablePreview,warmedKey:reuse==='video'?item.mediaKey:null,warmedVideo:reuse==='video'?ready:null,metrics:{hits:0,misses:0},document:{createElement:tag=>{const node=element(tag);created.push(node);return node;}},refreshItemURL:async value=>{refreshes.push(value);return value;},clearPreviewWindow:()=>cleared.push('window'),videoURLs:new Map(),dropWarmVideo:()=>cleared.push('video'),preloadReview(){},painted(){},resume:{},videoSavedAt:0,captureVideo(){},addVideoControls(){},videoURL:async()=>item.thumbUrl,window:{performance:{now:()=>0},localStorage:{}},current:()=>item});
+ const context=vm.createContext({otherTab:false,leaseError:null,underCard:{querySelector:()=>broken},stopMedia(){},$:id=>nodes[id],mediaElement:media,shown:null,generation:0,reviewURLStale:()=>false,previewSource:url=>url,buffer:{take:()=>reuse==='buffer'?ready:null},preloader:{take:()=>reuse==='preloader'?ready:null,takeVideo:()=>reuse==='video'?ready:null},reusablePreview,metrics:{hits:0,misses:0},document:{createElement:tag=>{const node=element(tag);created.push(node);return node;}},refreshItemURL:async value=>{refreshes.push(value);return value;},clearPreviewWindow:()=>cleared.push('window'),videoURLs:new Map(),dropWarmVideo:()=>cleared.push('video'),preloadReview(){},painted(){},restoreVideoTime,resume:{},videoSavedAt:0,captureVideo(){},addVideoControls(){},videoURL:async()=>item.thumbUrl,window:{performance:{now:()=>0},localStorage:{}},current:()=>item});
  vm.runInContext(source.slice(source.indexOf(' const previewOwners='),source.indexOf(' function queueThumbnailSource('))+displaySource,context);
  return {context,item,ready,media,created,refreshes,played,cleared,assignments:()=>assignments};
 }
@@ -33,8 +34,6 @@ for(const reuse of ['buffer','preloader','video'])test(`broken under-card previe
  assert.equal(f.context.metrics.misses,0);
  if(reuse==='video'){
   assert.deepEqual(f.played,[f.ready]);
-  assert.equal(f.context.warmedVideo,null);
-  assert.equal(f.context.warmedKey,null);
  }else assert.equal(f.created.length,0);
 });
 
@@ -48,4 +47,11 @@ test('broken under-card preview allows a new photo load and actual display error
  await f.created[0].onerror();
  assert.deepEqual(f.refreshes,[f.item]);
  assert.deepEqual(f.cleared,['window','video']);
+});
+
+
+test('transferred videos with metadata already loaded restore the saved playback position',async()=>{
+ const f=fixture('video');f.context.resume.video={key:f.item.mediaKey,time:12};
+ await f.context.display(f.item);
+ assert.equal(f.ready.currentTime,12);assert.equal(f.ready.dataset.resumeReady,'ready');
 });
