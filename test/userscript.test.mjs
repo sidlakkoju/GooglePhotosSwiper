@@ -1186,7 +1186,8 @@ test('pairing settings failure after sign-in preserves the loaded review session
  assert.deepEqual(await db.read(account),saved);
  await mounted.nodes.get('keep').onclick();
  await waitForReview(async()=>(await db.read(account)).items[0].decision==='keep');
- assert.equal(mounted.nodes.get('keep').disabled,false);
+ assert.equal(mounted.nodes.get('undo').disabled,false);
+ assert.equal(mounted.nodes.get('keep').disabled,true);
  assert.equal((await db.read(account)).items[0].decision,'keep');
  assert.equal(mounted.nodes.get('status').textContent,'Kept synthetic-photo.');
 });
@@ -2846,6 +2847,8 @@ test('continuous deck prefetches at ten cards, preserves in-flight swipes and re
  assert.deepEqual(cursors,[null,'second']);
  for(let index=0;index<10;index++)mounted.nodes.get('keep').onclick();
  assert.match(mounted.nodes.get('caption').textContent,/Loading more/);
+ assert.equal(mounted.nodes.get('media').childNodes[0].dataset.kind,'loading');
+ assert.equal(mounted.nodes.get('keep').disabled,true);
  releasePage();
  for(let count=0;count<100&&(await mounted.read()).items.length<102;count++)await new Promise(resolve=>setTimeout(resolve,2));
  await mounted.settle();
@@ -2858,6 +2861,10 @@ test('continuous deck prefetches at ten cards, preserves in-flight swipes and re
  for(let index=0;index<11;index++)mounted.nodes.get('keep').onclick();
  await mounted.settle();
  assert.equal(mounted.nodes.get('caption').textContent,'You’ve reviewed everything');
+ const done=mounted.nodes.get('media').childNodes[0];
+ assert.equal(done.dataset.kind,'done');
+ assert.deepEqual(done.childNodes.map(node=>node.textContent),['All caught up','You’ve reviewed everything in your library.','Refresh']);
+ assert.equal(mounted.nodes.get('keep').disabled,true);assert.equal(mounted.nodes.get('remove').disabled,true);
  assert.equal((await mounted.read()).items.find(row=>row.mediaKey==='queued').decision,'remove');
 });
 
@@ -3936,4 +3943,23 @@ test('opening while a close is still finishing reopens the overlay',async()=>{
  assert.equal(mounted.nodes.get('overlay').hidden,false);
  await mounted.click('keep');
  assert.equal((await mounted.read()).items[0].decision,'keep');
+});
+
+test('an unstarted library offers Load library instead of claiming it is loading, and a failed load offers Retry',async()=>{
+ let fail=true;
+ const mounted=await mountedReview([],{fetch:async(url,options)=>{if(fail)throw Error('Synthetic network failure');return {ok:true,text:async()=>envelope('lcxiM',[[],null])};}});
+ assert.doesNotMatch(mounted.nodes.get('caption').textContent,/Loading more/);
+ const start=mounted.nodes.get('media').childNodes[0];
+ assert.equal(start.dataset.kind,'start');
+ assert.equal(start.childNodes.at(-1).textContent,'Load library');
+ assert.equal(mounted.nodes.get('keep').disabled,true);
+ start.childNodes.at(-1).onclick();
+ for(let count=0;count<200&&mounted.nodes.get('media').childNodes[0]?.dataset?.kind!=='failed';count++)await new Promise(resolve=>setTimeout(resolve,5));
+ const failed=mounted.nodes.get('media').childNodes[0];
+ assert.equal(failed.dataset.kind,'failed');
+ assert.equal(failed.childNodes.at(-1).textContent,'Retry');
+ assert.equal(mounted.nodes.get('caption').textContent,'Library loading failed.');
+ fail=false;failed.childNodes.at(-1).onclick();
+ for(let count=0;count<200&&mounted.nodes.get('media').childNodes[0]?.dataset?.kind==='failed';count++)await new Promise(resolve=>setTimeout(resolve,5));
+ assert.notEqual(mounted.nodes.get('media').childNodes[0].dataset.kind,'failed');
 });
