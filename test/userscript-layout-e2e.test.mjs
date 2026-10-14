@@ -121,3 +121,13 @@ test('routine messages fade out while errors stay until tapped, and delete is re
  const colors=await measure(page,`return {remove:getComputedStyle(q('#remove')).color,badge:getComputedStyle(q('.trash-badge')).backgroundColor};`);
  assert.match(colors.remove,/rgb\(255, 59, 48\)|rgb\(255, 69, 58\)/);assert.equal(colors.badge,colors.remove);
 });
+
+test('the Done view lives inside the rebuilt review panel and lays out compactly',async t=>{
+ const page=await mount(t,{width:393,height:852,items:[item(1,{decision:'remove',revision:1})],state:{exhausted:false}});if(!page)return;
+ await measure(page,`root.getElementById('review').click();`);
+ const done=await measure(page,`const done=root.getElementById('trash-done');done.hidden=false;return {parent:done.parentElement.id,ring:box(done.querySelector('svg')),button:box('#keep-swiping'),link:q('#open-trash').tagName,panel:box('#review-panel'),covers:box(done)};`);
+ assert.equal(done.parent,'review-panel');
+ assert.equal(Math.round(done.ring.width),72);
+ assert.ok(done.button.height>=44);assert.equal(done.link,'A');
+ assert.deepEqual(done.covers,done.panel);
+});
