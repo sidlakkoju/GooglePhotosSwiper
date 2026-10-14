@@ -232,3 +232,12 @@ test('ready kept photos respect cooldowns and the next return date ignores photo
  assert.deepEqual(on.slice().sort(),['old','older']);
  assert.deepEqual(off,[]);
 });
+
+test('building a Flashbacks deck for a 28,000-item library stays far below quadratic time',()=>{
+ const now=Date.UTC(2026,9,14),large=Array.from({length:28000},(_,index)=>({mediaKey:`perf-${index}`,date:new Date(Date.UTC(2010,0,1)+index*5*3600000).toISOString(),decision:index%3===0?'keep':null,state:'active',lastDecisionAt:now-90*86400000,lastDecisionSwipe:0,keepCount:1}));
+ const state={items:large,started:true,exhausted:false,swipeCount:5000},saved={};
+ let started=performance.now();flashbackDeck(state,saved,()=>0.5,now,null,true);const first=performance.now()-started;
+ const next={...state,items:large.map((item,index)=>index===1?{...item,decision:'keep'}:item)};
+ started=performance.now();flashbackDeck(next,saved,()=>0.5,now,saved.keys[1],true);const again=performance.now()-started;
+ assert.ok(first<1500,`first build ${first.toFixed(0)} ms`);assert.ok(again<1500,`rebuild ${again.toFixed(0)} ms`);
+});

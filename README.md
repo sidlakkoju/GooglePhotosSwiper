@@ -102,7 +102,7 @@ npm test
 npm run check
 ```
 
-The core suite currently has **48 passing tests**. Tests cover authentication/pairing, persistence, revisions, pagination and overlapping pages, partial album writes/retries, queue clearance, storage accounting and provider response handling. Synthetic browser fixtures cover the UI without using personal media or sending requests to Google. Live desktop and responsive browser checks are recorded in [implementation status](docs/core-review-status.md); physical iPhone/Safari behavior remains unverified.
+`npm test` runs about 880 tests (Node's test runner, concurrency 4) with 0 skipped: the desktop app's core (authentication, persistence, pagination, album writes, reconciliation), the userscript (swipes, Undo, sync, leases, Flashbacks order, Trash safety, auto-update) and the Worker. Real-browser suites run the built userscript in headless Chromium and WebKit for layout, video and auto-update checks. Synthetic fixtures are used throughout; no tests send requests to Google. Physical iPhone/Safari behavior is checked by hand.
 
 Google Photos access uses an **undocumented web API** and can require maintenance when Google changes it. The RPC formats are adapted from [Google Photos Toolkit](https://github.com/xob0t/Google-Photos-Toolkit), revision `6db9ab355e4797327e4078cf87a2b6994d36cf73`. Its MIT attribution is retained in [third-party notices](extension/THIRD_PARTY_NOTICES.md) and [license notice](extension/LICENSE-GPTK).
 
