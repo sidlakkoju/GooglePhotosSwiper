@@ -131,3 +131,31 @@ test('the Done view lives inside the rebuilt review panel and lays out compactly
  assert.ok(done.button.height>=44);assert.equal(done.link,'A');
  assert.deepEqual(done.covers,done.panel);
 });
+
+test('a zoomed enlarged photo pans by mouse drag and shift-wheel without deciding, and Fit restores swiping',async t=>{
+ const page=await mount(t,{width:1280,height:900,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const before=await measure(page,`return q('#caption').textContent;`);
+ await measure(page,`root.getElementById('enlarge').click();`);await page.waitForTimeout(300);
+ await measure(page,`const zoom=root.getElementById('zoom');zoom.value='2';zoom.oninput();`);
+ const zoomed=await measure(page,`const media=q('#media');return {scroll:media.scrollWidth>media.clientWidth&&media.scrollHeight>media.clientHeight,left:media.scrollLeft,top:media.scrollTop,box:box(media),overflow:getComputedStyle(media).overflowX};`);
+ assert.equal(zoomed.scroll,true);assert.equal(zoomed.overflow,'auto');
+ assert.ok(zoomed.left>0,'zoom keeps the centre in view');
+ const cx=zoomed.box.x+zoomed.box.width/2,cy=zoomed.box.y+zoomed.box.height/2;
+ await page.mouse.move(cx,cy);await page.mouse.down();await page.mouse.move(cx+150,cy+80,{steps:5});await page.mouse.up();
+ const dragged=await measure(page,`const media=q('#media');return {left:media.scrollLeft,top:media.scrollTop,caption:q('#caption').textContent};`);
+ assert.ok(dragged.left<zoomed.left-100,`${zoomed.left} → ${dragged.left}`);assert.ok(dragged.top<zoomed.top-40);
+ await page.mouse.move(cx,cy);await page.keyboard.down('Shift');await page.mouse.wheel(0,200);await page.keyboard.up('Shift');await page.waitForTimeout(100);
+ assert.equal(await measure(page,`return root.getElementById('zoom').value;`),'2');
+ assert.equal(dragged.caption,before);
+ await measure(page,`const zoom=root.getElementById('zoom');zoom.value='1';zoom.oninput();`);
+ assert.equal(await measure(page,`return q('#card').classList.contains('zoomed');`),false);
+});
+
+for(const reduced of [false,true])test(`the settings sheet ${reduced?'appears without motion':'slides up'} when opened${reduced?' with reduced motion':''}`,async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const page=await mount(t,{width:393,height:852,items:[item(1)],state:{exhausted:false}});if(!page)return;
+ await page.emulateMedia({reducedMotion:reduced?'reduce':'no-preference'});
+ await measure(page,`root.getElementById('settings').click();`);
+ const sheet=await measure(page,`const sheet=q('#settings-sheet');return {hidden:sheet.hidden,animation:getComputedStyle(sheet).animationName};`);
+ assert.equal(sheet.hidden,false);assert.equal(sheet.animation,reduced?'none':'ps-sheet-up');
+});
