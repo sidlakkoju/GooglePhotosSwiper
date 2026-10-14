@@ -24,7 +24,7 @@ test('compact windows use two photos and two video links and evict on advance, r
  const f=fixture(),items=[photo('a'),photo('b'),video('v'),photo('c'),photo('d'),video('w')],size={width:360,height:260,compact:true};
  f.buffer.update(items,items[0],size);await tick();assert.equal(f.images.length,4);assert.deepEqual(f.calls,['v','w']);
  f.buffer.update(items,items[2],size);await tick();assert.ok(f.images[0].removed.includes('src'));assert.equal(f.buffer.videoSource('v'),'video:v');
- f.buffer.update(items,items[2],{...size,width:400});await tick();assert.ok(f.videos[0].paused);assert.ok(f.videos[0].removed.includes('src'));
+ f.buffer.update(items,items[2],{...size,width:400});await tick();assert.equal(f.videos[0].paused,undefined);assert.deepEqual(f.videos[0].removed,[]);assert.equal(f.videos[0].loads,1);
  f.buffer.clear();assert.ok(f.images.every(image=>image.removed.includes('src')));assert.ok(f.videos.every(media=>media.paused));assert.equal(f.buffer.videoSource('w'),undefined);
 });
 test('queued work is skipped and late video responses cannot populate an evicted window',async()=>{
@@ -101,4 +101,31 @@ test('passing a warmed card aborts its download and warms the newly upcoming car
  assert.equal(passed.paused,true);assert.ok(passed.removed.includes('src'));assert.equal(passed.loads,2);assert.equal(passed.src,undefined);
  assert.equal(f.videos.length,2);assert.equal(f.videos[1].src,'video:w');
  f.buffer.cancelVideos();assert.equal(f.videos[1].src,undefined);assert.equal(f.videos[1].loads,2);
+});
+
+test('poster resize preserves the playback URL warm and transfers the same video',async()=>{
+ const f=fixture(),items=[photo('a'),video('v'),video('w')],size={width:360,height:480,compact:true};
+ f.buffer.update(items,items[0],size);await tick();
+ const warmed=f.videos[0],poster=f.images[0];
+ const resized={...size,height:420};
+ f.buffer.clear(items,resized);f.buffer.update(items,items[0],resized);await tick();
+ assert.ok(poster.removed.includes('src'));
+ assert.deepEqual(f.calls,['v','w']);assert.equal(f.videos.length,1);
+ assert.equal(warmed.poster,'https://fixture.invalid/v=w360-h420');
+ assert.equal(warmed.src,'video:v');assert.equal(warmed.loads,1);
+ assert.equal(warmed.paused,undefined);assert.deepEqual(warmed.removed,[]);
+ assert.equal(f.buffer.takeVideo('v'),warmed);
+ f.buffer.clear();assert.equal(warmed.src,'video:v');assert.equal(warmed.loads,1);
+});
+
+test('poster resize preserves pending playback requests and warms with the latest poster',async()=>{
+ const pending=new Map(),f=fixture(key=>new Promise(resolve=>pending.set(key,resolve))),items=[photo('a'),video('v'),video('w')],size={width:360,height:480,compact:true};
+ f.buffer.update(items,items[0],size);await tick();
+ const request=f.buffer.videoSource('v');
+ f.buffer.update(items,items[0],{...size,height:420});await tick();
+ assert.equal(f.buffer.videoSource('v'),request);assert.deepEqual(f.calls,['v','w']);
+ pending.get('v')({url:'video:v'});pending.get('w')({url:'video:w'});await tick();
+ assert.equal(f.videos.length,1);assert.equal(f.videos[0].poster,'https://fixture.invalid/v=w360-h420');
+ assert.equal(f.videos[0].loads,1);assert.equal(f.buffer.videoSource('w'),'video:w');
+ f.buffer.clear();assert.equal(f.videos[0].loads,2);
 });
