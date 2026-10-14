@@ -67,13 +67,13 @@ export async function syncRequest(request,env={}) {
    const ownHistory=await db.prepare('SELECT history FROM review_state WHERE scope = ?').bind(historyScope).first();
    const progress=record?JSON.parse(record.progress):{};
    let itemsCursor;
-   if(Object.hasOwn(progress,'items')){
-    if(includeItems){
-     const items=since===undefined?await db.prepare('SELECT data, updated_at FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all():await db.prepare('SELECT data, updated_at FROM review_items WHERE scope = ? AND updated_at >= ? ORDER BY updated_at').bind(scope,Math.max(0,since-1000)).all();
+   if(includeItems){
+    itemsCursor=(await db.prepare("SELECT CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AS now").first()).now;
+    if(Object.hasOwn(progress,'items')){
+     const items=since===undefined?await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all():await db.prepare('SELECT data FROM review_items WHERE scope = ? AND updated_at >= ? ORDER BY updated_at').bind(scope,Math.max(0,since-1000)).all();
      progress.items=items.results.map(item=>JSON.parse(item.data));
-     itemsCursor=items.results.reduce((cursor,item)=>Math.max(cursor,item.updated_at||0),since??0);
-    }else delete progress.items;
-   }else if(includeItems)itemsCursor=since??0;
+    }
+   }else delete progress.items;
    const versions=await db.prepare('SELECT id,device_id FROM decision_versions WHERE scope = ?').bind(scope).all();
    return {decisions:rows.results,progress,...(itemsCursor===undefined?{}:{itemsCursor}),history:ownHistory?JSON.parse(ownHistory.history):[],...(mapping&&mapping.space!=='legacy'?{decisionOwners:Object.fromEntries(versions.results.map(row=>[row.id,row.device_id===device.id]))}:{})};
   };

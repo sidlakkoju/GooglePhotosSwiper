@@ -31,8 +31,12 @@ test('D1 routes persist decisions, progress and undo within scopes',async()=>{
  const e=env();assert.equal((await call(e,'decisions/item','PUT',{decision:'keep'})).status,200);
  await call(e,'progress','PUT',{started:true,reviewed:1});
  const entry={key:'item',previous:null,decision:'keep',revision:1};await call(e,'undo','POST',{action:'push',entry});
- assert.deepEqual(await (await call(e,'state')).json(),{decisions:[{id:'item',decision:'keep'}],progress:{started:true,reviewed:1},itemsCursor:0,history:[entry]});
- assert.deepEqual(await (await call(e,'state?scope=another')).json(),{decisions:[],progress:{},itemsCursor:0,history:[]});
+ const {itemsCursor,...own}=await (await call(e,'state')).json();
+ assert.ok(Number.isSafeInteger(itemsCursor)&&itemsCursor>0);
+ assert.deepEqual(own,{decisions:[{id:'item',decision:'keep'}],progress:{started:true,reviewed:1},history:[entry]});
+ const {itemsCursor:anotherCursor,...another}=await (await call(e,'state?scope=another')).json();
+ assert.ok(Number.isSafeInteger(anotherCursor));
+ assert.deepEqual(another,{decisions:[],progress:{},history:[]});
  await call(e,'undo','POST',{action:'pop'});await call(e,'decisions/item','DELETE');
  assert.deepEqual((await (await call(e,'state')).json()).history,[]);
  assert.deepEqual(await (await call(e,'progress')).json(),{started:true,reviewed:1});
@@ -792,7 +796,7 @@ test('sync pulls by cursor, uploads deltas and never rereads all items for decis
  let state={started:true,items:library.map(item=>({...item})),history:[],syncDecisions:{},syncPending:{}};
  state=await client.sync('default',{...state,items:state.items.map((item,index)=>index<3?{...item,revision:1,lastDecisionAt:10+index}:item),syncPending:{'item-0':'keep','item-1':'remove','item-2':'keep'},syncPendingTimes:{'item-0':10,'item-1':11,'item-2':12}},async value=>value);
  assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-0','item-1','item-2']);
- assert.equal(state.syncItemsCursor.at,0);
+ assert.ok(Number.isSafeInteger(state.syncItemsCursor.at)&&state.syncItemsCursor.at>0);
  assert.deepEqual(reads,[]);
  reads.length=0;requests.length=0;
  state=await client.sync('default',{...state,items:state.items.map(item=>item.mediaKey==='item-5'?{...item,revision:1,lastDecisionAt:20}:item),syncPending:{'item-5':'remove'},syncPendingTimes:{'item-5':20}},async value=>value);
@@ -820,6 +824,21 @@ test('state pulls with since return only rows changed at or after the cursor',as
  assert.equal((await call(e,'state?since=abc')).status,400);
  const decisions=await (await call(e,'decisions','PUT',{decisions:[{id:'a',decision:'keep'}]})).json();
  assert.equal(decisions.progress,undefined);
+});
+
+test('rows from before migration 0011 are pulled once and then skipped by cursor pulls',async()=>{
+ const e=env(),reads=[];
+ await call(e,'progress','PUT',{started:true,reviewed:2,items:[{mediaKey:'a',state:'active',revision:1},{mediaKey:'b',state:'active',revision:1}]});
+ e.DB.sqlite.exec('UPDATE review_items SET updated_at = 0');
+ const first=await (await call(e,'state')).json();
+ assert.deepEqual(first.progress.items.map(item=>item.mediaKey),['a','b']);
+ const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{const statement=prepare(sql);if(!/FROM review_items WHERE scope = \? AND updated_at >= \?/.test(sql))return statement;return {bind:(...args)=>{const bound=statement.bind(...args);return {...bound,all:async()=>{const result=await bound.all();reads.push(result.results.length);return result;}};}};};
+ const second=await (await call(e,`state?since=${first.itemsCursor}`)).json();
+ assert.deepEqual(second.progress.items,[]);assert.deepEqual(reads,[0]);
+ assert.ok(second.itemsCursor>=first.itemsCursor);
+ await call(e,'progress','PUT',{started:true,reviewed:3,items:[{mediaKey:'c',state:'active',revision:1}]});
+ const third=await (await call(e,`state?since=${second.itemsCursor}`)).json();
+ assert.deepEqual(third.progress.items.map(item=>item.mediaKey),['c']);
 });
 
 test('saved sync state keeps only sync-relevant checkpoint items and no pulled item copies',async()=>{
