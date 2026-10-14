@@ -328,9 +328,9 @@ function fakeIndexedDB(fault={}) {
   objectStoreNames:{contains:name=>stores.has(name)},
   createObjectStore:name=>stores.set(name,new Map()),close(){},
   transaction(name){
-   const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate;
+   const staged=new Map(stores.get(name));let aborted=false,wrote=false,releaseGate,pending=0;
    const tx={objectStore:()=>({
-    get(key){const request={};queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(name==='settings'&&String(key).startsWith('resume:')&&fault.resumeGate){fault.resumeStarted?.();await fault.resumeGate;}if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){if(wrote)stores.set(name,staged);tx.oncomplete();}});});return request;},
+    get(key){const request={};pending++;queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess();queueMicrotask(async()=>{if(--pending>0)return;if(name==='settings'&&String(key).startsWith('resume:')&&fault.resumeGate){fault.resumeStarted?.();await fault.resumeGate;}if(name==='accounts'&&fault.holdSave&&[...staged.values()].some(value=>value.items?.some(row=>row.decision)))await fault.holdSave;if(wrote&&name==='accounts'&&fault.saveGate)await fault.saveGate;if(wrote&&name==='leases'&&fault.leaseGate)await fault.leaseGate;if(releaseGate)await releaseGate;if(!aborted){if(wrote)stores.set(name,staged);tx.oncomplete();}});});return request;},
     delete:key=>{wrote=true;staged.delete(key);},
     put:(value,key)=>{if(name==='leases')fault.leaseWrites=(fault.leaseWrites||0)+1;if(name==='leases'&&fault.failLease)throw Error('Fake lease failure');if(name==='accounts'&&fault.failSave)throw Error('Fake storage failure');wrote=true;if(name==='leases'&&value.expires===0)releaseGate=fault.releaseGate;staged.set(key,structuredClone(value));}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort());}};
@@ -1729,7 +1729,7 @@ test('a delayed save failure preserves the active lease failure status',async()=
   if(name==='leases'&&failLease)throw Error('Synthetic lease failure');
   if(name==='accounts'&&holdSave){
    holdSave=false;
-   const tx={objectStore:()=>({get(){const request={result:structuredClone(current)};finish=()=>request.onsuccess();started();return request;},put(){throw Error('Synthetic delayed save failure');}}),abort(){queueMicrotask(()=>tx.onabort());}};
+   const tx={objectStore:()=>({get(key){const request={result:String(key).startsWith('revision:')?current.revision:structuredClone(current)};finish=()=>request.onsuccess();started();return request;},put(){throw Error('Synthetic delayed save failure');}}),abort(){queueMicrotask(()=>tx.onabort());}};
    return tx;
   }
   return transaction.call(this,name,...args);
@@ -4075,4 +4075,21 @@ test('Timeline order resurfaces an eligible kept photo as card twenty with a Kep
  toggle.checked=false;toggle.onchange();
  assert.doesNotMatch(mounted.nodes.get('caption').textContent,/Kept before/);
  await mounted.nodes.get('close').onclick();
+});
+
+test('saves check a small revision record, adopt legacy records without one, and still reject stale writes',async()=>{
+ const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
+ const indexedDB=bundleEnvironment().environment.window.indexedDB;
+ const raw=await new Promise(resolve=>{const request=indexedDB.open('photos-swipe-userscript',2);request.onupgradeneeded=()=>{for(const name of ['accounts','leases','settings'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};request.onsuccess=()=>resolve(request.result);});
+ await new Promise(resolve=>{const tx=raw.transaction('accounts','readwrite'),store=tx.objectStore('accounts'),request=store.get('synthetic-account');request.onsuccess=()=>store.put({...emptyReview(),revision:7,items:[item('legacy')]},'synthetic-account');tx.oncomplete=resolve;});
+ const db=await openReviewDatabase(indexedDB);
+ const legacy=await db.read('synthetic-account');
+ const saved=await db.save('synthetic-account',{...legacy,items:[item('legacy',{decision:'keep'})]});
+ assert.equal(saved.revision,8);
+ const revision=await new Promise(resolve=>{const tx=raw.transaction('accounts'),request=tx.objectStore('accounts').get('revision:synthetic-account');let value;request.onsuccess=()=>{value=request.result;};tx.oncomplete=()=>resolve(value);});
+ assert.equal(revision,8);
+ await assert.rejects(db.save('synthetic-account',{...legacy,items:[]}),/Progress changed in another tab/);
+ assert.equal((await db.read('synthetic-account')).items[0].decision,'keep');
+ const next=await db.save('synthetic-account',{...saved,items:[item('legacy',{decision:'remove'})]});
+ assert.equal(next.revision,9);assert.equal((await db.read('synthetic-account')).revision,9);
 });
