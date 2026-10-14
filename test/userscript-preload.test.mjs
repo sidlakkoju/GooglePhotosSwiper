@@ -10,19 +10,19 @@ function fixture(videoURL=async key=>({url:`video:${key}`}),decode=()=>Promise.r
  const buffer=createReviewPreloader({createImage:create(images),createVideo:create(videos),videoURL:key=>{calls.push(key);return videoURL(key);},previewURL:(url,size)=>{new URL(url);sizes.push(size);return `${url}=w${size.width}-h${size.height}`;},playbackURL:url=>url});
  return {buffer,images,videos,calls,sizes};
 }
-test('screen sized lookahead decodes three photos and warms two videos and posters, deduped',async()=>{
+test('screen sized lookahead decodes three photos and fetches two video links and warms one video, deduped',async()=>{
  const f=fixture(),items=[photo('current'),video('v1'),photo('p1'),video('v2'),photo('p2'),photo('p3'),photo('p4'),video('v3')];
  const size={width:820,height:440};
  f.buffer.update(items,items[0],size);await tick();
  assert.equal(f.images.length,5);assert.ok(f.images.every(image=>image.decodeCalls===1&&image.src.endsWith('=w820-h440')));
- assert.deepEqual(f.calls,['v1','v2']);assert.equal(f.videos.length,2);
- assert.ok(f.videos.every(media=>media.poster.endsWith('=w820-h440')&&media.preload==='metadata'&&media.loads===1));
+ assert.deepEqual(f.calls,['v1','v2']);assert.equal(f.videos.length,1);
+ assert.ok(f.videos.every(media=>media.poster.endsWith('=w820-h440')&&media.preload==='auto'&&media.loads===1));
  f.buffer.update(items,items[0],size);await tick();assert.equal(f.images.length,5);assert.equal(f.calls.length,2);
  assert.equal(f.buffer.videoSource('v1'),'video:v1');
 });
-test('compact windows use two photos and one video and evict on advance, resize and clear',async()=>{
+test('compact windows use two photos and two video links and evict on advance, resize and clear',async()=>{
  const f=fixture(),items=[photo('a'),photo('b'),video('v'),photo('c'),photo('d'),video('w')],size={width:360,height:260,compact:true};
- f.buffer.update(items,items[0],size);await tick();assert.equal(f.images.length,3);assert.deepEqual(f.calls,['v']);
+ f.buffer.update(items,items[0],size);await tick();assert.equal(f.images.length,4);assert.deepEqual(f.calls,['v','w']);
  f.buffer.update(items,items[2],size);await tick();assert.ok(f.images[0].removed.includes('src'));assert.equal(f.buffer.videoSource('v'),'video:v');
  f.buffer.update(items,items[2],{...size,width:400});await tick();assert.ok(f.videos[0].paused);assert.ok(f.videos[0].removed.includes('src'));
  f.buffer.clear();assert.ok(f.images.every(image=>image.removed.includes('src')));assert.ok(f.videos.every(media=>media.paused));assert.equal(f.buffer.videoSource('w'),undefined);
@@ -79,4 +79,26 @@ test('clear disposes previews even when a preserved item has an invalid URL',asy
  f.buffer.update(items,items[0],{width:100,height:100});await tick();
  assert.doesNotThrow(()=>f.buffer.clear([{mediaKey:'b',thumbUrl:'invalid'}],{width:100,height:100}));
  assert.ok(f.images[0].removed.includes('src'));
+});
+
+test('compact lookahead starts both links concurrently and transfers only the next original video',async()=>{
+ const pending=new Map(),f=fixture(key=>new Promise(resolve=>pending.set(key,resolve))),items=[photo('a'),video('v'),video('w')],size={width:360,height:480,compact:true};
+ f.buffer.update(items,items[0],size);await tick();
+ assert.deepEqual([...pending.keys()],['v','w']);
+ pending.get('w')({url:'video:w=original'});await tick();assert.equal(f.videos.length,0);
+ pending.get('v')({url:'video:v=original'});await tick();assert.equal(f.videos.length,1);
+ const warmed=f.videos[0];assert.equal(warmed.src,'video:v=original');assert.equal(warmed.preload,'auto');assert.equal(warmed.playsInline,true);
+ assert.equal(f.buffer.takeVideo('v'),warmed);assert.equal(f.buffer.takeVideo('v'),null);
+ f.buffer.update(items,items[1],size);await tick();assert.equal(f.videos.length,2);assert.equal(f.videos[1].src,'video:w=original');
+ f.buffer.clear();assert.equal(warmed.src,'video:v=original');assert.equal(warmed.loads,1);
+ assert.ok(f.videos[1].removed.includes('src'));assert.equal(f.videos[1].loads,2);
+});
+
+test('passing a warmed card aborts its download and warms the newly upcoming card',async()=>{
+ const f=fixture(),items=[photo('a'),video('v'),photo('b'),video('w')],size={width:360,height:480,compact:true};
+ f.buffer.update(items,items[0],size);await tick();const passed=f.videos[0];
+ f.buffer.update(items,items[2],size);await tick();
+ assert.equal(passed.paused,true);assert.ok(passed.removed.includes('src'));assert.equal(passed.loads,2);assert.equal(passed.src,undefined);
+ assert.equal(f.videos.length,2);assert.equal(f.videos[1].src,'video:w');
+ f.buffer.cancelVideos();assert.equal(f.videos[1].src,undefined);assert.equal(f.videos[1].loads,2);
 });
