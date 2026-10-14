@@ -1713,7 +1713,7 @@ function mountPhotosSwipe(environment) {
     if(media.readyState>=2)reveal();
     if(warmed)media.play().catch(()=>{});
     if(retried||forceRefresh)videoURLs.delete(item.mediaKey);const url=await videoURL(item);if(token!==generation||handlingError)return;
-    if(media.src!==url)media.src=url;if(!warmed)media.play().catch(()=>{});
+    const sourceChanged=media.src!==url;if(sourceChanged)media.src=url;if(!warmed||sourceChanged)media.play().catch(()=>{});
     if(media.readyState>=2)reveal();
    }
    else {media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='';media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}};$('media').append(media);const reused=!!cached;$('media').setAttribute('aria-busy',String(!reused));if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);}else await failed();}}
