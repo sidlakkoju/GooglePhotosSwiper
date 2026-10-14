@@ -1,7 +1,10 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
 import {createPrivateKey,createPublicKey,sign} from 'node:crypto';
 import {pinnedReleaseKey,releaseMessage} from '../lib/userscript-loader.mjs';
-const keyPath=process.env.PHOTOSWIPER_SIGNING_KEY||'/home/box/shared/photoswiper-signing.key';
+const keyPath=process.env.PHOTOSWIPER_SIGNING_KEY||[join(homedir(),'.photoswiper','photoswiper-signing.key'),'/home/box/shared/photoswiper-signing.key'].find(path=>existsSync(path))||join(homedir(),'.photoswiper','photoswiper-signing.key');
 const key=createPrivateKey(await readFile(keyPath));
 const publicKey=createPublicKey(key).export({format:'jwk'});
 if(key.asymmetricKeyType!=='ed25519'||Buffer.from(publicKey.x,'base64url').toString('base64')!==pinnedReleaseKey)throw Error('Signing key does not match the pinned Ed25519 key');
