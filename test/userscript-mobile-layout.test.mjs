@@ -14,7 +14,7 @@ test('mobile layout setup parses as a classic browser script',()=>{
  assert.doesNotThrow(()=>new Script(counterSource+setup));
 });
 
-const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
+const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version']).status===0);
 const probe=chrome&&spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--dump-dom','about:blank'],{encoding:'utf8',timeout:10000});
 
 test('userscript status keeps a bounded layout slot even when empty',()=>{
@@ -175,7 +175,7 @@ test('settings header keeps Done visible and clickable while the sheet scrolls',
   for(const [width,height] of [[1280,800],[390,844],[393,852],[320,568]])for(const dark of [false,true]){
    const frame=join(dir,'frame.html');
    await writeFile(frame,`<!doctype html><iframe style="border:0;width:${width}px;height:${height}px" src="file://${page}"></iframe><script>document.querySelector('iframe').onload=event=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:event.target.contentDocument.querySelector('pre').textContent}));</script>`);
-   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(dark?['--force-dark-mode']:[]),'--virtual-time-budget=1000','--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
+   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(dark?['--force-dark-mode']:['--blink-settings=preferredColorScheme=1']),'--virtual-time-budget=1000','--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
    assert.equal(result.status,0,result.stderr);
    const values=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);
    const {snapshots,...checks}=values;
@@ -232,7 +232,7 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
   for(const [width,height] of [[393,852],[320,400],[600,600],[601,800],[1280,900]])for(const dark of [false,true]){
    const frame=join(dir,'frame.html');
    await writeFile(frame,`<!doctype html><iframe style="border:0;width:${width}px;height:${height}px" src="file://${page}"></iframe><script>document.querySelector('iframe').onload=event=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:event.target.contentDocument.querySelector('pre').textContent}));</script>`);
-   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(dark?['--force-dark-mode']:[]),'--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});assert.equal(result.status,0,result.stderr);
+   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(dark?['--force-dark-mode']:['--blink-settings=preferredColorScheme=1']),'--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});assert.equal(result.status,0,result.stderr);
    const values=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);for(const key of ['titleVisible','gridThree','square','barInside','keptFaded','gridScrollable','previewFits'])assert.equal(values[key],true,`${width}×${height}, dark=${dark}: ${key}`);
    assert.equal(values.previewCount,'1 of 6');assert.equal(values.panel.width,width<=600?width:440);assert.equal(values.theme,dark?'rgb(0, 0, 0)':'rgb(242, 242, 247)');if(width<=600){assert.equal(values.panel.top,0);assert.equal(values.panel.bottom,height);}
   }

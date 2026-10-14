@@ -894,7 +894,7 @@ test('mounted album send creates a readable title and saves the verified album',
 });
 
 test('centered shell and loading video cards fit desktop and phone viewports in Chrome',async t=>{
- const browser=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
+ const browser=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version'],{encoding:'utf8'}).status===0);
  if(!browser){t.skip('Chrome is unavailable');return;}
  const mounted=await mountedReview([item('clip',{type:'video',name:'synthetic-very-long-filename-'.repeat(8)+'.mp4'}),item('next')],async()=>({ok:true,text:async()=>envelope('VrseUb',[['clip'],'https://lh3.googleusercontent.com/synthetic-video'])}));
  mounted.nodes.get('overlay').hidden=false;mounted.nodes.get('move-trash').hidden=false;

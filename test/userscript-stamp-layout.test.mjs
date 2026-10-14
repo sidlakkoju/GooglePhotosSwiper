@@ -16,7 +16,7 @@ test('stamp layout setup parses as a classic browser script',()=>{
  assert.doesNotThrow(()=>new Script(counterSource+setup));
 });
 
-const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
+const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version']).status===0);
 
 for(const reduced of [false,true])for(const theme of ['light','dark'])for(const [width,height,pointerType] of [[1280,900,'mouse'],[393,852,'touch']]){
  test(`KEEP and REMOVE stay inside the dragged card at ${width}×${height} in ${theme}, reduced motion ${reduced}`,{skip:!chrome&&'Chrome is not installed'},async()=>{
@@ -57,7 +57,7 @@ for(const reduced of [false,true])for(const theme of ['light','dark'])for(const 
    </script>`);
    const frame=join(dir,'frame.html');
    await writeFile(frame,`<!doctype html><iframe style="border:0;width:${width}px;height:${height}px" src="file://${page}"></iframe><script>document.querySelector('iframe').onload=event=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:event.target.contentDocument.querySelector('pre').textContent}));</script>`);
-   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(theme==='dark'?['--force-dark-mode']:[]),'--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
+   const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(theme==='dark'?['--force-dark-mode']:['--blink-settings=preferredColorScheme=1']),'--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});
    assert.equal(result.status,0,result.stderr);
    const output=result.stdout.match(/<pre>(.*?)<\/pre>/s);
    assert.ok(output,result.stdout);
