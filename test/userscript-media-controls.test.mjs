@@ -60,3 +60,14 @@ test('display and zoom reset preserve swipe touch actions when expanded, while z
  assert.equal(f.mediaElement.style.touchAction,'');
  assert.ok(source.includes('.media{touch-action:none;'));
 });
+
+for(const path of ['quality swap','fallback'])test(`${path} rebuilds the mute label from the current audio state`,()=>{
+ const f=fixture();f.context.addVideoControls(f.video);
+ f.click(f.buttons[1]);assert.equal(f.video.muted,false);
+ const displayed=path==='quality swap'?{...f.video,listeners:{}}:f.video;
+ f.buttons.length=0;f.context.addVideoControls(displayed);
+ const mute=f.buttons[1];assert.equal(mute.textContent,'Mute');
+ mute.onclick();assert.equal(displayed.muted,true);assert.equal(mute.textContent,'Unmute');
+ displayed.muted=false;displayed.listeners.volumechange();assert.equal(mute.textContent,'Mute');
+ displayed.muted=true;displayed.listeners.volumechange();assert.equal(mute.textContent,'Unmute');
+});
