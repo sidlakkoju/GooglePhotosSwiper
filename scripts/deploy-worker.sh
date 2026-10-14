@@ -3,11 +3,14 @@ set -euo pipefail
 
 repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
-  if [[ -f /home/box/shared/cloudflare.env ]]; then
-    set -a
-    source /home/box/shared/cloudflare.env
-    set +a
-  fi
+  for env_file in "$HOME/.photoswiper/cloudflare.env" /home/box/shared/cloudflare.env; do
+    if [[ -f "$env_file" ]]; then
+      set -a
+      source "$env_file"
+      set +a
+      break
+    fi
+  done
 fi
 
 node "$repository_root/scripts/build-userscript.mjs"
