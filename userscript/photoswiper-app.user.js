@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.79
+// @version 1.2.80
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -512,7 +512,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
      progress.items=reviewSyncProgress(next,decisions).items;
     }
    }catch(error){writeError=error;}
-   next=await save({...next,syncPending:{},syncPendingTimes:{},syncPendingUndo:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:remote.progress,syncCheckpoint:writeError?state.syncCheckpoint:progress,...(pull&&Number.isSafeInteger(remote.itemsCursor)?{syncItemsCursor:{key:itemsKey,at:remote.itemsCursor}}:{})});
+   next=await save({...next,syncPending:{},syncPendingTimes:{},syncPendingUndo:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:Object.fromEntries(Object.entries(remote.progress||{}).filter(([key])=>key!=='items')),syncCheckpoint:writeError?state.syncCheckpoint:{...progress,items:progress.items.filter(syncedItemWorthKeeping)},...(pull&&Number.isSafeInteger(remote.itemsCursor)?{syncItemsCursor:{key:itemsKey,at:remote.itemsCursor}}:{})});
    if(writeError){if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs${remote.suggestRevokeLegacy?' \u00b7 Device paired; retire the exposed shared sync token.':''}`);return next;
   }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
@@ -2167,7 +2167,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.79":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.80":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

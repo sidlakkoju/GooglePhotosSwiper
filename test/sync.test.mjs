@@ -802,3 +802,17 @@ test('sync uploads deltas and decision uploads never reread all items',async()=>
  assert.equal(decisions.progress,undefined);
  assert.deepEqual(reads,['full']);
 });
+
+test('saved sync state keeps only sync-relevant checkpoint items and no pulled item copies',async()=>{
+ const e=env();
+ await call(e,'progress','PUT',{started:true,reviewed:1,items:[{mediaKey:'remote',state:'active',revision:2}],lifetimeFreed:5});
+ const client=createSyncClient({fetch:(url,options)=>syncRequest(new Request(url,options),e)});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const items=[{mediaKey:'reviewed',type:'photo',state:'active',revision:1,lastDecisionAt:3},...Array.from({length:20},(_,index)=>({mediaKey:'new-'+index,type:'photo',state:'active',revision:0}))];
+ const saved=await client.sync('default',{started:true,items,history:[],syncDecisions:{},syncPending:{reviewed:'keep'},syncPendingTimes:{reviewed:3}},async value=>value);
+ assert.deepEqual(saved.syncCheckpoint.items.map(item=>item.mediaKey).sort(),['remote','reviewed']);
+ assert.equal(Object.hasOwn(saved.syncProgress,'items'),false);
+ assert.equal(saved.syncProgress.lifetimeFreed,5);
+ const again=await client.sync('default',saved,async value=>value);
+ assert.equal(again.items.length,saved.items.length);
+});
