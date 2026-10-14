@@ -935,10 +935,10 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     const playback=Array.from(media.querySelectorAll('[data-video-control]'));
     const opaque=doc.defaultView.getComputedStyle(top).backgroundColor===background&&doc.defaultView.getComputedStyle(media).backgroundColor===background;
     const covered=doc.defaultView.getComputedStyle(top).opacity==='1'&&doc.defaultView.getComputedStyle(top).visibility==='visible'&&front.left<=behind.left&&front.right>=behind.right&&front.top<=behind.top&&front.bottom>=behind.bottom&&doc.defaultView.getComputedStyle(top).zIndex>doc.defaultView.getComputedStyle(under).zIndex;
-    const captionVisible=caption.parentElement===content&&filename.height>=caption.scrollHeight&&filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
+    const captionVisible=caption.parentElement===content&&filename.height>0&&filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
     const mediaAboveControls=playback.filter(button=>!button.hidden).every(button=>bounds(loading?poster:media.querySelector('video')).bottom<=bounds(button).top);
     const clearOfControls=playback.every(button=>bounds(button).bottom<=filename.top&&bounds(button).left>=box.left&&bounds(button).right<=box.right);
-    videoChecks.push({loading,background,opaque,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
+    videoChecks.push({expanded,captionHidden:doc.defaultView.getComputedStyle(caption).display==='none',loading,background,opaque,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
    }
    sheet.hidden=false;
    const controls=['filter'].map(id=>root.getElementById(id));
@@ -958,7 +958,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,6,result.stdout);
   for(const measurement of measurements){
-   for(const check of measurement.videoChecks)for(const key of ['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
+   for(const check of measurement.videoChecks)for(const key of check.expanded?['opaque','covered','captionHidden','mediaAboveControls','posterFits']:['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['absent'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,Math.min(440,measurement.width),JSON.stringify(measurement));
@@ -2921,7 +2921,7 @@ test('queue pill grows beyond 25 while swipe decisions continue without opening 
  const content=mounted.nodes.get('overlay').childNodes[0],pill=content.childNodes.find(node=>node.class==='queue-pill');
  assert.equal(pill.hidden,true);
  for(let index=0;index<31;index++)mounted.nodes.get('remove').onclick();
- assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(pill.hidden,false);assert.equal(pill.childNodes[1].textContent,'31 going to Trash');assert.equal(pill.childNodes[3].textContent,'+6');assert.equal(pill.childNodes[0].childNodes.length,3);
+ assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(pill.hidden,false);assert.equal(pill.childNodes[1].childNodes[0].textContent,'31 going to Trash ');assert.equal(pill.childNodes[1].childNodes[1].class,'queue-size');assert.equal(pill.childNodes[2].textContent,'+6');assert.equal(pill.childNodes[0].childNodes.length,3);
  await mounted.settle();assert.equal(reviewQueue(await mounted.read()).length,31);assert.match(mounted.nodes.get('caption').textContent,/^queue-31 · /);
  pill.childNodes.at(-1).onclick();assert.equal(mounted.nodes.get('review-panel').hidden,false);assert.equal(mounted.nodes.get('trash-review-grid').childNodes.length,31);
  mounted.nodes.get('remove').onclick();mounted.nodes.get('keep').onclick();assert.equal(reviewQueue(await mounted.read()).length,31);

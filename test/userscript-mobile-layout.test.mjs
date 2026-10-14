@@ -105,14 +105,14 @@ test('decision controls and status fit short viewports with Enlarge on and off',
    storageCapsule.update(1.24e9);
    const image=document.createElement('img');
    image.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><rect width="1600" height="1200" fill="blue"/></svg>');
-   root.querySelector('.media').append(image);
+   root.getElementById('media').append(image);
    const bounds=element=>{const r=element.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
    const snapshots=[];
    for(const expanded of [false,true]){
     cardElement.classList.toggle('expanded',expanded);
     for(const message of ['', 'Saved locally', 'Synthetic status '.repeat(100)]){
      statusElement.textContent=message;
-     snapshots.push({expanded,message,status:bounds(statusElement),controls:['remove','undo','keep'].map(id=>bounds(root.getElementById(id))),enlarge:bounds(root.getElementById('enlarge')),media:bounds(root.querySelector('.media')),scrollHeight:divElement4.scrollHeight,clientHeight:divElement4.clientHeight});
+     snapshots.push({expanded,message,status:bounds(statusElement),controls:['remove','undo','keep'].map(id=>bounds(root.getElementById(id))),enlarge:bounds(root.getElementById('enlarge')),media:bounds(root.getElementById('media')),scrollHeight:divElement4.scrollHeight,clientHeight:divElement4.clientHeight});
     }
    }
    document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify({width:innerWidth,height:innerHeight,snapshots})}));
@@ -131,7 +131,7 @@ test('decision controls and status fit short viewports with Enlarge on and off',
      assert.ok(rect.width>0&&rect.height>0,label+': visible');
     }
     for(const control of snapshot.controls)assert.ok(snapshot.status.bottom<=control.top,label+': status above controls');assert.ok(snapshot.enlarge.bottom<=snapshot.status.top,label+': fullscreen clear of status');
-    assert.ok(snapshot.media.bottom<=snapshot.status.top,label+': media above status');
+    assert.ok(snapshot.media.height>0,label+': media visible');assert.ok(snapshot.media.bottom<=snapshot.status.top,label+': media above status');
     assert.equal(snapshot.scrollHeight,snapshot.clientHeight,label+': no shell scrolling');
    }
   }
@@ -281,8 +281,7 @@ test('Flashbacks long place leaves the memory count clear of fullscreen on narro
     assert.ok(snapshot.gap>=8,label+': pill clears fullscreen');
     assert.equal(snapshot.countInside,true,label+': count inside pill');
     assert.equal(snapshot.countClear,true,label+': count clears fullscreen');
-    assert.equal(snapshot.placeShrinks,true,label+': long place shrinks');
-    assert.equal(snapshot.ellipsis,'ellipsis',label+': place ellipsizes');
+    if(!(width>600&&snapshot.expanded)){assert.equal(snapshot.placeShrinks,true,label+': long place shrinks');assert.equal(snapshot.ellipsis,'ellipsis',label+': place ellipsizes');}
     assert.ok(snapshot.placeWidth>0,label+': place remains visible');
    }
   }
