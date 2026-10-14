@@ -57,6 +57,7 @@ test('outgoing visual copies are removed after animation while the original stay
  assert.ok(throwSwipe(original,1,240));
  assert.equal(appended,copy);
  assert.equal(removed,false);
+ assert.equal(copy.style.opacity,'0');
  assert.equal(copy.style.position,'fixed');
  assert.equal(copy.style.left,'10px');
  assert.equal(copy.style.top,'20px');
@@ -90,8 +91,10 @@ test('web card stack leaves backs, card shadows and keyboard focus outlines uncl
  }
 });
 
-test('cached outgoing geometry avoids release layout reads and computed style walks',async()=>{
+test('cached outgoing geometry avoids release layout reads and computed style walks',async t=>{
  const {throwSwipe}=await import('../public/swipe.js');
+ const computed=globalThis.getComputedStyle;globalThis.getComputedStyle=()=>assert.fail('Release must not walk computed styles');
+ t.after(()=>{globalThis.getComputedStyle=computed;});
  let frames,options;
  let mediaClass;
  const media={getAttribute:()=> 'media',classList:{add:value=>{mediaClass=value;}},removeAttribute(){}};
