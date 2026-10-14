@@ -110,6 +110,20 @@ test('upgrade plays attached and rendered and cleans up when playback is rejecte
  assert.equal(full.isConnected,false);assert.equal(full.src,'');assert.deepEqual(swaps,[]);assert.equal(video.src,smallerVideoURL(url));
 });
 
+test('pausing during a pending upgrade play preserves the swapped video after AbortError',async()=>{
+ const {video,full,swaps,errors}=setup();let rejectPlayback;
+ full.play=function(){this.paused=false;return new Promise((resolve,reject)=>{rejectPlayback=reject;});};
+ const pause=full.pause;
+ full.pause=function(){pause.call(this);rejectPlayback(new DOMException('Playback interrupted by pause','AbortError'));};
+ video.readyState=2;video.currentTime=3;video.emit('loadeddata');full.readyState=2;full.emit('canplay');full.emit('seeked');
+ assert.equal(swaps.length,0);
+ video.pause();full.emit('canplay');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(swaps,[full]);assert.equal(full.isConnected,true);assert.equal(full.src,url);assert.equal(full.paused,true);
+ assert.equal(full.currentTime,3);assert.equal(full.style.opacity,'');assert.equal(full.loads,1);assert.equal(video.src,'');assert.deepEqual(errors,[]);
+ full.onerror();assert.deepEqual(errors,['error']);
+});
+
 for(const event of ['loadeddata','canplay','playing','timeupdate','frame','warm'])test(`loading clears on ${event} without a new canplay`,()=>{
  const video=fakeVideo();let busy=true,frame;
  video.requestVideoFrameCallback=callback=>{frame=callback;};

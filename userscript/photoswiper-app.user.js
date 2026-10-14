@@ -870,7 +870,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   original=createVideo();const full=original;
   full.hidden=false;Object.assign(full.style,{position:'absolute',inset:'0',opacity:'0',pointerEvents:'none'});video.parentNode.append(full);full.preload='auto';full.muted=true;full.loop=video.loop;full.playsInline=true;full.poster=video.poster;
   let seekStart=0,seekAttempts=0;
-  const abandon=()=>{release(full);original=null;};
+  const abandon=()=>{if(finished||original!==full)return;release(full);original=null;};
   const align=()=>{
    if(finished||original!==full||!isActive()||full.readyState<2||seeking)return;
    if(Math.abs(full.currentTime-video.currentTime)>.04){if(seekAttempts>=8){abandon();return;}seekAttempts++;seekStart=full.currentTime;seeking=true;full.currentTime=video.currentTime;return;}
