@@ -70,7 +70,7 @@ test('mobile CSS prioritizes review and preserves labels while hiding keyboard h
  assert.match(css,/@media\(pointer:coarse\)\{\s*\.keyboard-hint\{display:none\}/);
 });
 
-const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
+const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version']).status===0);
 const chromeProbe=chrome?spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--dump-dom','about:blank'],{encoding:'utf8',timeout:10000}):null;
 const browserUnavailable=!chrome?'Chrome is not installed':chromeProbe.status!==0?'Chrome cannot launch in this environment':false;
 test('app layout preserves phone review priority, queue controls, and desktop spacing and focus order',{skip:browserUnavailable},async()=>{

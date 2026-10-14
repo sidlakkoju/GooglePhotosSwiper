@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process';
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
 const base=JSON.parse(source.match(/styleElement1\.append\(document\.createTextNode\((".*")\)\);/)[1]);
 const shell=source.match(/shellStyle\.textContent='([^']+)'/)[1];
-const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
+const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version']).status===0);
 
 test('status reserves space even when empty and bounds wrapping messages',()=>{
  assert.doesNotMatch(shell,/\.status:empty\{[^}]*display:none/);

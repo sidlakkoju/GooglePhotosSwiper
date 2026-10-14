@@ -50,7 +50,7 @@ test('video metadata has a visible footer outside the player and its native cont
  assert.doesNotMatch(css,/\.photo-card:has\(video\) \.photo-meta\{display:none\}/);
 });
 
-const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version']).status===0);
+const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version']).status===0);
 const probeDirectory=await mkdtemp(join(tmpdir(),'video-metadata-probe-'));
 const probe=chrome?spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu',`--user-data-dir=${probeDirectory}`,'--dump-dom','about:blank'],{encoding:'utf8',timeout:10000}):null;
 await rm(probeDirectory,{recursive:true,force:true});

@@ -8,7 +8,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {googleAuthRequest} from '../worker/src/google-auth.mjs';
 
-const chrome=['google-chrome','chromium','chromium-browser'].find(command=>spawnSync(command,['--version'],{stdio:'ignore'}).status===0);
+const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version'],{stdio:'ignore'}).status===0);
 
 test('browser applies injected GIS inline styles without CSP violations and blocks untrusted scripts',{skip:!chrome,timeout:30000},async()=>{
  const DB={prepare:()=>({bind:()=>({first:async()=>({nonce:'test-nonce',login_hint:null}),run:async()=>({})})})};
