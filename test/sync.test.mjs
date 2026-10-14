@@ -7,7 +7,7 @@ import {createSyncClient,markSyncChanges,reviewSyncProgress,rebuildSyncedReview,
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
- constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql','0003_review_items.sql','0004_google_sync.sql','0010_decision_keeps.sql','0011_review_items_updated.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
+ constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql','0003_review_items.sql','0004_google_sync.sql','0010_decision_keeps.sql','0011_review_items_updated.sql','0012_decision_changes.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
  prepare(sql){
   const statement=this.sqlite.prepare(sql);
   const bound=args=>({all:async()=>({results:statement.all(...args)}),first:async()=>statement.get(...args)||null,run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:Number(this.sqlite.prepare('SELECT changes() AS n').get().n)}})});
@@ -790,20 +790,20 @@ test('sync pulls by cursor, uploads deltas and never rereads all items for decis
  const e=env(),reads=[],bodies=[];
  const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{if(/FROM review_items WHERE scope = \?( AND updated_at >= \?)? ORDER BY/.test(sql))reads.push(sql.includes('updated_at >=')?'delta':'full');return prepare(sql);};
  const requests=[];
- const client=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname+(parsed.searchParams.has('since')?'?since':''));if(parsed.pathname==='/api/progress')bodies.push(JSON.parse(options.body));return syncRequest(new Request(url,options),e);}});
+ const client=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname+(parsed.searchParams.get('cursor')?'?cursor':''));if(parsed.pathname==='/api/progress')bodies.push(JSON.parse(options.body));return syncRequest(new Request(url,options),e);}});
  client.configure({url:'https://sync.example',token:'test-secret'});
  const library=Array.from({length:50},(_,index)=>({mediaKey:'item-'+index,type:'photo',state:'active',revision:0}));
  let state={started:true,items:library.map(item=>({...item})),history:[],syncDecisions:{},syncPending:{}};
  state=await client.sync('default',{...state,items:state.items.map((item,index)=>index<3?{...item,revision:1,lastDecisionAt:10+index}:item),syncPending:{'item-0':'keep','item-1':'remove','item-2':'keep'},syncPendingTimes:{'item-0':10,'item-1':11,'item-2':12}},async value=>value);
  assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-0','item-1','item-2']);
- assert.ok(Number.isSafeInteger(state.syncItemsCursor.at)&&state.syncItemsCursor.at>0);
+ assert.match(state.syncCursor.at,/^\d+\.[0-9a-z]+$/);
  assert.deepEqual(reads,[]);
  reads.length=0;requests.length=0;
  state=await client.sync('default',{...state,items:state.items.map(item=>item.mediaKey==='item-5'?{...item,revision:1,lastDecisionAt:20}:item),syncPending:{'item-5':'remove'},syncPendingTimes:{'item-5':20}},async value=>value);
- assert.deepEqual(requests,['/api/state?since','/api/decisions','/api/progress']);
+ assert.deepEqual(requests,['/api/state?cursor','/api/decisions','/api/progress']);
  assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-5']);
  assert.deepEqual(reads,['delta']);
- const other=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname+(parsed.searchParams.has('since')?'?since':''));return syncRequest(new Request(url,options),e);}});
+ const other=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname+(parsed.searchParams.get('cursor')?'?cursor':''));return syncRequest(new Request(url,options),e);}});
  other.configure({url:'https://sync.example',token:'test-secret-2'});
  requests.length=0;
  await other.sync('default',state,async value=>value).catch(()=>{});

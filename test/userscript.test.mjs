@@ -1,5 +1,5 @@
 import {LEASE_HEARTBEAT_MS,LEASE_EXPIRY_MS} from '../lib/userscript-db.mjs';
-import {SYNC_POLL_MS} from '../lib/userscript-sync.mjs';
+import {SYNC_POLL_MS,SYNC_PUSH_DELAY_MS} from '../lib/userscript-sync.mjs';
 import {injectRelease,verifyRelease,releaseMessage} from '../lib/userscript-loader.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -499,7 +499,7 @@ test('Undo after a synced Keep keeps its confirmation through the next sync',asy
  let scheduledSync,syncGate;
  const uploads=[];
  const mounted=await mountedReview([item('synthetic-undo')],{
-  setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
+  setTimeout(callback,delay){if(delay===SYNC_PUSH_DELAY_MS){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
   clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
   fetch:async(url,options)=>{
    assert.equal(new URL(url).origin,'https://sync.example');
@@ -1507,7 +1507,7 @@ test('stale tabs do not publish decisions or undo history on the hidden sync tim
   let scheduledSync;
   const requests=[];
   const mounted=await mountedReview([item('a'),item('b')],{
-   setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
+   setTimeout(callback,delay){if(delay===SYNC_PUSH_DELAY_MS){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
    clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
    fetch:async(url,options)=>{
     requests.push({url,options});
@@ -2991,7 +2991,7 @@ test('chained review undo uploads valid history and progress without remaining d
  const uploads=[];
  const remote={decisions:[],history:[],progress:{}};
  const mounted=await mountedReview([item('a'),item('b')],{
-  setTimeout(callback,delay){if(delay===2000){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
+  setTimeout(callback,delay){if(delay===SYNC_PUSH_DELAY_MS){scheduledSync=callback;return {unref(){}};}return setTimeout(callback,delay);},
   clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
   fetch:async(url,options)=>{
    const path=new URL(url).pathname,value=options.body?JSON.parse(options.body):null;
@@ -3731,11 +3731,29 @@ for(const trigger of ['heartbeat','focus','visible'])test(`open devices drop rem
  }finally{await mounted.nodes.get('close').onclick();}
 });
 
+test('the open app keeps the sync cursor and later pulls ask only for changes',async()=>{
+ const cursors=[];
+ const mounted=await mountedReview([item('synthetic-cursor')],{
+  fetch:async(url,options)=>{
+   const parsed=new URL(url);
+   if(parsed.pathname==='/api/state'){cursors.push(parsed.searchParams.get('cursor'));return {ok:true,json:async()=>cursors.length===1?{decisions:[],history:[],progress:{},cursor:'5.synthetic'}:{delta:true,decisions:[],progress:{},cursor:`${5+cursors.length}.synthetic`}};}
+   return {ok:true,json:async()=>parsed.pathname==='/api/progress'?{items:JSON.parse(options.body).items}:{ok:true}};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'});
+ try{
+  await waitForReview(async()=>cursors.length===1&&(await mounted.read()).syncCursor?.at==='5.synthetic');
+  await mounted.environment.window.listeners.focus();
+  await waitForReview(async()=>cursors.length===2);
+  assert.deepEqual(cursors,['','5.synthetic']);
+  await waitForReview(async()=>(await mounted.read()).syncCursor?.at==='7.synthetic');
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
 test('lease heartbeats between polls send unsent changes without pulling the full state',async()=>{
  const timers=new Map(),requests=[];let timerId=0;
  const remote={decisions:[],history:[],progress:{}};
  const mounted=await mountedReview([item('synthetic-first'),item('synthetic-second')],{
-  setTimeout(callback,delay){if(delay===2000)return {unref(){}};return setTimeout(callback,delay);},
+  setTimeout(callback,delay){if(delay===SYNC_PUSH_DELAY_MS)return {unref(){}};return setTimeout(callback,delay);},
   clearTimeout(timer){if(timer?.unref)return;clearTimeout(timer);},
   fetch:async(url,options)=>{
    const path=new URL(url).pathname,value=options.body?JSON.parse(options.body):null;

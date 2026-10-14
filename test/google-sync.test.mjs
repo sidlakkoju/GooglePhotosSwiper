@@ -572,6 +572,22 @@ test('one-time space linking applies the same timestamp and remove precedence as
  assert.equal((await (await api(linked.token,'trash-check','POST',{ids:['synthetic-newer-keep-vs-remove']})).json()).safe,false);
 });
 
+test('space linking reaches delta pulls on joined devices and resets cursors of moved devices',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys,SYNC_TOKEN:'synthetic-legacy-token'};
+ const existing=await signIn(env,'6'.repeat(43));
+ const api=(bearer,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+bearer},...(value?{body:JSON.stringify(value)}:{})}),env);
+ const joined=(await (await api(existing.token,'state?cursor=')).json()).cursor;
+ await api('synthetic-legacy-token','decisions','PUT',{decisions:[{id:'synthetic-moved',decision:'remove'}]});
+ const moved=(await (await api('synthetic-legacy-token','state?cursor=')).json()).cursor;
+ await signIn(env,'7'.repeat(43),'synthetic-legacy-token');
+ const delta=await (await api(existing.token,`state?cursor=${joined}`)).json();
+ assert.equal(delta.delta,true);
+ assert.deepEqual(delta.decisions,[{id:'synthetic-moved',decision:'remove'}]);
+ const reset=await (await api('synthetic-legacy-token',`state?cursor=${moved}`)).json();
+ assert.equal(reset.delta,undefined);
+ assert.deepEqual(reset.decisions,[{id:'synthetic-moved',decision:'remove'}]);
+ assert.notEqual(reset.cursor.split('.')[1],moved.split('.')[1]);
+});
 test('polling removes undo eligibility when another device owns the same keep decision',async()=>{
  const {createSyncClient,markSyncChanges}=await import('../lib/userscript-sync.mjs');
  const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};

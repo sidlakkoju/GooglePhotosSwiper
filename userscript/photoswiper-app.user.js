@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.94
+// @version 1.2.95
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -471,7 +471,8 @@ function mergeProgressItem(item,checkpoint) {
  return {...Object.fromEntries(Object.entries(item).filter(([field])=>!fields.includes(field))),...Object.fromEntries(fields.filter(field=>checkpoint[field]!==undefined).map(field=>[field,checkpoint[field]]))};
 }
 function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
- let settings={},blocked=false,firstSync=true;
+ let settings={},blocked=false,firstSync=true,failures=0,retryAt=0;
+ const failed=()=>{failures++;retryAt=Date.now()+Math.min(SYNC_BACKOFF_MS*2**(failures-1),SYNC_BACKOFF_MAX_MS);};
  const configure=value=>{settings=value||{};blocked=false;firstSync=true;status(settings.url&&settings.token?'Sync ready':'Sync off \u00b7 saved locally');};
  async function request(scope,path,method='GET',value,query={}) {
   if(blocked)throw Error('This device was unpaired.');
@@ -481,7 +482,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   try {
    const response=await fetch(url.href,{method,headers:{Authorization:`Bearer ${settings.token}`,...(value?{'Content-Type':'application/json'}:{})},...(value?{body:JSON.stringify(value)}:{}),credentials:'omit',referrerPolicy:'no-referrer',signal});
    if(response.status===401){blocked=true;status('This device was unpaired.');await unpaired();throw Error('This device was unpaired.');}
-   if(!response.ok)throw Error(`Sync HTTP ${response.status}`);
+   if(!response.ok)throw Object.assign(Error(`Sync HTTP ${response.status}`),{status:response.status});
    return await response.json();
   }catch(error){
    if(signal.aborted||error.name==='TimeoutError')throw Object.assign(Error('Sync timed out'),{name:'TimeoutError'});
@@ -501,22 +502,27 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
   };
   status('Syncing\u2026');
   let checkpoint=state;
-  const itemsKey=cursorKey(settings.token),cursor=state.syncItemsCursor?.key===itemsKey&&Number.isSafeInteger(state.syncItemsCursor.at)?state.syncItemsCursor.at:undefined;
+  const itemsKey=cursorKey(settings.token),cursor=state.syncCursor?.key===itemsKey&&typeof state.syncCursor.at==='string'&&state.syncDecisions&&(state.started||state.items.length||state.history.length)?state.syncCursor.at:'';
   try {
-   const remote=pull?await syncRequest(scope,'api/state','GET',undefined,cursor===undefined?{}:{since:cursor}):{decisions:Object.entries(state.syncDecisions||{}).map(([id,decision])=>({id,decision})),history:state.history,progress:state.syncProgress||{}};
-   let decisions={...Object.fromEntries(remote.decisions.map(item=>[item.id,item.decision]))},owners=remote.decisionOwners||{};
+   const remote=pull?await syncRequest(scope,'api/state','GET',undefined,{cursor}):{delta:true,decisions:[],progress:state.syncProgress||{}};
+   const decisions=remote.delta?{...state.syncDecisions}:{},owners={...remote.decisionOwners};
+   const applyDecisions=rows=>{for(const {id,decision} of rows)if(decision==null)delete decisions[id];else decisions[id]=decision;};
+   applyDecisions(remote.decisions);
    const pending={...state.syncPending},pendingTimes={...state.syncPendingTimes};
    if(state.syncDecisions==null)for(const item of state.items)if(item.decision&&!Object.hasOwn(pending,item.mediaKey)){pending[item.mediaKey]=item.decision;pendingTimes[item.mediaKey]=item.lastDecisionAt??0;}
    const dirty=state.syncDirty||!state.syncDecisions&&state.history.length>0;
    const historyKeys=new Set([...(state.syncHistoryKeys||[]),...Object.keys(pending),...(dirty?state.history.map(entry=>entry.key):[])]);
    const remaining={...pending};
    for(const batch of decisionBatches(pending,pendingTimes,state.syncPendingUndo)){
-    const accepted=await syncRequest(scope,'api/decisions','PUT',{decisions:batch});
-    for(const {id,decision} of batch){delete remaining[id];if(decision===null)delete decisions[id];else decisions[id]=decision;}
-    if(accepted.merged&&accepted.decisions){decisions=Object.fromEntries(accepted.decisions.map(item=>[item.id,item.decision]));owners=accepted.decisionOwners||owners;}
+    const accepted=await syncRequest(scope,'api/decisions','PUT',{decisions:batch},{delta:1});
+    for(const {id} of batch)delete remaining[id];
+    applyDecisions(batch);
+    if(accepted.delta&&Array.isArray(accepted.decisions)){applyDecisions(accepted.decisions);Object.assign(owners,accepted.decisionOwners);}
+    else if(accepted.merged&&accepted.decisions){for(const id of Object.keys(decisions))delete decisions[id];applyDecisions(accepted.decisions);Object.assign(owners,accepted.decisionOwners);}
     checkpoint={...state,syncDecisions:{...decisions},syncPending:{...remaining},syncPendingTimes:pendingTimes,syncDirty:dirty,syncHistoryKeys:[...historyKeys]};
    }
-   const history=(dirty?mergeHistory(remote.history,state.history,historyKeys):remote.history).filter(entry=>owners[entry.key]!==false).slice(-2000);
+   const remoteHistory=remote.delta?null:remote.history,historyBase=remoteHistory||state.syncHistory;
+   const history=(remoteHistory?dirty?mergeHistory(remoteHistory,state.history,historyKeys):remoteHistory:state.history).filter(entry=>owners[entry.key]!==false).slice(-2000);
    const checkpointItems=new Map((remote.progress.items||[]).map(item=>[item.mediaKey,item]));
    const checkpointRevisions=new Map([...checkpointItems].map(([key,item])=>[key,item.revision||0]));
    const mergedItems=state.items.map(item=>{
@@ -540,31 +546,46 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    const {items:checkpointList,...checkpointMetadata}=state.syncCheckpoint||{},{items:progressList,...progressMetadata}=progress;
    const changedItems=changedProgressItems(progressList,Array.isArray(checkpointList)?checkpointList:[]);
    const progressDirty=dirty||(changedItems.length>0||JSON.stringify(progressMetadata)!==JSON.stringify(checkpointMetadata))&&state.items.length>0;
-   let writeError=null;
+   let writeError=null,historySynced=false;
+   const accepted=new Map();
    try{
-    if(dirty)await syncRequest(scope,'api/undo','PUT',{history});
+    if(dirty){
+     const patch=historyBase&&historyPatch(historyBase,history),body=patch&&{action:'patch',base:cursorKey(JSON.stringify(historyBase)),...patch};
+     let patched=false;
+     if(body&&new TextEncoder().encode(JSON.stringify(body)).length<=262144){
+      try{patched=(await syncRequest(scope,'api/undo','POST',body)).length===history.length;}catch(error){if(error.status!==409)throw error;}
+     }
+     if(!patched)await syncRequest(scope,'api/undo','PUT',{history});
+     historySynced=true;
+    }
     if(progressDirty){
-     const accepted=new Map();
      for(const batch of progressBatches({...progress,items:changedItems})){
       const result=await syncRequest(scope,'api/progress','PUT',batch);
       const items=result.items||(await syncRequest(scope,'api/state')).progress.items;
       if(!Array.isArray(items)||batch.items.some(item=>!items.some(row=>row.mediaKey===item.mediaKey)))throw Error('Unconfirmed sync');
       for(const item of items)accepted.set(item.mediaKey,item);
      }
-     next={...next,items:next.items.map(item=>accepted.has(item.mediaKey)?mergeProgressItem(item,accepted.get(item.mediaKey)):item)};
-     progress.items=reviewSyncProgress(next,decisions).items;
     }
    }catch(error){writeError=error;}
-   next=await save({...next,syncPending:{},syncPendingTimes:{},syncPendingUndo:{},syncDirty:writeError?!!dirty:false,syncHistoryKeys:writeError?[...historyKeys]:[],syncProgress:Object.fromEntries(Object.entries(remote.progress||{}).filter(([key])=>key!=='items')),syncCheckpoint:writeError?state.syncCheckpoint:{...progress,items:progress.items.filter(syncedItemWorthKeeping)},...(pull&&Number.isSafeInteger(remote.itemsCursor)?{syncItemsCursor:{key:itemsKey,at:remote.itemsCursor}}:{})});
-   if(writeError){if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
+   if(accepted.size){
+    next={...next,items:next.items.map(item=>accepted.has(item.mediaKey)?mergeProgressItem(item,accepted.get(item.mediaKey)):item)};
+    progress.items=reviewSyncProgress(next,decisions).items;
+   }
+   const confirmed=new Map(progress.items.filter(item=>accepted.has(item.mediaKey)).map(item=>[item.mediaKey,item]));
+   const syncCheckpoint=!writeError?{...progress,items:progress.items.filter(syncedItemWorthKeeping)}:confirmed.size?{...checkpointMetadata,items:[...(Array.isArray(checkpointList)?checkpointList:[]).filter(item=>!confirmed.has(item.mediaKey)),...[...confirmed.values()].filter(syncedItemWorthKeeping)]}:state.syncCheckpoint;
+   const unsynced=!!writeError&&!historySynced;
+   const {syncItemsCursor,...saved}=next;
+   next=await save({...saved,syncPending:{},syncPendingTimes:{},syncPendingUndo:{},syncDirty:unsynced&&!!dirty,syncHistoryKeys:unsynced?[...historyKeys]:[],syncHistory:historySynced?history:historyBase,syncProgress:Object.fromEntries(Object.entries(remote.progress||{}).filter(([key])=>key!=='items')),syncCheckpoint,...(pull&&typeof remote.cursor==='string'?{syncCursor:{key:itemsKey,at:remote.cursor}}:{})});
+   if(writeError){failed();if(!blocked)status(`${writeError.message} \u00b7 pull saved locally; retry on next action`);return next;}
+   failures=0;retryAt=0;
    status(`Synced \u00b7 ${Object.keys(decisions).length} reviewed IDs`);return next;
-  }catch(error){if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
+  }catch(error){failed();if(!blocked)status(`${error.message} \u00b7 saved locally; retry on next action`);return checkpoint===state?state:await save(checkpoint);}
  }
- return {configure,sync,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST')};
+ return {configure,sync,ready:(now=Date.now())=>now>=retryAt,trashCheck:(scope,ids)=>request(scope,'api/trash-check','POST',{ids}),devices:()=>request('default','api/devices'),rename:(id,name)=>request('default',`api/devices/${encodeURIComponent(id)}`,'PATCH',{name}),revoke:id=>request('default',`api/devices/${encodeURIComponent(id)}`,'DELETE'),revokeOthers:()=>request('default','api/devices/revoke-others','POST')};
 }
-const SYNC_POLL_MS=60000;
-function heartbeatSync(state,lastPullAt,now){
- if(now-lastPullAt>=SYNC_POLL_MS)return 'pull';
+const SYNC_POLL_MS=60000,SYNC_IDLE_POLL_MS=300000,SYNC_IDLE_AFTER_MS=120000,SYNC_PUSH_DELAY_MS=5000,SYNC_BACKOFF_MS=5000,SYNC_BACKOFF_MAX_MS=300000;
+function heartbeatSync(state,lastPullAt,now,activeAt=now){
+ if(now-lastPullAt>=(now-activeAt<SYNC_IDLE_AFTER_MS?SYNC_POLL_MS:SYNC_IDLE_POLL_MS))return 'pull';
  return state.syncDirty||Object.keys(state.syncPending||{}).length?'push':null;
 }
 function markSyncChanges(previous,next) {
@@ -609,6 +630,17 @@ async function rebuildSyncedReview(state,call) {
  return {...state,items:[...items.values()],started:true,cursor,exhausted};
 }
 
+function historyPatch(base,next) {
+ const before=base.map(entry=>JSON.stringify(entry)),after=next.map(entry=>JSON.stringify(entry));
+ let start=0,end=0;
+ for(let index=0;index<before.length;index++){
+  if(before[index]!==after[0])continue;
+  let run=1;while(index+run<before.length&&run<after.length&&before[index+run]===after[run])run++;
+  if(run>end-start){start=index;end=index+run;}
+  if(index+run===before.length)break;
+ }
+ return end>start?{start,end,append:next.slice(end-start)}:null;
+}
 function mergeHistory(remote,local,keys) {
  return [...remote.filter(entry=>!keys.has(entry.key)),...local.filter(entry=>keys.has(entry.key))];
 }
@@ -624,7 +656,7 @@ function mergeSyncResult(current,snapshot,synced) {
  const existing=new Set(items.map(item=>item.mediaKey));
  for(const item of synced.items)if(!existing.has(item.mediaKey))items.push(item);
  const recovered=!snapshot.started&&!snapshot.items.length&&synced.started;
- return {...current,swipeCount:Math.max(reviewSwipeCount(current),reviewSwipeCount(synced)),...(recovered?{started:synced.started,cursor:synced.cursor,exhausted:synced.exhausted}:{}),lifetimeFreed:Math.max(current.lifetimeFreed||0,synced.lifetimeFreed||0),syncProgress:synced.syncProgress,syncCheckpoint:synced.syncCheckpoint,items,history,syncDecisions:synced.syncDecisions,syncPending:pending,syncPendingTimes:{...synced.syncPendingTimes,...Object.fromEntries([...changed].filter(key=>Object.hasOwn(current.syncPendingTimes||{},key)).map(key=>[key,current.syncPendingTimes[key]]))},syncPendingUndo:{...synced.syncPendingUndo,...Object.fromEntries([...changed].filter(key=>Object.hasOwn(current.syncPendingUndo||{},key)).map(key=>[key,current.syncPendingUndo[key]]))},syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
+ return {...current,swipeCount:Math.max(reviewSwipeCount(current),reviewSwipeCount(synced)),...(recovered?{started:synced.started,cursor:synced.cursor,exhausted:synced.exhausted}:{}),lifetimeFreed:Math.max(current.lifetimeFreed||0,synced.lifetimeFreed||0),syncProgress:synced.syncProgress,syncCheckpoint:synced.syncCheckpoint,syncCursor:synced.syncCursor,syncHistory:synced.syncHistory,items,history,syncDecisions:synced.syncDecisions,syncPending:pending,syncPendingTimes:{...synced.syncPendingTimes,...Object.fromEntries([...changed].filter(key=>Object.hasOwn(current.syncPendingTimes||{},key)).map(key=>[key,current.syncPendingTimes[key]]))},syncPendingUndo:{...synced.syncPendingUndo,...Object.fromEntries([...changed].filter(key=>Object.hasOwn(current.syncPendingUndo||{},key)).map(key=>[key,current.syncPendingUndo[key]]))},syncHistoryKeys:[...new Set([...(synced.syncHistoryKeys||[]),...changed])],syncDirty:!!synced.syncDirty||JSON.stringify(history)!==JSON.stringify(synced.history)};
 }
 function decisionBatches(pending,times={},undos={}) {
  const batches=[];let batch=[],bytes=16;
@@ -1609,7 +1641,7 @@ function mountPhotosSwipe(environment) {
  const googleSignInResumed=resumeGoogleSignIn();
  let pageActive=true,suspendingPromise=null,resumeOpening=false;
  let sessionClosing=false;
- let lastPullAt=0,leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false,takeoverPending=false;
+ let lastPullAt=0,activeAt=Date.now(),leaseTimer,syncTimer,openingPromise=null,closingPromise=null,activeOperation=null,syncRunning=null,decisionCount=0,writeRevision=0,leaseTicks=0,writeConflict=null,leaseGeneration=0,acquiringAccount=null,otherTab=false,takeoverPending=false;
  const useHere=document.createElement('button');useHere.setAttribute('id','use-here');useHere.textContent='Use here';useHere.hidden=true;useHere.onclick=()=>open(true);
  const createWrites=()=>createWriteQueue({snapshot:()=>({...state,revision:writeRevision}),write:async next=>{await assertSaveAccount();if(writeConflict)throw writeConflict;if(leaseError)throw leaseError;return db.save(identity.account,next);},committed:(saved,value,duration)=>{if(window.localStorage?.psDebug==='1')window.console?.table({persistenceMs:duration});writeRevision=saved.revision;state={...state,revision:writeRevision};persistedItems=value.items;while(refreshedItems.has(persistedItems))persistedItems=refreshedItems.get(persistedItems);if(state.items===persistedItems)persistResume();},error:error=>{if(error.message.includes('Progress changed in another tab'))writeConflict=error;message(leaseError?leaseError.message:writeConflict?'Local save conflict. Unsaved decisions remain visible. Reload the page to read the other tab\u2019s progress; unsaved decisions will be lost.':`Local save failed: ${error.message} \u00b7 pending changes will retry.`);}});
  const refreshedItems=new WeakMap();
@@ -1637,8 +1669,9 @@ function mountPhotosSwipe(environment) {
  function scheduleSync(){
   if(!syncEnabled||sessionClosing||otherTab)return;
   window.clearTimeout(syncTimer);
-  if(++decisionCount>=10&&!busy&&!activeOperation){decisionCount=0;synchronize(false);}
-  else syncTimer=window.setTimeout(()=>{decisionCount=0;if(!busy&&!activeOperation)synchronize(false);},2000);
+  activeAt=Date.now();
+  if(++decisionCount>=10&&!busy&&!activeOperation&&syncClient.ready()){decisionCount=0;synchronize(false);}
+  else syncTimer=window.setTimeout(()=>{decisionCount=0;if(!busy&&!activeOperation&&syncClient.ready())synchronize(false);},SYNC_PUSH_DELAY_MS);
   syncTimer?.unref?.();
  }
  function apply(next,removedKey){state=markSyncChanges(state,next);if(removedKey&&deckCache){deckCache=deckCache.filter(item=>item.mediaKey!==removedKey);deckItems=state.items;}render();writes.enqueue();scheduleSync();}
@@ -1728,7 +1761,7 @@ function mountPhotosSwipe(environment) {
   if(!await renewLease()||token!==leaseGeneration)return;
   if(recovering){if(busy||activeOperation||syncRunning||closingPromise||$('overlay').hidden)return;await open();return;}
   if(!busy&&!activeOperation&&!syncRunning){writes.flush();refill();}
-  if(syncEnabled&&!busy&&!activeOperation&&!syncRunning&&!$('overlay').hidden){const mode=heartbeatSync(state,lastPullAt,Date.now());if(mode)synchronize(mode==='pull');}
+  if(syncEnabled&&!busy&&!activeOperation&&!syncRunning&&!$('overlay').hidden&&syncClient.ready()){const mode=heartbeatSync(state,lastPullAt,Date.now(),activeAt);if(mode)synchronize(mode==='pull');}
  }
  async function withAccountLease(task) {
   if(!await renewLease(true))throw leaseError||sessionChanged();
@@ -2089,6 +2122,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    $('close').focus();message('Reading local progress\u2026');
    state=await db.read(identity.account);writeRevision=state.revision;persistedItems=state.items;
    resume=await db.resume(identity.account);$('filter').value=resume.filter||'all';$('sort').value=resume.sort||'flashbacks';reviewEvery.value=String(resume.reviewEvery||25);bringBackInput.checked=resume.bringBackKept!==false;deleteMethod.value='trash';trashOptIn.checked=true;focused=resume.currentId||null;inspected=resume.inspected&&state.items.some(item=>item.mediaKey===focused)?focused:null;const missing=focused&&!state.items.some(item=>item.mediaKey===focused&&item.state==='active');if(missing){focused=null;inspected=null;}
+   activeAt=Date.now();
    if(syncEnabled)await synchronize();
    if(!pageVisible()||sessionGeneration!==leaseGeneration)return;
    leaseRecoveryPending=false;takeoverPending=false;
@@ -2219,8 +2253,8 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  if(tabChannel)tabChannel.onmessage=async({data})=>{if(!identity||data?.account!==identity.account||data.owner===owner||!pageVisible()||$('overlay').hidden)return;try{await refreshLease();}catch{}};
  for(const event of ['pagehide','unload'])window.addEventListener(event,leavePage);
- window.addEventListener('focus',async()=>{if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){await refreshLease();if(!otherTab)await synchronize();}});
- document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();clearPreviewWindow();dropWarmVideo();}else{pageActive=true;if(openingPromise&&!$('overlay').hidden)resumeOpening=true;else if(leaseRecoveryPending&&!identity&&!$('overlay').hidden&&!closingPromise)open();if(identity&&!$('overlay').hidden){lastPullAt=0;resumeLease();}}});
+ window.addEventListener('focus',async()=>{activeAt=Date.now();if(identity&&!busy&&!activeOperation&&!$('overlay').hidden){await refreshLease();if(!otherTab)await synchronize();}});
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden){captureVideo();suspendPage();clearPreviewWindow();dropWarmVideo();}else{pageActive=true;if(openingPromise&&!$('overlay').hidden)resumeOpening=true;else if(leaseRecoveryPending&&!identity&&!$('overlay').hidden&&!closingPromise)open();if(identity&&!$('overlay').hidden){lastPullAt=0;activeAt=Date.now();resumeLease();}}});
  window.addEventListener('pageshow',function restorePage(){pageActive=true;if(!document.hidden&&!$('overlay').hidden){if(openingPromise)resumeOpening=true;return open();}});
  function editingFieldFocused(event){
   const editable=element=>['INPUT','SELECT','TEXTAREA'].includes(element?.tagName)||element?.isContentEditable;
@@ -2256,7 +2290,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.94":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.95":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
