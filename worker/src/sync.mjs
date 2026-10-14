@@ -61,21 +61,26 @@ export async function syncRequest(request,env={}) {
   const writeDecision=(id,value,updatedAt,undo)=>db.batch(decisionStatements(id,value,updatedAt,undo));
 
   const route=url.pathname,method=request.method;
-  const read=async({items:includeItems=true}={})=>{
+  const read=async({items:includeItems=true,since}={})=>{
    const rows=await db.prepare('SELECT id, decision FROM decisions WHERE scope = ?').bind(scope).all();
    const record=await db.prepare('SELECT progress, history FROM review_state WHERE scope = ?').bind(scope).first();
    const ownHistory=await db.prepare('SELECT history FROM review_state WHERE scope = ?').bind(historyScope).first();
    const progress=record?JSON.parse(record.progress):{};
-   if(Object.hasOwn(progress,'items')&&!includeItems)delete progress.items;
-   else if(Object.hasOwn(progress,'items')){
-    const items=await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all();
-    progress.items=items.results.map(item=>JSON.parse(item.data));
-   }
+   let itemsCursor;
+   if(includeItems){
+    itemsCursor=(await db.prepare("SELECT CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AS now").first()).now;
+    if(Object.hasOwn(progress,'items')){
+     const items=since===undefined?await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all():await db.prepare('SELECT data FROM review_items WHERE scope = ? AND updated_at >= ? ORDER BY updated_at').bind(scope,Math.max(0,since-1000)).all();
+     progress.items=items.results.map(item=>JSON.parse(item.data));
+    }
+   }else delete progress.items;
    const versions=await db.prepare('SELECT id,device_id FROM decision_versions WHERE scope = ?').bind(scope).all();
-   return {decisions:rows.results,progress,history:ownHistory?JSON.parse(ownHistory.history):[],...(mapping&&mapping.space!=='legacy'?{decisionOwners:Object.fromEntries(versions.results.map(row=>[row.id,row.device_id===device.id]))}:{})};
+   return {decisions:rows.results,progress,...(itemsCursor===undefined?{}:{itemsCursor}),history:ownHistory?JSON.parse(ownHistory.history):[],...(mapping&&mapping.space!=='legacy'?{decisionOwners:Object.fromEntries(versions.results.map(row=>[row.id,row.device_id===device.id]))}:{})};
   };
   if(route==='/api/state'&&method==='GET'){
-   return respond(await read());
+   const since=url.searchParams.get('since');
+   if(since!==null&&!/^\d{1,15}$/.test(since))return respond({error:'Invalid since'},400);
+   return respond(await read({since:since===null?undefined:Number(since)}));
   }
   if(route==='/api/decisions'&&method==='PUT'){
    const value=await body(request);
@@ -103,7 +108,7 @@ export async function syncRequest(request,env={}) {
    if(route==='/api/progress'){
     if(!value||Object.keys(value).some(key=>!['started','reviewed','items','lifetimeFreed','swipeCount'].includes(key))||Object.hasOwn(value,'swipeCount')&&(!Number.isSafeInteger(value.swipeCount)||value.swipeCount<0)||typeof value.started!=='boolean'||!Number.isSafeInteger(value.reviewed)||value.reviewed<0||Object.hasOwn(value,'items')&&!progressItemsValid(value.items)||Object.hasOwn(value,'lifetimeFreed')&&(!Number.isSafeInteger(value.lifetimeFreed)||value.lifetimeFreed<0))throw Error('Invalid progress');
     const incoming=JSON.stringify({...value,...(Object.hasOwn(value,'items')?{items:[]}:{})});
-    const statements=(value.items||[]).map(item=>db.prepare("INSERT INTO review_items (scope, id, data) VALUES (?, ?, ?) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data WHERE COALESCE(json_extract(review_items.data, '$.state'),'active') != 'in_trash' AND (json_extract(excluded.data, '$.state') = 'in_trash' OR COALESCE(json_extract(excluded.data, '$.revision'), 0) > COALESCE(json_extract(review_items.data, '$.revision'), 0))").bind(scope,item.mediaKey,JSON.stringify(item)));
+    const statements=(value.items||[]).map(item=>db.prepare("INSERT INTO review_items (scope, id, data, updated_at) VALUES (?, ?, ?, CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)) ON CONFLICT(scope, id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE COALESCE(json_extract(review_items.data, '$.state'),'active') != 'in_trash' AND (json_extract(excluded.data, '$.state') = 'in_trash' OR COALESCE(json_extract(excluded.data, '$.revision'), 0) > COALESCE(json_extract(review_items.data, '$.revision'), 0))").bind(scope,item.mediaKey,JSON.stringify(item)));
     for(let index=0;index<statements.length;index+=100)await db.batch(statements.slice(index,index+100));
     await db.prepare('UPDATE review_state SET progress = json_patch(progress, ?) WHERE scope = ?').bind(incoming,scope).run();
     const items=[];

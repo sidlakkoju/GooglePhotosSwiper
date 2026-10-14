@@ -7,7 +7,7 @@ import {createSyncClient,markSyncChanges,reviewSyncProgress,rebuildSyncedReview,
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
- constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql','0003_review_items.sql','0004_google_sync.sql','0010_decision_keeps.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
+ constructor(){this.sqlite=new DatabaseSync(':memory:');for(const file of ['0001_init.sql','0002_pairing.sql','0003_review_items.sql','0004_google_sync.sql','0010_decision_keeps.sql','0011_review_items_updated.sql'])this.sqlite.exec(readFileSync(new URL(`../worker/migrations/${file}`,import.meta.url),'utf8'));}
  prepare(sql){
   const statement=this.sqlite.prepare(sql);
   const bound=args=>({all:async()=>({results:statement.all(...args)}),first:async()=>statement.get(...args)||null,run:async()=>statement.run(...args),execute:()=>({results:statement.all(...args),meta:{changes:Number(this.sqlite.prepare('SELECT changes() AS n').get().n)}})});
@@ -31,8 +31,12 @@ test('D1 routes persist decisions, progress and undo within scopes',async()=>{
  const e=env();assert.equal((await call(e,'decisions/item','PUT',{decision:'keep'})).status,200);
  await call(e,'progress','PUT',{started:true,reviewed:1});
  const entry={key:'item',previous:null,decision:'keep',revision:1};await call(e,'undo','POST',{action:'push',entry});
- assert.deepEqual(await (await call(e,'state')).json(),{decisions:[{id:'item',decision:'keep'}],progress:{started:true,reviewed:1},history:[entry]});
- assert.deepEqual(await (await call(e,'state?scope=another')).json(),{decisions:[],progress:{},history:[]});
+ const {itemsCursor,...own}=await (await call(e,'state')).json();
+ assert.ok(Number.isSafeInteger(itemsCursor)&&itemsCursor>0);
+ assert.deepEqual(own,{decisions:[{id:'item',decision:'keep'}],progress:{started:true,reviewed:1},history:[entry]});
+ const {itemsCursor:anotherCursor,...another}=await (await call(e,'state?scope=another')).json();
+ assert.ok(Number.isSafeInteger(anotherCursor));
+ assert.deepEqual(another,{decisions:[],progress:{},history:[]});
  await call(e,'undo','POST',{action:'pop'});await call(e,'decisions/item','DELETE');
  assert.deepEqual((await (await call(e,'state')).json()).history,[]);
  assert.deepEqual(await (await call(e,'progress')).json(),{started:true,reviewed:1});
@@ -782,25 +786,59 @@ test('only changed reviewed, queued or trashed items are uploaded',()=>{
  assert.deepEqual(changedProgressItems([{...unreviewed,size:10}],[unreviewed]),[]);
 });
 
-test('sync uploads deltas and decision uploads never reread all items',async()=>{
+test('sync pulls by cursor, uploads deltas and never rereads all items for decisions',async()=>{
  const e=env(),reads=[],bodies=[];
- const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{if(/FROM review_items WHERE scope = \? ORDER BY/.test(sql))reads.push('full');return prepare(sql);};
+ const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{if(/FROM review_items WHERE scope = \?( AND updated_at >= \?)? ORDER BY/.test(sql))reads.push(sql.includes('updated_at >=')?'delta':'full');return prepare(sql);};
  const requests=[];
- const client=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname);if(parsed.pathname==='/api/progress')bodies.push(JSON.parse(options.body));return syncRequest(new Request(url,options),e);}});
+ const client=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname+(parsed.searchParams.has('since')?'?since':''));if(parsed.pathname==='/api/progress')bodies.push(JSON.parse(options.body));return syncRequest(new Request(url,options),e);}});
  client.configure({url:'https://sync.example',token:'test-secret'});
  const library=Array.from({length:50},(_,index)=>({mediaKey:'item-'+index,type:'photo',state:'active',revision:0}));
  let state={started:true,items:library.map(item=>({...item})),history:[],syncDecisions:{},syncPending:{}};
  state=await client.sync('default',{...state,items:state.items.map((item,index)=>index<3?{...item,revision:1,lastDecisionAt:10+index}:item),syncPending:{'item-0':'keep','item-1':'remove','item-2':'keep'},syncPendingTimes:{'item-0':10,'item-1':11,'item-2':12}},async value=>value);
  assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-0','item-1','item-2']);
+ assert.ok(Number.isSafeInteger(state.syncItemsCursor.at)&&state.syncItemsCursor.at>0);
  assert.deepEqual(reads,[]);
  reads.length=0;requests.length=0;
  state=await client.sync('default',{...state,items:state.items.map(item=>item.mediaKey==='item-5'?{...item,revision:1,lastDecisionAt:20}:item),syncPending:{'item-5':'remove'},syncPendingTimes:{'item-5':20}},async value=>value);
- assert.deepEqual(requests,['/api/state','/api/decisions','/api/progress']);
+ assert.deepEqual(requests,['/api/state?since','/api/decisions','/api/progress']);
  assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-5']);
- assert.deepEqual(reads,['full']);
- const decisions=await (await call(e,'decisions','PUT',{decisions:[{id:'item-9',decision:'keep'}]})).json();
+ assert.deepEqual(reads,['delta']);
+ const other=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname+(parsed.searchParams.has('since')?'?since':''));return syncRequest(new Request(url,options),e);}});
+ other.configure({url:'https://sync.example',token:'test-secret-2'});
+ requests.length=0;
+ await other.sync('default',state,async value=>value).catch(()=>{});
+ assert.equal(requests[0],'/api/state');
+});
+
+test('state pulls with since return only rows changed at or after the cursor',async()=>{
+ const e=env();
+ await call(e,'progress','PUT',{started:true,reviewed:1,items:[{mediaKey:'a',state:'active',revision:1}]});
+ const first=await (await call(e,'state')).json();
+ assert.deepEqual(first.progress.items.map(item=>item.mediaKey),['a']);
+ e.DB.sqlite.exec("UPDATE review_items SET updated_at = updated_at - 5000");
+ const cursor=first.itemsCursor-5000;
+ await call(e,'progress','PUT',{started:true,reviewed:2,items:[{mediaKey:'b',state:'active',revision:1}]});
+ const delta=await (await call(e,`state?since=${cursor+2000}`)).json();
+ assert.deepEqual(delta.progress.items.map(item=>item.mediaKey),['b']);
+ assert.ok(delta.itemsCursor>=cursor);
+ assert.equal((await call(e,'state?since=abc')).status,400);
+ const decisions=await (await call(e,'decisions','PUT',{decisions:[{id:'a',decision:'keep'}]})).json();
  assert.equal(decisions.progress,undefined);
- assert.deepEqual(reads,['full']);
+});
+
+test('rows from before migration 0011 are pulled once and then skipped by cursor pulls',async()=>{
+ const e=env(),reads=[];
+ await call(e,'progress','PUT',{started:true,reviewed:2,items:[{mediaKey:'a',state:'active',revision:1},{mediaKey:'b',state:'active',revision:1}]});
+ e.DB.sqlite.exec('UPDATE review_items SET updated_at = 0');
+ const first=await (await call(e,'state')).json();
+ assert.deepEqual(first.progress.items.map(item=>item.mediaKey),['a','b']);
+ const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{const statement=prepare(sql);if(!/FROM review_items WHERE scope = \? AND updated_at >= \?/.test(sql))return statement;return {bind:(...args)=>{const bound=statement.bind(...args);return {...bound,all:async()=>{const result=await bound.all();reads.push(result.results.length);return result;}};}};};
+ const second=await (await call(e,`state?since=${first.itemsCursor}`)).json();
+ assert.deepEqual(second.progress.items,[]);assert.deepEqual(reads,[0]);
+ assert.ok(second.itemsCursor>=first.itemsCursor);
+ await call(e,'progress','PUT',{started:true,reviewed:3,items:[{mediaKey:'c',state:'active',revision:1}]});
+ const third=await (await call(e,`state?since=${second.itemsCursor}`)).json();
+ assert.deepEqual(third.progress.items.map(item=>item.mediaKey),['c']);
 });
 
 test('saved sync state keeps only sync-relevant checkpoint items and no pulled item copies',async()=>{
