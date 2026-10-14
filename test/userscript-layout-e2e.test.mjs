@@ -90,3 +90,34 @@ for(const [width,height] of [[1280,900],[393,852]])for(const id of ['keep','remo
  assert.equal(during.overlay,true);assert.equal(during.page,true);assert.equal(during.fixed,false);
  assert.deepEqual(during.card,before);
 });
+
+test('the first-run coach shows on an untouched deck and leaves after the first decision',async t=>{
+ const page=await mount(t,{width:393,height:852,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const first=await measure(page,`const coach=q('.coach');return {hidden:coach.hidden,text:coach.textContent,box:box(coach),card:box('#card'),pointer:getComputedStyle(coach).pointerEvents};`);
+ assert.equal(first.hidden,false);assert.match(first.text,/Delete/);assert.match(first.text,/Keep/);assert.equal(first.pointer,'none');
+ assert.ok(first.box.width>0&&first.box.y>=first.card.y&&first.box.y+first.box.height<=first.card.y+first.card.height+1);
+ await measure(page,`root.getElementById('keep').click();`);
+ await page.waitForTimeout(100);
+ assert.equal(await measure(page,`return q('.coach').hidden;`),true);
+});
+
+test('routine messages fade out while errors stay until tapped, and delete is red',async t=>{
+ const page=await mount(t,{width:1280,height:900,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ await measure(page,`root.getElementById('keep').click();`);
+ await page.waitForTimeout(50);
+ const routine=await measure(page,`const status=q('#status');const animations=status.getAnimations();for(const animation of animations)animation.finish();return {text:status.textContent,classes:status.className,animations:animations.length,opacity:getComputedStyle(status).opacity};`);
+ assert.match(routine.text,/Kept/);assert.match(routine.classes,/toast-show/);assert.ok(routine.animations>0);assert.equal(routine.opacity,'0');
+ await measure(page,`const status=q('#status');status.textContent='';status.className='status';`);
+ await measure(page,`root.getElementById('trash').click();`);
+ await page.waitForTimeout(400);
+ const error=await measure(page,`const status=q('#status');return {text:status.textContent,classes:status.className,opacity:getComputedStyle(status).opacity};`);
+ assert.match(error.classes,/toast-sticky/,error.text);
+ {
+  assert.equal(error.opacity,'1');
+  await measure(page,`q('#status').click();`);
+  const dismissed=await measure(page,`const status=q('#status');for(const animation of status.getAnimations())animation.finish();return {classes:status.className,opacity:getComputedStyle(status).opacity};`);
+  assert.match(dismissed.classes,/toast-show/);assert.equal(dismissed.opacity,'0');
+ }
+ const colors=await measure(page,`return {remove:getComputedStyle(q('#remove')).color,badge:getComputedStyle(q('.trash-badge')).backgroundColor};`);
+ assert.match(colors.remove,/rgb\(255, 59, 48\)|rgb\(255, 69, 58\)/);assert.equal(colors.badge,colors.remove);
+});
