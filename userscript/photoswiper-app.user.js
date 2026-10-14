@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.89
+// @version 1.2.90
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -290,8 +290,9 @@ function recordReviewDecision(state,item,decision,now=Date.now()) {
 
 const reviewOrders=[['flashbacks','Flashbacks','\u2928'],['original','Timeline','\u25f7'],['oldest','Oldest first','\u2191'],['largest','Largest first','\u25a3']];
 function reviewMemories(items){
- const dated=[...items].sort((a,b)=>(Date.parse(a.date)||0)-(Date.parse(b.date)||0)),memories=[];
- for(const item of dated){const previous=memories.at(-1)?.at(-1);if(!previous||!!Date.parse(item.date)!==!!Date.parse(previous.date)||Date.parse(item.date)-Date.parse(previous.date)>6*3600000)memories.push([]);memories.at(-1).push(item);}
+ const dated=items.map(item=>({item,time:Date.parse(item.date)})).sort((a,b)=>(a.time||0)-(b.time||0)),memories=[];
+ let previous=null;
+ for(const entry of dated){if(!previous||!!entry.time!==!!previous.time||entry.time-previous.time>6*3600000)memories.push([]);memories[memories.length-1].push(entry.item);previous=entry;}
  return memories;
 }
 function keptEligible(item,swipes,now=Date.now()){
@@ -299,57 +300,69 @@ function keptEligible(item,swipes,now=Date.now()){
  return item.decision==='keep'&&Number.isFinite(item.lastDecisionAt)&&now-item.lastDecisionAt>=30*86400000*multiplier&&swipes-(item.lastDecisionSwipe||0)>=500*multiplier;
 }
 function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=null,allowPartial=false){
- const previousOrder=saved.keys||[],previousKeys=new Set(previousOrder);
+ const previousOrder=saved.keys||[],previousKeys=new Set(previousOrder),initialSeen=new Set(saved.seen||[]),initialStarts=new Set(saved.starts||[]);
  const memories=reviewMemories(state.items.filter(item=>!item.needsPreview&&item.state!=='in_trash')),boundary=state.started&&!state.exhausted&&!allowPartial?memories[0]:null;
- const boundaryStarted=boundary?.some(item=>item.mediaKey===focused||(saved.seen||[]).includes(item.mediaKey)||item.decision&&(saved.starts||[]).includes(item.mediaKey));
+ const memoryOf=new Map();for(const group of memories)for(const item of group)memoryOf.set(item.mediaKey,group);
+ const boundaryStarted=boundary?.some(item=>item.mediaKey===focused||initialSeen.has(item.mediaKey)||item.decision&&initialStarts.has(item.mediaKey));
  const held=new Set(boundary&&!boundaryStarted?boundary.map(item=>item.mediaKey):[]);
  const swipes=reviewSwipeCount(state),eligible=state.items.filter(item=>!held.has(item.mediaKey)&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||(!saved.keptOff&&keptEligible(item,swipes,now)))),byKey=new Map(eligible.map(item=>[item.mediaKey,item]));
  const seen=(saved.seen||[]).filter(key=>byKey.get(key)?.decision!=='keep');
- let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!(saved.seen||[]).includes(key)),known=new Set([...keys,...seen]);
+ let keys=(saved.keys||[]).filter(key=>byKey.has(key)&&!initialSeen.has(key)),known=new Set([...keys,...seen]);
  const unreviewed=eligible.filter(item=>!item.decision&&!known.has(item.mediaKey)),kept=eligible.filter(item=>item.decision==='keep'&&!known.has(item.mediaKey)).sort((a,b)=>a.lastDecisionAt-b.lastDecisionAt),remainingUnswiped=eligible.filter(item=>!item.decision).length;
  const allowance=remainingUnswiped?Math.max(0,Math.floor(remainingUnswiped/19)-keys.filter(key=>byKey.get(key)?.decision==='keep').length):kept.length;
  const selected=new Set([...unreviewed,...kept.slice(0,allowance)].map(item=>item.mediaKey));
  saved.seen=(saved.seen||[]).filter(key=>!selected.has(key)||byKey.get(key)?.decision!=='keep');
- const headMemory=memories.find(group=>group.some(item=>item.mediaKey===keys[0]));
- const activeMemory=memories.find(group=>group.some(item=>item.mediaKey===focused))||(headMemory?.some(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey))?headMemory:null);
+ const headMemory=keys.length?memoryOf.get(keys[0]):undefined;
+ const activeMemory=memoryOf.get(focused)||(headMemory?.some(item=>item.decision&&initialStarts.has(item.mediaKey))?headMemory:null);
  const reshuffle=keys.length>0&&unreviewed.length>0;
  const fresh=memories.map(memory=>memory.filter(item=>selected.has(item.mediaKey))).filter(memory=>memory.length);
  for(let i=reshuffle?0:fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
  if(!remainingUnswiped&&!keys.length)fresh.sort((a,b)=>Math.min(...a.map(item=>item.lastDecisionAt))-Math.min(...b.map(item=>item.lastDecisionAt)));
- for(const memory of fresh){const fullMemory=memories.find(group=>group.some(item=>item.mediaKey===memory[0].mediaKey)),existing=keys.findIndex(key=>fullMemory.some(item=>item.mediaKey===key));if(existing>=0){const merged=fullMemory.filter(item=>keys.includes(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}else keys.push(...memory.map(item=>item.mediaKey));}
+ let keySet=new Set(keys);
+ for(const memory of fresh){
+  const fullMemory=memoryOf.get(memory[0].mediaKey),existing=keys.findIndex(key=>memoryOf.get(key)===fullMemory);
+  if(existing>=0){const merged=fullMemory.filter(item=>keySet.has(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}
+  else keys.push(...memory.map(item=>item.mediaKey));
+  keySet=new Set(keys);
+ }
  if(reshuffle){
-  const pending=new Set(keys),groups=memories.map(group=>group.filter(item=>pending.has(item.mediaKey))).filter(group=>group.length);
+  const groups=memories.map(group=>group.filter(item=>keySet.has(item.mediaKey))).filter(group=>group.length);
   for(let i=groups.length-1;i>0;i--){if(!groups[i][0].date)continue;const j=Math.floor(random()*(i+1));[groups[i],groups[j]]=[groups[j],groups[i]];}
   if(activeMemory){const index=groups.findIndex(group=>activeMemory.includes(group[0]));if(index>0)groups.unshift(...groups.splice(index,1));}
-  keys=groups.flatMap(group=>group.map(item=>item.mediaKey));
+  keys=groups.flatMap(group=>group.map(item=>item.mediaKey));keySet=new Set(keys);
  }
-
+ let startSet=new Set(saved.starts||[]);
  for(const group of memories){
-  const members=new Set(group.map(item=>item.mediaKey)),ordered=group.some(item=>keys.includes(item.mediaKey)&&!previousKeys.has(item.mediaKey))?group.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey):keys.filter(key=>members.has(key));
-  const playedStart=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
-  const continuation=playedStart&&group.some(item=>!item.decision&&keys.includes(item.mediaKey)&&group.indexOf(item)<group.indexOf(playedStart));
+  let playedStart=null;for(const item of group)if(item.decision&&startSet.has(item.mediaKey)){playedStart=item;break;}
+  if(!playedStart)continue;
+  const startIndex=group.indexOf(playedStart);let continuation=false;
+  for(let index=0;index<startIndex;index++){const item=group[index];if(!item.decision&&keySet.has(item.mediaKey)){continuation=true;break;}}
   if(!continuation)continue;
-  saved.starts=saved.starts.filter(key=>key===playedStart.mediaKey||!members.has(key));
+  const members=new Set(group.map(item=>item.mediaKey));
+  const ordered=group.some(item=>keySet.has(item.mediaKey)&&!previousKeys.has(item.mediaKey))?group.filter(item=>keySet.has(item.mediaKey)).map(item=>item.mediaKey):keys.filter(key=>members.has(key));
+  saved.starts=saved.starts.filter(key=>key===playedStart.mediaKey||!members.has(key));startSet=new Set(saved.starts);
   const remainder=keys.filter(key=>!members.has(key));
   const insertion=activeMemory&&activeMemory!==group?remainder.findIndex(key=>!activeMemory.some(item=>item.mediaKey===key)):0;
-  remainder.splice(insertion<0?remainder.length:insertion,0,...ordered);keys=remainder;
+  remainder.splice(insertion<0?remainder.length:insertion,0,...ordered);keys=remainder;keySet=new Set(keys);
  }
- const memory=focused&&memories.find(group=>group.some(item=>item.mediaKey===focused));
- if(memory&&keys.includes(focused)){
-  const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keys.includes(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
+ const memory=focused&&memoryOf.get(focused);
+ if(memory&&keySet.has(focused)){
+  const members=new Set(memory.map(item=>item.mediaKey)),ordered=memory.filter(item=>keySet.has(item.mediaKey)).map(item=>item.mediaKey),index=ordered.indexOf(focused);
   const earlier=ordered.slice(0,index),remaining=keys.filter(key=>!members.has(key)),previousRemaining=previousOrder.find(key=>!members.has(key));
   keys=earlier.some(key=>!previousKeys.has(key))||earlier.length&&earlier.every(key=>previousOrder.indexOf(key)>previousOrder.indexOf(focused)&&(!previousRemaining||previousOrder.indexOf(key)<previousOrder.indexOf(previousRemaining)))?[...ordered.slice(index),...earlier,...remaining]:[...ordered.slice(index),...remaining,...earlier];
  }
  const loadedKeys=new Set(state.items.map(item=>item.mediaKey));
  saved.keys=keys;saved.seen=(saved.seen||[]).filter(key=>loadedKeys.has(key));
+ const firstKey=new Map();for(const key of keys){const group=memoryOf.get(key);if(group&&!firstKey.has(group))firstKey.set(group,key);}
+ const currentStarts=saved.starts||[],startsBefore=new Set(currentStarts),removed=new Set(),added=[];
  for(const group of memories){
-  const members=new Set(group.map(item=>item.mediaKey)),start=group.find(item=>item.decision&&(saved.starts||[]).includes(item.mediaKey));
+  let start=false;for(const item of group)if(item.decision&&startsBefore.has(item.mediaKey)){start=true;break;}
   if(start)continue;
-  const first=byKey.get(keys.find(key=>members.has(key)));
-  saved.starts=(saved.starts||[]).filter(key=>!members.has(key));
-  if(first)saved.starts.push(first.mediaKey);
+  for(const item of group)removed.add(item.mediaKey);
+  const first=byKey.get(firstKey.get(group));
+  if(first)added.push(first.mediaKey);
  }
- saved.starts=[...new Set(saved.starts)];
+ saved.starts=[...new Set([...currentStarts.filter(key=>!removed.has(key)),...added])];
  return keys.map(key=>byKey.get(key));
 }
 function keptReady(state,now=Date.now()){
@@ -426,9 +439,13 @@ async function openReviewDatabase(indexedDB) {
   deleteSettings:()=>transaction('settings','sync',()=>undefined),
   saveSettings:value=>transaction('settings','sync',()=>value),
   read:async account=>(await transaction('accounts',account))||emptyReview(),
-  save:(account,state)=>transaction('accounts',account,current=>{
-   if((current?.revision||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
-   return {...state,revision:state.revision+1};
+  save:(account,state)=>new Promise((resolve,reject)=>{
+   const tx=db.transaction('accounts','readwrite'),table=tx.objectStore('accounts'),revisionKey=`revision:${account}`,request=table.get(revisionKey);let result,failure;
+   const commit=current=>{try{if((current||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');result={...state,revision:state.revision+1};table.put(result,account);table.put(result.revision,revisionKey);}catch(error){failure=error;tx.abort();}};
+   request.onsuccess=()=>{if(Number.isSafeInteger(request.result)){commit(request.result);return;}const full=table.get(account);full.onsuccess=()=>commit(full.result?.revision);};
+   tx.oncomplete=()=>resolve(result);
+   tx.onabort=()=>reject(failure||tx.error||Error('Local storage transaction failed.'));
+   tx.onerror=()=>{};
   }),
   readLease:account=>transaction('leases',account),
   lease:(account,owner,release=false,takeover=true,claim=false)=>transaction('leases',account,current=>{
@@ -1605,7 +1622,7 @@ function mountPhotosSwipe(environment) {
    if(token!==leaseGeneration||leaseRecoveryPending)return;
    await refreshLease();
    if(token===leaseGeneration&&!otherTab&&!leaseError&&identity?.account===account&&next!==version){
-    state={...mergeSyncResult(state,version,next),revision:writeRevision};
+    state={...mergeSyncResult(state,version,next),revision:writeRevision};memoryVersion++;
     await writes.enqueue();render();
    }
   })().finally(()=>{syncRunning=null;});
@@ -1662,8 +1679,8 @@ function mountPhotosSwipe(environment) {
   try{await db.lease(identity.account,owner);}catch(error){lockedAccount=null;leaseError=error;startRenewal();message(error.message);throw error;}
   assertLockedAccount();
  }
- async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','google-sign-in','google-settings','google-sign-in-cancel'].includes(button.id))button.disabled=busy||!identity||(['keep','remove','enlarge'].includes(button.id)&&!current())||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,next);memoryVersion++;await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
+ function controls(){let hasCard;const cardPresent=()=>hasCard??=!!current();for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','google-sign-in','google-settings','google-sign-in-cancel'].includes(button.id))button.disabled=busy||!identity||(['keep','remove','enlarge'].includes(button.id)&&!cardPresent())||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer||sessionClosing||!pageVisible()||$('overlay').hidden)return;
   leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
@@ -1731,9 +1748,11 @@ function mountPhotosSwipe(environment) {
  const itemSize=item=>Number.isFinite(item.size)&&item.size>=0?bytes(item.size):'Unknown size';
  const estimate=items=>{const total=reviewStorage(items);return `${bytes(total.bytes)}${total.unknown?` + ${total.unknown} unknown`:''}`;};
  let deckCache=null,deckItems=null,deckFilter=null,deckSort=null;
- function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;const bringBack=resume.bringBackKept!==false;if(deckSort==='flashbacks')(resume.flashbacks||={}).keptOff=!bringBack;let items=deckSort==='flashbacks'?flashbackDeck(state,resume.flashbacks,Math.random,Date.now(),focused,true):reviewDeck(state);items=items.filter(item=>deckFilter==='all'||item.type===deckFilter);if(deckSort==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if(deckSort==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));if(deckSort!=='flashbacks'&&bringBack&&(state.exhausted||items.length))items=resurfaceKept(items,keptReady(state).filter(item=>deckFilter==='all'||item.type===deckFilter),20,19-reviewSwipeCount(state)%20);const pinned=state.items.find(item=>item.mediaKey===focused&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||bringBack&&keptEligible(item,reviewSwipeCount(state))));if(pinned&&deckSort!=='flashbacks')items=[pinned,...items.filter(item=>item!==pinned)];deckCache=items;return items;}
+ function deck(){if(deckItems===state.items&&deckFilter===$('filter').value&&deckSort===$('sort').value)return deckCache;deckItems=state.items;deckFilter=$('filter').value;deckSort=$('sort').value;const bringBack=resume.bringBackKept!==false;if(deckSort==='flashbacks')(resume.flashbacks||={}).keptOff=!bringBack;let items=deckSort==='flashbacks'?flashbackDeck(state,resume.flashbacks,Math.random,Date.now(),focused,true):reviewDeck(state);items=items.filter(item=>deckFilter==='all'||item.type===deckFilter);if(deckSort==='oldest')items.sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));if(deckSort==='largest')items.sort((a,b)=>(b.size||0)-(a.size||0));const pinned=state.items.find(item=>item.mediaKey===focused&&!item.needsPreview&&item.state!=='in_trash'&&(!item.decision||bringBack&&keptEligible(item,reviewSwipeCount(state))));if(pinned&&deckSort!=='flashbacks')items=[pinned,...items.filter(item=>item!==pinned)];if(deckSort!=='flashbacks'&&bringBack&&(state.exhausted||items.length)){const present=new Set(items.map(item=>item.mediaKey));items=resurfaceKept(items,keptReady(state).filter(item=>(deckFilter==='all'||item.type===deckFilter)&&!present.has(item.mediaKey)),20,19-reviewSwipeCount(state)%20);}deckCache=items;return items;}
 
- function current(){return inspected?state.items.find(item=>item.mediaKey===inspected):deck().find(item=>item.mediaKey===focused)||deck()[0];}
+ function current(){if(inspected)return state.items.find(item=>item.mediaKey===inspected);const items=deck();if(!focused||items[0]?.mediaKey===focused)return items[0];return items.find(item=>item.mediaKey===focused)||items[0];}
+ let memoryCache=null,memoryVersion=0;
+ function memoryFor(item){if(!memoryCache||memoryCache.version!==memoryVersion||memoryCache.length!==state.items.length||!memoryCache.groups.has(item.mediaKey)){const groups=new Map();for(const memory of reviewMemories(state.items.filter(row=>!row.needsPreview&&row.state!=='in_trash')))for(const row of memory)groups.set(row.mediaKey,memory);memoryCache={version:memoryVersion,length:state.items.length,groups};}return memoryCache.groups.get(item.mediaKey)||null;}
  function mediaURL(value,video=false,expanded=false) {
   if(typeof expanded==='object')return cardPreviewURL(value,{...expanded,authuser:location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'});
   return previewURL(value,{video,expanded,width:expanded?(window.innerWidth||512):($('media').getBoundingClientRect?.().width||window.innerWidth||512),height:expanded?(window.innerHeight||800):($('media').getBoundingClientRect?.().height||Math.round((window.innerHeight||800)*.48)),dpr:window.devicePixelRatio,mobile:/iPhone|iPad/.test(window.navigator?.userAgent||''),authuser:location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'});
@@ -1835,7 +1854,7 @@ function mountPhotosSwipe(environment) {
   const idle=window.requestIdleCallback?.bind(window)||((task)=>window.setTimeout(task,0));
   idle(()=>{
    idlePending=false;if($('overlay').hidden)return;
-   const upcoming=deck().filter(item=>item.mediaKey!==shown&&!reviewURLStale(item)).slice(0,smallBuffer?2:3);
+   const upcoming=[],limit=smallBuffer?2:3;for(const item of deck()){if(upcoming.length>=limit)break;if(item.mediaKey!==shown&&!reviewURLStale(item))upcoming.push(item);}
    buffer.update(smallBuffer&&previousKey?upcoming.slice(0,1):upcoming,previousKey,shown);
   });
  }
@@ -2005,7 +2024,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 
  function render(){
   updateOrder();renderCard();const item=current();memoryLabel.hidden=!item||$('sort').value!=='flashbacks';
-  const memory=item?reviewMemories(state.items.filter(row=>!row.needsPreview&&row.state!=='in_trash')).find(group=>group.some(row=>row.mediaKey===item.mediaKey)):null;
+  const memory=item?memoryFor(item):null;
   const place=typeof item?.locationName==='string'?item.locationName.trim():'';
   memoryDate.textContent=item?.date?new Date(item.date).toLocaleDateString(undefined,{month:'long',year:'numeric'}):'Unknown date';memoryPlace.textContent=place?` \u00b7 ${place}`:'';memoryPlace.hidden=!place;memoryPlace.title=place;memoryPosition.textContent=memory?` \u00b7 ${memory.findIndex(row=>row.mediaKey===item.mediaKey)+1} of ${memory.length}`:'';
   const next=inspected||$('card').classList.contains('expanded')?null:deck().find(candidate=>candidate.mediaKey!==item?.mediaKey);
@@ -2229,7 +2248,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.89":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.90":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
