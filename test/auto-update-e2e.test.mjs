@@ -26,6 +26,7 @@ for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses
  try{playwright=await import('playwright');}catch{t.skip('Playwright is unavailable');return;}
  let browser;
  try{browser=await playwright[engine].launch({headless:true});}catch(error){t.skip(`${engine} is unavailable: ${error.message.split('\n')[0]}`);return;}
+ let stage='launch',diagnose=async()=>'';
  try{
   const appSource=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
   const appCode=appSource.slice(appSource.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length).trimStart();
@@ -51,28 +52,37 @@ for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses
   const tab=await context.newPage();
   tab.setDefaultTimeout(90000);
   const errors=[];tab.on('pageerror',error=>errors.push(error.message));
+  stage='step 1: await tab.goto("https://photos.google.com/");';
   await tab.goto('https://photos.google.com/');
+  stage='step 2: await tab.evaluate(async state=>{';
   await tab.evaluate(async state=>{
    const account=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(window.WIZ_global_data.oPEP7c))),byte=>byte.toString(16).padStart(2,'0')).join('');
    const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('photos-swipe-userscript',2);request.onupgradeneeded=()=>{for(const name of ['accounts','leases','settings'])request.result.createObjectStore(name);};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
    await new Promise((resolve,reject)=>{const tx=db.transaction('accounts','readwrite');tx.objectStore('accounts').put(state,account);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
   },{...emptyReview(),revision:1,items:[{mediaKey:'synthetic-0',name:'synthetic-0',thumbUrl:'https://lh3.googleusercontent.com/synthetic-0',type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now()}]});
+  diagnose=async()=>JSON.stringify({requests,errors,host:await host().catch(error=>error.message)});
   const host=()=>tab.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host')?.shadowRoot;return root?{version:root.getElementById('running-version')?.textContent,overlay:!root.getElementById('overlay').hidden,status:root.getElementById('status')?.textContent||'',banner:!!document.getElementById('photoswiper-update')}:null;});
+  stage='step 3: await tab.waitForFunction(()=>document.getElementById("photo';
   await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host'),null,{timeout:90000});
   assert.deepEqual({...await host(),status:undefined},{version:'v1.2.76',overlay:false,status:undefined,banner:false});
   assert.deepEqual(requests,['/version','/app.js']);
   assert.equal(JSON.parse(store.get('photoswiper-app')).version,'1.2.76');
 
   requests.length=0;
+  stage='step 4: await tab.reload();';
   await tab.reload();
+  stage='step 5: await tab.waitForFunction(()=>document.getElementById("photo';
   await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host'),null,{timeout:90000});
   assert.equal((await host()).version,'v1.2.76');
   assert.deepEqual(requests,['/version']);
 
   liveVersion='1.2.77';requests.length=0;
   const navigated=tab.waitForEvent('framenavigated',{timeout:90000});
+  stage='step 6: await tab.evaluate(()=>document.getElementById("photos-swipe';
   await tab.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').click());
+  stage='step 7: await navigated;';
   await navigated;
+  stage='step 8: await tab.waitForFunction(()=>{const root=document.getElemen';
   await tab.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host')?.shadowRoot;return root&&!root.getElementById('overlay').hidden;},null,{timeout:90000});
   const updated=await host();
   assert.equal(updated.version,'v1.2.77');
@@ -83,12 +93,16 @@ for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses
   assert.equal(JSON.parse(store.get('photoswiper-app')).version,'1.2.77');
 
   requests.length=0;
+  stage='step 9: await tab.evaluate(()=>document.getElementById("photos-swipe';
   await tab.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('close').click());
+  stage='step 10: await tab.waitForFunction(()=>document.getElementById("photo';
   await tab.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').hidden);
+  stage='step 11: await tab.evaluate(()=>document.getElementById("photos-swipe';
   await tab.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').click());
+  stage='step 12: await tab.waitForFunction(()=>!document.getElementById("phot';
   await tab.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').hidden);
   await tab.waitForTimeout(500);
   assert.equal((await host()).version,'v1.2.77');
   assert.deepEqual(errors,[]);
- }finally{await browser.close();}
+ }catch(error){console.error(`E2E-STAGE ${engine} ${stage} ${await diagnose()}`);throw error;}finally{await browser.close();}
 });

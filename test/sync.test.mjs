@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {canUndoReview,decideReview,finishReviewAlbum,reconcileReviewTrash,mergeReviewPage,reviewQueue,reviewTrashCandidates,sendReviewAlbum} from '../lib/userscript-core.mjs';
 import {hash} from '../worker/src/pairing.mjs';
 import {syncRequest} from '../worker/src/sync.mjs';
-import {createSyncClient,markSyncChanges,reviewSyncProgress,rebuildSyncedReview} from '../lib/userscript-sync.mjs';
+import {createSyncClient,markSyncChanges,reviewSyncProgress,rebuildSyncedReview,changedProgressItems} from '../lib/userscript-sync.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 class FakeD1 {
@@ -525,7 +525,7 @@ test('a partial device checkpoint preserves remote trash rows through a wiped-st
  assert.equal(restored.lifetimeFreed,112000);
  assert.equal((await call(e,'progress','PUT',{started:true,reviewed:0,items:[{...trash,state:'active',revision:3,queueSent:false}],lifetimeFreed:112000})).status,200);
  const progress=await (await call(e,'progress')).json();
- assert.equal(progress.items.length,2);
+ assert.deepEqual(progress.items.map(item=>item.mediaKey),[trash.mediaKey]);
  assert.equal(progress.items.find(item=>item.mediaKey===trash.mediaKey).state,'in_trash');
 });
 
@@ -769,4 +769,36 @@ for(const reversal of ['trash untick','undo then keep'])test(`synced remove can 
  state=await client.sync('default',state,async value=>value);
  assert.equal(state.items[0].decision,'remove');
  assert.equal((await client.trashCheck('default',['photo'])).safe,true);
+});
+
+test('only changed reviewed, queued or trashed items are uploaded',()=>{
+ const unreviewed={mediaKey:'new',type:'photo',state:'active',revision:0},reviewed={mediaKey:'kept',type:'photo',state:'active',revision:2,lastDecisionAt:5};
+ assert.deepEqual(changedProgressItems([unreviewed,reviewed],[]),[reviewed]);
+ assert.deepEqual(changedProgressItems([unreviewed,reviewed],[unreviewed,reviewed]),[]);
+ const sent={...reviewed,queueSent:true};
+ assert.deepEqual(changedProgressItems([unreviewed,sent],[unreviewed,reviewed]),[sent]);
+ const reset={mediaKey:'kept',type:'photo',state:'active',revision:0};
+ assert.deepEqual(changedProgressItems([reset],[reviewed]),[reset]);
+ assert.deepEqual(changedProgressItems([{...unreviewed,size:10}],[unreviewed]),[]);
+});
+
+test('sync uploads deltas and decision uploads never reread all items',async()=>{
+ const e=env(),reads=[],bodies=[];
+ const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{if(/FROM review_items WHERE scope = \? ORDER BY/.test(sql))reads.push('full');return prepare(sql);};
+ const requests=[];
+ const client=createSyncClient({fetch:(url,options)=>{const parsed=new URL(url);requests.push(parsed.pathname);if(parsed.pathname==='/api/progress')bodies.push(JSON.parse(options.body));return syncRequest(new Request(url,options),e);}});
+ client.configure({url:'https://sync.example',token:'test-secret'});
+ const library=Array.from({length:50},(_,index)=>({mediaKey:'item-'+index,type:'photo',state:'active',revision:0}));
+ let state={started:true,items:library.map(item=>({...item})),history:[],syncDecisions:{},syncPending:{}};
+ state=await client.sync('default',{...state,items:state.items.map((item,index)=>index<3?{...item,revision:1,lastDecisionAt:10+index}:item),syncPending:{'item-0':'keep','item-1':'remove','item-2':'keep'},syncPendingTimes:{'item-0':10,'item-1':11,'item-2':12}},async value=>value);
+ assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-0','item-1','item-2']);
+ assert.deepEqual(reads,[]);
+ reads.length=0;requests.length=0;
+ state=await client.sync('default',{...state,items:state.items.map(item=>item.mediaKey==='item-5'?{...item,revision:1,lastDecisionAt:20}:item),syncPending:{'item-5':'remove'},syncPendingTimes:{'item-5':20}},async value=>value);
+ assert.deepEqual(requests,['/api/state','/api/decisions','/api/progress']);
+ assert.deepEqual(bodies.at(-1).items.map(item=>item.mediaKey),['item-5']);
+ assert.deepEqual(reads,['full']);
+ const decisions=await (await call(e,'decisions','PUT',{decisions:[{id:'item-9',decision:'keep'}]})).json();
+ assert.equal(decisions.progress,undefined);
+ assert.deepEqual(reads,['full']);
 });
