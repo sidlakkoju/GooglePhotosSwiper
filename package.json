@@ -1,1 +1,1 @@
-{"name":"photos-swipe","version":"2.0.0","private":true,"type":"module","scripts":{"start":"node --env-file-if-exists=.env server.mjs","test":"node --test test/*.test.mjs","check":"node scripts/check.mjs"},"engines":{"node":">=22.13"}}
+{"name":"photos-swipe","version":"2.0.0","private":true,"type":"module","scripts":{"start":"node --env-file-if-exists=.env server.mjs","test":"node --test --test-concurrency=4 test/*.test.mjs","check":"node scripts/check.mjs"},"engines":{"node":">=22.13"}}
