@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
+import {watchVideoLoading} from '../lib/userscript-video.mjs';
 import {restoreVideoTime} from '../lib/userscript-ui.mjs';
 import {createReviewPreloader} from '../lib/userscript-preload.mjs';
 import {reusablePreview} from '../lib/userscript-performance.mjs';
@@ -18,7 +19,7 @@ function fixture(reuse){
  let assignments=0;Object.defineProperty(ready,'src',{configurable:true,get:()=>item.thumbUrl,set:()=>{assignments++;}});
  const media={querySelector(tag){return this.children.find(child=>child.tag===tag)||null;},style:{},children:[],setAttribute(name,value){this[name]=value;},replaceChildren(...children){this.children=children;},append(child){this.children.push(child);}};
  const nodes={media,zoom:{},card:{classList:{remove(){},contains:()=>false}}};
- const context=vm.createContext({otherTab:false,leaseError:null,underCard:{querySelector:()=>broken},stopMedia(){},$:id=>nodes[id],mediaElement:media,shown:null,generation:0,reviewURLStale:()=>false,previewSource:url=>url,buffer:{take:()=>reuse==='buffer'?ready:null},preloader:{take:()=>reuse==='preloader'?ready:null,takeVideo:()=>reuse==='video'?ready:null},reusablePreview,metrics:{hits:0,misses:0},document:{createElement:tag=>{const node=element(tag);created.push(node);return node;}},refreshItemURL:async value=>{refreshes.push(value);return value;},clearPreviewWindow:()=>cleared.push('window'),videoURLs:new Map(),dropWarmVideo:()=>cleared.push('video'),preloadReview(){},painted(){},restoreVideoTime,resume:{},videoSavedAt:0,captureVideo(){},addVideoControls(){},videoURL:async()=>item.thumbUrl,window:{performance:{now:()=>0},localStorage:{}},current:()=>item});
+ const context=vm.createContext({watchVideoLoading,startProgressiveVideo:({video,url})=>{if(video.src!==url){video.src=url;video.play().catch(()=>{});}else if(video.paused)video.play().catch(()=>{});},previewSize:()=>({compact:false}),otherTab:false,leaseError:null,underCard:{querySelector:()=>broken},stopMedia(){},$:id=>nodes[id],mediaElement:media,shown:null,generation:0,reviewURLStale:()=>false,previewSource:url=>url,buffer:{take:()=>reuse==='buffer'?ready:null},preloader:{take:()=>reuse==='preloader'?ready:null,takeVideo:()=>reuse==='video'?ready:null},reusablePreview,metrics:{hits:0,misses:0},document:{createElement:tag=>{const node=element(tag);created.push(node);return node;}},refreshItemURL:async value=>{refreshes.push(value);return value;},clearPreviewWindow:()=>cleared.push('window'),videoURLs:new Map(),dropWarmVideo:()=>cleared.push('video'),preloadReview(){},painted(){},restoreVideoTime,resume:{},videoSavedAt:0,captureVideo(){},addVideoControls(){},videoURL:async()=>item.thumbUrl,window:{performance:{now:()=>0},localStorage:{}},current:()=>item});
  vm.runInContext(source.slice(source.indexOf(' const previewOwners='),source.indexOf(' function queueThumbnailSource('))+displaySource,context);
  return {context,item,ready,media,created,refreshes,played,cleared,assignments:()=>assignments};
 }

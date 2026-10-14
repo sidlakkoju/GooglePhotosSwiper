@@ -2457,10 +2457,10 @@ test('photo and video errors refresh once then replace failed media with an expl
   });
   await settlePreviews();calls.length=0;
   const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
-  await first.onerror();await settlePreviews();
+  await first.onerror();if(type==='video'){assert.equal(container.querySelector(tag),first);await first.onerror();}await settlePreviews();
   const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-playback-/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
   assert.equal(calls.length,type==='video'?2:1);
-  await retried.onerror();assert.equal(container.querySelector(tag),null);
+  await retried.onerror();if(type==='video'){assert.equal(container.querySelector(tag),retried);await retried.onerror();}assert.equal(container.querySelector(tag),null);
   const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
   const count=calls.length;retry.onclick();await settlePreviews();
   assert.ok(container.querySelector(tag));assert.ok(calls.length>count);
