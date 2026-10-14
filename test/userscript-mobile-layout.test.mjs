@@ -29,7 +29,7 @@ test('settings Done uses a capsule while main header icons stay circular',()=>{
  assert.match(source,/\.content \.settings-header button\{position:relative;width:auto;min-width:44px;height:36px;min-height:36px;padding:0 14px;border-radius:18px\}/);
 });
 
-test('generated settings Done hit area is at least 44 by 44 without expanding main header icons',async()=>{
+test('generated settings Done and main header icons have 44 by 44 hit areas while the icons stay 36px circles',async()=>{
  const bundle=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  const declarations=selector=>Object.fromEntries(bundle.match(new RegExp(selector+'\\{([^}]+)\\}'))[1].split(';').map(declaration=>declaration.split(':')));
  const pill=declarations('\\.content \\.settings-header button');
@@ -51,7 +51,9 @@ test('generated settings Done hit area is at least 44 by 44 without expanding ma
  assert.equal(icons['min-height'],'36px');
  assert.equal(icons.padding,'8px');
  assert.equal(icons['border-radius'],'50%');
- assert.doesNotMatch(bundle,/\.content > header button::before/);
+ const iconHitArea=declarations('\\.content > header button::before,#enlarge::before');
+ assert.equal(iconHitArea.background,'transparent');
+ assert.ok(parseFloat(icons.height)-2*parseFloat(iconHitArea.inset)>=44);
 });
 
 test('iPhone capsule stays centered without clipping and status updates do not add window scrolling',{skip:!chrome||probe.status!==0},async()=>{
