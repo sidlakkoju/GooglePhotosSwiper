@@ -21,3 +21,16 @@ test('stopping a passed card pauses and aborts its active video before removing 
  vm.runInContext(source.slice(source.indexOf(' function stopMedia('),source.indexOf(' function showLockCard(')),context);
  context.stopMedia();assert.deepEqual(events,['pause','remove:src','load','remove-card']);assert.equal(context.shown,null);
 });
+
+test('quality swap and fallback clear the active loading label',()=>{
+ let busy='true',options;
+ const media={readyState:0},container={setAttribute(name,value){if(name==='aria-busy')busy=value;},replaceChildren(){}};
+ const context=vm.createContext({media,token:1,generation:1,handlingError:false,$:()=>container,watchVideoLoading(){},window:{},videoURL:async()=> 'video:original',item:{mediaKey:'v'},retried:false,forceRefresh:false,previewSize:()=>({compact:false}),document:{},captureVideo(){},failed(){},startProgressiveVideo(value){options=value;},addVideoControls(){}});
+ const start=source.indexOf('    const clearLoading=');
+ const end=source.indexOf('\n   }\n   else',start);
+ return vm.runInContext(`(async()=>{${source.slice(start,end)}})()`,context).then(()=>{
+  options.onFallback();assert.equal(busy,'false');busy='true';
+  options.onSwap({addEventListener(){}});assert.equal(busy,'false');
+  busy='true';context.generation=2;options.onFallback();assert.equal(busy,'true');
+ });
+});

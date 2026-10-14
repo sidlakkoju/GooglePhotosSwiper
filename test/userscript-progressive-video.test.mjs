@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {smallerVideoURL,startProgressiveVideo} from '../lib/userscript-video.mjs';
+import {smallerVideoURL,startProgressiveVideo,watchVideoLoading} from '../lib/userscript-video.mjs';
 
 function fakeVideo(){
  const listeners=new Map();
- return {src:'',currentTime:0,readyState:0,paused:true,muted:true,volume:1,playbackRate:1,loop:true,dataset:{},loads:0,
+ return {style:{},parentNode:{append(element){element.isConnected=true;}},remove(){this.isConnected=false;},src:'',currentTime:0,readyState:0,paused:true,muted:true,volume:1,playbackRate:1,loop:true,dataset:{},loads:0,
   addEventListener(type,handler,options){const list=listeners.get(type)||[];list.push({handler,once:options?.once});listeners.set(type,list);},
   emit(type){for(const entry of [...(listeners.get(type)||[])]){if(entry.once)listeners.set(type,listeners.get(type).filter(value=>value!==entry));entry.handler();}},
   play(){this.playCalls=(this.playCalls||0)+1;this.paused=false;this.emit('play');return Promise.resolve();},pause(){this.paused=true;this.emit('pause');},load(){this.loads++;},removeAttribute(name){this[name]='';}
@@ -26,7 +26,7 @@ test('small starts first and hidden original upgrades at current playback time w
  const {video,full,swaps}=setup(true);
  assert.equal(video.src,smallerVideoURL(url,true));assert.equal(full.src,'');
  video.currentTime=12.5;video.readyState=2;video.muted=false;video.emit('loadeddata');
- assert.equal(full.src,url);assert.equal(full.hidden,true);assert.equal(full.muted,true);
+ assert.equal(full.src,url);assert.equal(full.hidden,false);assert.equal(full.isConnected,true);assert.equal(full.style.opacity,'0');assert.equal(full.muted,true);
  full.readyState=2;full.emit('canplay');assert.equal(full.currentTime,12.5);assert.equal(swaps.length,0);
  full.emit('seeked');await Promise.resolve();
  assert.deepEqual(swaps,[full]);assert.equal(full.currentTime,12.5);assert.equal(video.paused,true);assert.equal(video.src,'');assert.equal(full.muted,false);assert.equal(full.paused,false);
@@ -100,4 +100,33 @@ test('alignment attempts stay bounded when seeks progress without reaching the t
  for(let index=0;index<20;index++)full.emit('seeked');
  assert.equal(seeks,8);assert.equal(full.src,'');assert.deepEqual(swaps,[]);
  assert.equal(video.src,smallerVideoURL(url));assert.equal(video.paused,false);
+});
+
+test('upgrade plays attached and rendered and cleans up when playback is rejected',async()=>{
+ const {video,full,swaps}=setup();
+ full.play=function(){assert.equal(this.isConnected,true);assert.equal(this.hidden,false);return Promise.reject(Error('autoplay'));};
+ video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(full.isConnected,false);assert.equal(full.src,'');assert.deepEqual(swaps,[]);assert.equal(video.src,smallerVideoURL(url));
+});
+
+for(const event of ['loadeddata','canplay','playing','timeupdate','frame','warm'])test(`loading clears on ${event} without a new canplay`,()=>{
+ const video=fakeVideo();let busy=true,frame;
+ video.requestVideoFrameCallback=callback=>{frame=callback;};
+ if(event==='warm')video.readyState=2;
+ watchVideoLoading({video,isActive:()=>true,onReady:()=>{busy=false;}});
+ if(event==='frame')frame();else if(event==='timeupdate'){video.currentTime=1;video.emit(event);}else if(event!=='warm')video.emit(event);
+ assert.equal(busy,false);
+});
+
+test('loading ignores nonadvancing time and events from a passed card',()=>{
+ const video=fakeVideo();let clears=0,active=true;
+ watchVideoLoading({video,isActive:()=>active,onReady:()=>{clears++;}});
+ video.emit('timeupdate');assert.equal(clears,0);active=false;video.emit('playing');video.currentTime=1;video.emit('timeupdate');assert.equal(clears,0);
+});
+
+test('fallback clears loading without waiting for canplay',()=>{
+ const video=fakeVideo();let busy=true;
+ startProgressiveVideo({video,url,createVideo:fakeVideo,isActive:()=>true,onSwap:()=>{},onError:()=>{},onFallback:()=>{busy=false;}});
+ video.onerror();assert.equal(busy,false);
 });
