@@ -78,3 +78,15 @@ test('at 320×568 the window does not scroll and decision controls receive taps'
  const result=await measure(page,`const hit=id=>{const r=box('#'+id);const target=root.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return target?.closest?.('#'+id)?.id||target?.id||null;};return {scroll:document.scrollingElement.scrollHeight<=innerHeight,remove:hit('remove'),keep:hit('keep'),enlarge:hit('enlarge'),status:box('#status').height};`);
  assert.deepEqual(result,{scroll:true,remove:'remove',keep:'keep',enlarge:'enlarge',status:24});
 });
+
+for(const [width,height] of [[1280,900],[393,852]])for(const id of ['keep','remove'])test(`a ${id} fly-off stays clipped inside the card stack at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const before=await measure(page,`return box('#card');`);
+ await measure(page,`root.getElementById('${id}').click();`);
+ const during=await measure(page,`const animations=[...(root.getAnimations?.()||[]),...document.getAnimations()];for(const animation of animations){animation.pause();const duration=animation.effect?.getComputedTiming?.().duration;animation.currentTime=typeof duration==='number'?duration/2:90;}
+  const overlay=q('.overlay'),stack=q('#card'),clones=[...stack.children].filter(node=>node!==q('.top-card')&&node.classList?.contains('top-card'));
+  return {clones:clones.length,animations:animations.length,overlay:overlay.scrollWidth<=overlay.clientWidth,page:document.scrollingElement.scrollWidth<=innerWidth,fixed:clones.some(node=>getComputedStyle(node).position==='fixed'),card:box('#card'),clip:getComputedStyle(stack).overflow};`);
+ assert.ok(during.animations>0);assert.ok(during.clones>0);
+ assert.equal(during.overlay,true);assert.equal(during.page,true);assert.equal(during.fixed,false);
+ assert.deepEqual(during.card,before);
+});

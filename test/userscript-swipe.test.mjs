@@ -201,3 +201,20 @@ test('reduced motion fades an outgoing copy for 150ms while the next card resets
  s.feedback.reset();assert.equal(s.card.style.visibility,'');assert.equal(removed,false);
  complete();await new Promise(resolve=>setImmediate(resolve));assert.equal(removed,true);
 });
+for(const [name,move] of [['zero-move',null],['sub-slop',[6,4]],['vertical-cancelled',[4,30]]])test(`pointercancel before the horizontal lock (${name}) resets without a spring or decision`,()=>{
+ const s=setup();const animations=[];
+ s.card.animate=(...args)=>{animations.push(args);return {finished:Promise.resolve(),cancel(){}};};
+ s.send('pointerdown',0);if(move)s.send('pointermove',...move);
+ s.send('pointercancel',move?.[0]??0,move?.[1]??0);s.paint();
+ assert.deepEqual(s.decisions,[]);assert.equal(animations.length,0);assert.equal(s.frames.size,0);
+ assert.equal(s.card.style.transform||'','');assert.equal(s.keep.style.opacity||'0','0');assert.equal(s.remove.style.opacity||'0','0');
+ s.send('pointerdown',0);s.send('pointerup',150);assert.deepEqual(s.decisions,['keep']);
+});
+test('vertical drags on a video and drags from video control buttons never decide or toggle playback',()=>{
+ const s=setup();let toggles=0;
+ const video={tagName:'VIDEO',paused:true,closest:()=>null,play:()=>{toggles++;return Promise.resolve();},pause:()=>{toggles++;}};
+ s.send('pointerdown',0,0,1,undefined,video);s.send('pointermove',4,40,1,undefined,video);s.send('pointerup',150,40,1,undefined,video);
+ const button={tagName:'BUTTON',closest:selector=>selector.includes('[data-video-control]')?button:null};
+ s.send('pointerdown',0,0,1,undefined,button);s.send('pointermove',150,0,1,undefined,button);s.send('pointerup',150,0,1,undefined,button);
+ assert.deepEqual(s.decisions,[]);assert.equal(toggles,0);assert.equal(s.card.style.transform||'','');
+});

@@ -112,3 +112,10 @@ test('fixed notifications stay below the header and mobile tabs even when messag
   }
  }
 });
+
+test('legacy phone layout adds room below the review view while a toast is showing',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8'),html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+ assert.match(css,/@media\(max-width:760px\)\{#toast\.show~#review-view\{padding-bottom:88px\}/);
+ assert.ok(html.indexOf('id="toast"')<html.indexOf('id="review-view"'));
+});
