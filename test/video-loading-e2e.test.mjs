@@ -23,7 +23,7 @@ test('a slow-starting video shows a loading spinner over its poster until playba
    if(request[0]==='VrseUb')return route.fulfill({contentType:'text/plain',body:envelope('VrseUb',[[JSON.parse(request[1])[0],null],'https://lh3.googleusercontent.com/clip-video=dv'])});
    return route.fulfill({status:500,body:''});
   }
-  if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/clip-video')){requests.push(url.pathname);await held;return fulfillVideo(route,video,'video/quicktime');}
+  if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/clip-video')){requests.push(url.pathname);if(url.pathname.endsWith('=m22'))return route.abort();await held;return fulfillVideo(route,video,'video/quicktime');}
   if(url.hostname==='lh3.googleusercontent.com')return route.fulfill({contentType:'image/png',body:poster});
   return route.abort();
  });
@@ -47,8 +47,6 @@ test('a slow-starting video shows a loading spinner over its poster until playba
  assert.equal(waiting.loading,true);assert.equal(waiting.opacity,'1');assert.equal(waiting.visibility,'visible');
  assert.equal(await page.evaluate(()=>getComputedStyle(document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media'),'::after').display),'none');
  release();
- await page.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot;return !root.getElementById('card').classList.contains('video-loading');},null,{timeout:30000});
- const started=await state();
- assert.equal(started.loading,false);assert.equal(started.playing,true);
+ await page.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,video=root.getElementById('media').querySelector('video');return !root.getElementById('card').classList.contains('video-loading')&&!!video&&!video.paused&&video.readyState>=3;},null,{timeout:30000});
  await page.waitForFunction(()=>getComputedStyle(document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.video-spinner')).visibility==='hidden',null,{timeout:5000});
 });
