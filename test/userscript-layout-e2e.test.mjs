@@ -159,3 +159,17 @@ for(const reduced of [false,true])test(`the settings sheet ${reduced?'appears wi
  const sheet=await measure(page,`const sheet=q('#settings-sheet');return {hidden:sheet.hidden,animation:getComputedStyle(sheet).animationName};`);
  assert.equal(sheet.hidden,false);assert.equal(sheet.animation,reduced?'none':'ps-sheet-up');
 });
+
+test('every phone control has a touch target of at least 44 points on the swipe, Going to Trash and preview screens',async t=>{
+ const page=await mount(t,{width:390,height:844,items:Array.from({length:6},(_,index)=>item(index,index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{})),state:{exhausted:true}});if(!page)return;
+ const small=()=>measure(page,`const size=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hits=(px,py)=>{const found=root.elementFromPoint(px,py);return !!found&&(found===e||e.contains(found));};const reach=(dx,dy)=>{let d=0;while(d<60&&hits(x+dx*(d+1),y+dy*(d+1)))d++;return d;};if(!hits(x,y))return [0,0];return [reach(-1,0)+reach(1,0)+1,reach(0,-1)+reach(0,1)+1];};
+  return [...root.querySelectorAll('button,a,input')].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&getComputedStyle(e).visibility!=='hidden';}).map(e=>({control:e.id||e.className||e.getAttribute('aria-label')||e.textContent.trim(),size:size(e)})).filter(entry=>entry.size.some(value=>value>0&&value<44));`);
+ assert.deepEqual(await small(),[]);
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(500);
+ assert.ok(await measure(page,`return root.querySelectorAll('.trash-check').length;`)>=3);
+ assert.deepEqual(await small(),[]);
+ assert.deepEqual(await measure(page,`return [...root.querySelectorAll('.trash-tile')].map(tile=>{const check=tile.querySelector('.trash-check'),r=tile.getBoundingClientRect(),c=check.getBoundingClientRect(),outside=[[r.right+1,c.y+c.height/2],[c.x+c.width/2,r.bottom+1]].filter(([x,y])=>x<innerWidth&&y<innerHeight);return outside.some(([x,y])=>{const found=root.elementFromPoint(x,y);return found===check||check.contains(found);});});`),[false,false,false]);
+ await measure(page,`q('.trash-photo').click();`);await page.waitForTimeout(500);
+ assert.ok(await measure(page,`return root.querySelectorAll('.trash-strip button').length;`)>=3);
+ assert.deepEqual(await small(),[]);
+});
