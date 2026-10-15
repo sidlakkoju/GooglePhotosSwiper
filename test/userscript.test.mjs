@@ -992,7 +992,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
    for(const check of measurement.videoChecks)for(const key of check.expanded?['opaque','covered','captionHidden','mediaAboveControls','posterFits']:['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['absent'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved'])assert.equal(measurement[key],true,JSON.stringify(measurement));
-   assert.equal(measurement.modalWidth,measurement.width>=900&&measurement.height>=700?Math.min(1680,measurement.width-48):Math.min(440,measurement.width),JSON.stringify(measurement));
+   assert.equal(measurement.modalWidth,measurement.width>=900&&measurement.height>=700?Math.min(2560,measurement.width-48):Math.min(440,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
 });
