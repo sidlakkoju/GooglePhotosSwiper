@@ -326,6 +326,17 @@ for(const how of ['Escape','Close'])test(`closing the share sheet with ${how} re
  assert.deepEqual(await measure(page,`return {sheet:q('.share-sheet').hidden,overlay:!root.getElementById('overlay').hidden,focus:root.activeElement?.id||null};`),{sheet:true,overlay:true,focus:'share'});
 });
 
+for(const how of ['Escape','Done'])test(`closing the Going to Trash preview with ${how} returns focus to that photo`,async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index,index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ const tile=page.locator('.trash-tile [aria-label^="Preview "]').nth(1);const label=await tile.getAttribute('aria-label');
+ await tile.focus();await page.keyboard.press('Enter');await page.waitForTimeout(300);
+ assert.equal(await measure(page,`return !!q('.trash-preview');`),true);
+ if(how==='Escape')await page.keyboard.press('Escape');else await page.locator('.trash-preview .trash-nav button',{hasText:'Done'}).click();
+ await page.waitForTimeout(300);
+ assert.deepEqual(await measure(page,`return {preview:!!q('.trash-preview'),panel:!root.getElementById('review-panel').hidden,focus:root.activeElement?.getAttribute('aria-label')||null};`),{preview:false,panel:true,focus:label});
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
