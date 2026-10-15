@@ -16,6 +16,26 @@ export function animateSwipe(element,dx,commit,duration=320){
   const distance=(globalThis.innerWidth||1000)+(Number.parseFloat(element.style.width)||350);
   return element.animate?.([{transform:start,opacity:1},{transform:commit?`translateX(${direction*distance}px) rotate(${direction*18}deg)`:'translateX(0px)',opacity:commit?0:1}],{duration,easing:commit?'ease-out':'cubic-bezier(.2,1.5,.5,1)'});
 }
+export function stillClonedVideos(copy,source){
+ const originals=[...(source.querySelectorAll?.('video')||[])];
+ [...(copy.querySelectorAll?.('video')||[])].forEach((clone,index)=>{
+  clone.removeAttribute?.('src');clone.preload='none';
+  for(const child of [...(clone.querySelectorAll?.('source')||[])])child.remove?.();
+  const original=originals[index];
+  if(!original||original.hidden||original.style?.opacity==='0'){clone.remove?.();return;}
+  const width=original.clientWidth,height=original.clientHeight,document=clone.ownerDocument;
+  if(!original.videoWidth||original.readyState<2||!width||!height||!document?.createElement)return;
+  try{
+   const canvas=document.createElement('canvas'),ratio=globalThis.devicePixelRatio||1;
+   canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
+   const scale=Math.min(canvas.width/original.videoWidth,canvas.height/original.videoHeight),drawnWidth=original.videoWidth*scale,drawnHeight=original.videoHeight*scale;
+   canvas.getContext('2d').drawImage(original,(canvas.width-drawnWidth)/2,(canvas.height-drawnHeight)/2,drawnWidth,drawnHeight);
+   canvas.className=clone.className;canvas.style.cssText=clone.style.cssText;canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;
+   clone.replaceWith?.(canvas);
+  }catch{}
+ });
+ return copy;
+}
 export function throwSwipe(element,dx,duration,bounds){
   if(!element.cloneNode||!element.ownerDocument?.body)return;
   const transform=element.style.transform,transition=element.style.transition;
@@ -27,7 +47,7 @@ export function throwSwipe(element,dx,duration,bounds){
     element.style.transform=transform;
     element.style.transition=transition;
   }
-  const copy=element.cloneNode(true);
+  const copy=stillClonedVideos(element.cloneNode(true),element);
   copy.removeAttribute('id');
   for(const child of copy.querySelectorAll('[id]')){if(child.getAttribute?.('id')==='media')child.classList.add('swipe-media');child.removeAttribute('id');}
   copy.setAttribute('aria-hidden','true');

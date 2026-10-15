@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.100
+// @version 1.2.101
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -130,6 +130,26 @@ function animateSwipe(element,dx,commit,duration=320){
   const distance=(globalThis.innerWidth||1000)+(Number.parseFloat(element.style.width)||350);
   return element.animate?.([{transform:start,opacity:1},{transform:commit?`translateX(${direction*distance}px) rotate(${direction*18}deg)`:'translateX(0px)',opacity:commit?0:1}],{duration,easing:commit?'ease-out':'cubic-bezier(.2,1.5,.5,1)'});
 }
+function stillClonedVideos(copy,source){
+ const originals=[...(source.querySelectorAll?.('video')||[])];
+ [...(copy.querySelectorAll?.('video')||[])].forEach((clone,index)=>{
+  clone.removeAttribute?.('src');clone.preload='none';
+  for(const child of [...(clone.querySelectorAll?.('source')||[])])child.remove?.();
+  const original=originals[index];
+  if(!original||original.hidden||original.style?.opacity==='0'){clone.remove?.();return;}
+  const width=original.clientWidth,height=original.clientHeight,document=clone.ownerDocument;
+  if(!original.videoWidth||original.readyState<2||!width||!height||!document?.createElement)return;
+  try{
+   const canvas=document.createElement('canvas'),ratio=globalThis.devicePixelRatio||1;
+   canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
+   const scale=Math.min(canvas.width/original.videoWidth,canvas.height/original.videoHeight),drawnWidth=original.videoWidth*scale,drawnHeight=original.videoHeight*scale;
+   canvas.getContext('2d').drawImage(original,(canvas.width-drawnWidth)/2,(canvas.height-drawnHeight)/2,drawnWidth,drawnHeight);
+   canvas.className=clone.className;canvas.style.cssText=clone.style.cssText;canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;
+   clone.replaceWith?.(canvas);
+  }catch{}
+ });
+ return copy;
+}
 function throwSwipe(element,dx,duration,bounds){
   if(!element.cloneNode||!element.ownerDocument?.body)return;
   const transform=element.style.transform,transition=element.style.transition;
@@ -141,7 +161,7 @@ function throwSwipe(element,dx,duration,bounds){
     element.style.transform=transform;
     element.style.transition=transition;
   }
-  const copy=element.cloneNode(true);
+  const copy=stillClonedVideos(element.cloneNode(true),element);
   copy.removeAttribute('id');
   for(const child of copy.querySelectorAll('[id]')){if(child.getAttribute?.('id')==='media')child.classList.add('swipe-media');child.removeAttribute('id');}
   copy.setAttribute('aria-hidden','true');
@@ -805,7 +825,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   keep.style.opacity=decision==='keep'?'1':'0';remove.style.opacity=decision==='remove'?'1':'0';under.style.transform=reduced()?'':'scale(1)';
   const destination=reduced()?'':`translate3d(${direction*(Math.max(window.innerWidth||0,width)*1.5)}px,0,0) rotate(${direction*15}deg)`;
   if(card.cloneNode&&card.parentNode){
-   const outgoing=card.cloneNode(true);
+   const outgoing=stillClonedVideos(card.cloneNode(true),card);
    outgoing.setAttribute('aria-hidden','true');outgoing.inert=true;
    for(const element of outgoing.querySelectorAll?.('[id]')||[])element.removeAttribute('id');
    outgoing.removeAttribute?.('id');outgoing.style.willChange='';outgoing.style.transform=reduced()?'':card.style.transform;
@@ -2325,7 +2345,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.100":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.101":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

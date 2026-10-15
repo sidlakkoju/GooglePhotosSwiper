@@ -8,7 +8,7 @@ import {Script} from 'node:vm';
 
 const source=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
 const counterSource=(await readFile(new URL('../lib/userscript-counter.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
-const swipeSource=(await readFile(new URL('../lib/userscript-swipe.mjs',import.meta.url),'utf8')).replace(/^export /gm,'');
+const swipeSource=[await readFile(new URL('../lib/swipe.mjs',import.meta.url),'utf8'),await readFile(new URL('../lib/userscript-swipe.mjs',import.meta.url),'utf8')].join('\n').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const orderSource=(await readFile(new URL('../lib/userscript-order.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const setup=orderSource+source.slice(source.indexOf(" const host=document.createElement('div');"),source.indexOf(' const $=id=>root.getElementById(id);'));
 const binding=source.match(/ const swipeFeedback=createSwipeFeedback\([^\n]+/)[0];
