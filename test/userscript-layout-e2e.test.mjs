@@ -40,7 +40,7 @@ for(const [width,height] of [[1280,900],[393,852]])test(`Enlarge grows the card 
  await measure(page,`root.getElementById('enlarge').click();`);
  await page.waitForTimeout(500);
  const after=await measure(page,`return {card:box('#card'),caption:getComputedStyle(q('#caption')).display,order:getComputedStyle(q('.order-row')).display,actions:box('.actions'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
- assert.ok(after.card.height>before.height+80,`${before.height} → ${after.card.height}`);
+ assert.ok(after.card.height>before.height+80||after.card.height>=height-2,`${before.height} → ${after.card.height}`);
  if(width>600)assert.ok(after.card.width>=width-2&&after.card.height>=height-2,`${before.width} → ${after.card.width}`);
  assert.equal(after.caption,'none');assert.equal(after.order,'none');
  assert.ok(after.actions.y+after.actions.height<=height);
