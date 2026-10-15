@@ -329,3 +329,21 @@ test('the first full-quality attempt is held while the card is being dragged',()
  dragging=false;video.emit('timeupdate');
  assert.equal(created.length,1);
 });
+
+test('a stalled download while the video is visibly playing does not fall back until playback runs dry',t=>{
+ const clock=clocked(t),{video}=setup();
+ video.readyState=2;video.emit('loadeddata');
+ video.currentTime=20;video.emit('timeupdate');clock.advance(300);
+ video.emit('stalled');
+ assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,0);
+ video.emit('waiting');
+ assert.equal(video.src,url);
+});
+
+test('a stall that clears when data arrives again never falls back',t=>{
+ const clock=clocked(t),{video}=setup();
+ video.readyState=2;video.emit('loadeddata');
+ video.currentTime=20;video.emit('timeupdate');clock.advance(300);
+ video.emit('stalled');video.emit('progress');video.emit('waiting');
+ assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,0);
+});
