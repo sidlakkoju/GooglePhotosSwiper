@@ -431,7 +431,7 @@ test('Open in Google Photos links to the shown item and the Share sheet sends th
  assert.equal(await measure(page,`return q('.share-sheet').hidden;`),true);
 });
 
-test('Create public link asks Google for a share link once and offers Copy and Share',async t=>{
+test('Create public link asks Google for a share link once and offers Copy and Share icons without pre-selecting the link',async t=>{
  const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
  const calls=[];
  const page=await mount(t,{width:393,height:852,items:[item(1)],routes:(route,url)=>{if(url.hostname==='photos.google.com'&&url.pathname.endsWith('/data/batchexecute')){const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];calls.push(call);return route.fulfill({contentType:'text/plain',body:envelope(call[0],['AF1QipSyntheticSharedAlbum','https://photos.app.goo.gl/SyntheticLink1',null,null,'token',null,5,false,0])});}return null;}});if(!page)return;
@@ -441,9 +441,16 @@ test('Create public link asks Google for a share link once and offers Copy and S
  await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.share-link-row').hidden);
  assert.equal(await measure(page,`return q('.share-link-row input').value;`),'https://photos.app.goo.gl/SyntheticLink1');
  assert.equal(calls.length,1);assert.equal(calls[0][0],'SFKp8c');assert.match(calls[0][1],/\[\[\["synthetic-1"\]\]\]/);
+ const row=await measure(page,`const field=q('.share-link-row input');const buttons=[...q('.share-link-row').querySelectorAll('button')];return {fieldFocused:root.activeElement===field,selected:field.selectionEnd-field.selectionStart,copyFocused:root.activeElement===buttons[0],buttons:buttons.map(button=>({label:button.getAttribute('aria-label'),text:button.textContent.trim(),icon:!!button.querySelector('svg'),box:box(button)}))};`);
+ assert.equal(row.fieldFocused,false,'the link field is not focused, so iOS shows no selection callout over Copy');
+ assert.equal(row.selected,0,'the link is not pre-selected');
+ assert.equal(row.copyFocused,true);
+ assert.deepEqual(row.buttons.map(button=>[button.label,button.text,button.icon]),[['Copy link','',true],['Share link','',true]]);
+ for(const button of row.buttons)assert.ok(button.box.width>=44&&button.box.height>=44&&Math.abs(button.box.width-button.box.height)<1,JSON.stringify(button.box));
  await measure(page,`const buttons=q('.share-link-row').querySelectorAll('button');buttons[0].click();buttons[1].click();`);
  await page.waitForFunction(()=>window.__shared.length===1&&window.__copied.length===1);
  assert.deepEqual(await page.evaluate(()=>[window.__copied,window.__shared]),[['https://photos.app.goo.gl/SyntheticLink1'],['https://photos.app.goo.gl/SyntheticLink1']]);
+ assert.equal(await measure(page,`return q('.share-link-row button').getAttribute('aria-label');`),'Copied');
  await measure(page,`q('.share-close').click();q('#share').click();`);
  assert.equal(await measure(page,`return [q('.share-link-row').hidden,q('#share-link').hidden];`).then(value=>JSON.stringify(value)),JSON.stringify([false,true]));
  assert.equal(calls.length,1,'reopening reuses the link instead of creating another album');
