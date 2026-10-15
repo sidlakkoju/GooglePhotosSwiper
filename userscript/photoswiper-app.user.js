@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.110
+// @version 1.2.111
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1049,21 +1049,22 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   const abandon=()=>{if(finished||original!==full)return;release(full);original=null;seeking=false;chasing=false;chaseUntil=0;if(retries<3)retryAt=Date.now()+5000*2**retries++;};
   const bufferedTo=time=>{const ranges=full.buffered;for(let index=0;index<(ranges?.length||0);index++)if(ranges.start(index)<=time&&time<=ranges.end(index))return ranges.end(index);return time;};
   const caughtUp=()=>{frameQueued=false;align();};
-  const onFrame=callback=>{if(full.requestVideoFrameCallback)full.requestVideoFrameCallback(()=>callback());else full.addEventListener('timeupdate',()=>callback(),{once:true});};
-  const swap=()=>{
+  const onFrame=callback=>{if(full.requestVideoFrameCallback)full.requestVideoFrameCallback((now,frame)=>callback(frame?.mediaTime));else full.addEventListener('timeupdate',()=>callback(),{once:true});};
+  const position=frameTime=>Number.isFinite(frameTime)?frameTime:full.currentTime;
+  const swap=frameTime=>{
    if(finished||original!==full||!isActive())return;
-   const ahead=full.currentTime-video.currentTime;
-   if(Math.abs(ahead)>.08){if(!video.paused&&video.playbackRate>0&&Math.abs(ahead)<=1.6){chase();return;}chasing=false;chaseUntil=0;full.pause();align();return;}
+   const ahead=position(frameTime)-video.currentTime;
+   if(Math.abs(ahead)>.08){if(!video.paused&&video.playbackRate>0&&Math.abs(ahead)<=1.6){chase(frameTime);return;}chasing=false;chaseUntil=0;full.pause();align();return;}
    const muted=video.muted;if(video.paused)full.pause();video.pause();full.muted=muted;full.playbackRate=video.playbackRate;full.hidden=false;full.style.position='';full.style.inset='';full.style.opacity='';full.style.pointerEvents='';
    finished=true;original=null;chasing=false;chaseUntil=0;full.onerror=onError;full.dataset.resumeReady='ready';
    onSwap(full);release(video);
   };
-  const chase=()=>{
+  const chase=frameTime=>{
    if(finished||original!==full||!isActive())return;
-   const ahead=full.currentTime-video.currentTime;
+   const ahead=position(frameTime)-video.currentTime;
    if(!chasing){chasing=true;chaseUntil=Date.now()+8000;}
    if(video.paused||video.playbackRate<=0||Math.abs(ahead)>1.6){chasing=false;chaseUntil=0;full.pause();full.playbackRate=video.playbackRate;align();return;}
-   if(Math.abs(ahead)<=.04){full.playbackRate=video.playbackRate;onFrame(swap);return;}
+   if(Math.abs(ahead)<=.04){swap(frameTime);return;}
    const rate=video.playbackRate*(ahead<0?1.5:.75);
    if(full.playbackRate!==rate)full.playbackRate=rate;
    if(full.paused)full.play().catch(abandon);
@@ -1085,7 +1086,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
    const paused=video.paused;
    full.playbackRate=video.playbackRate;full.volume=video.volume;
    if(paused){swap();return;}
-   full.play().then(()=>{if(full.requestVideoFrameCallback)full.requestVideoFrameCallback(swap);else swap();}).catch(abandon);
+   full.play().then(()=>{if(full.requestVideoFrameCallback)onFrame(swap);else swap();}).catch(abandon);
   };
   full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
   unstick=()=>{if(seekAttempts>=8){abandon();return;}seekAttempts++;seekStart=full.currentTime;seekIssued=Date.now();full.currentTime=video.currentTime;};
@@ -2450,7 +2451,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.110":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.111":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
