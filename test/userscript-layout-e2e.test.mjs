@@ -173,3 +173,32 @@ test('every phone control has a touch target of at least 44 points on the swipe,
  assert.ok(await measure(page,`return root.querySelectorAll('.trash-strip button').length;`)>=3);
  assert.deepEqual(await small(),[]);
 });
+
+const savedDecisions=async page=>{
+ await page.waitForTimeout(2500);
+ return page.evaluate(async()=>{const db=await new Promise(resolve=>{const request=indexedDB.open('photos-swipe-userscript');request.onsuccess=()=>resolve(request.result);});const stored=await new Promise(resolve=>{const request=db.transaction('accounts').objectStore('accounts').getAll();request.onsuccess=()=>resolve(request.result);});db.close();return {decided:stored[0].items.filter(entry=>entry.decision).length,history:stored[0].history.length};});
+};
+
+for(const [keys,expected] of [[['ArrowLeft','z','ArrowRight','z','ArrowLeft','ArrowLeft','z','z'],0],[['ArrowLeft','ArrowRight','ArrowLeft','z','ArrowRight','ArrowLeft','z','z','ArrowRight'],3]])test(`back-to-back keyboard decisions and undos are applied in order (${keys.length} keys, ${expected} left)`,async t=>{
+ const page=await mount(t,{width:1280,height:900,items:Array.from({length:8},(_,index)=>item(index))});if(!page)return;
+ for(const key of keys)await page.keyboard.press(key);
+ assert.deepEqual(await savedDecisions(page),{decided:expected,history:expected});
+});
+
+test('Going to Trash lists every item it counts, and the badge, button and confirmation agree',async t=>{
+ const page=await mount(t,{width:1280,height:900,items:[
+  ...[0,1,2].map(index=>item(index,{decision:'remove',revision:1,lastDecisionAt:1000+index})),
+  item(3,{decision:'remove',revision:1,queueSent:true,lastDecisionAt:900}),
+  item(4,{decision:'remove',revision:1,state:'in_trash'}),
+  item(5,{decision:'keep',revision:1}),
+  item(6),item(7)
+ ]});if(!page)return;
+ const prompts=[];page.on('dialog',dialog=>{prompts.push(dialog.message());dialog.dismiss();});
+ const counts=()=>measure(page,`const tiles=[...root.querySelectorAll('.trash-tile')];return {badge:q('.trash-badge').textContent,listed:tiles.map(tile=>tile.querySelector('img').alt).sort(),marked:tiles.filter(tile=>!tile.classList.contains('kept')).length,button:root.getElementById('move-trash').textContent.trim()};`);
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(500);
+ assert.deepEqual(await counts(),{badge:'4',listed:['synthetic-0.jpg','synthetic-1.jpg','synthetic-2.jpg','synthetic-3.jpg'],marked:4,button:'Move 4 to Trash'});
+ await measure(page,`q('.trash-tile .trash-check').click();`);await page.waitForTimeout(300);
+ assert.deepEqual(await counts(),{badge:'3',listed:['synthetic-0.jpg','synthetic-1.jpg','synthetic-2.jpg','synthetic-3.jpg'],marked:3,button:'Move 3 to Trash'});
+ await measure(page,`root.getElementById('move-trash').click();`);await page.waitForTimeout(300);
+ assert.equal(prompts.length,1);assert.match(prompts[0],/^Move exactly 3 items to Google Photos Trash\?/);
+});
