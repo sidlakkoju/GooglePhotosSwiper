@@ -290,6 +290,14 @@ for(const timezoneId of ['Asia/Tokyo','America/New_York'])test(`a photo taken on
  assert.match(await measure(page,`return q('.share-sub').textContent;`),/12\/31\/2025/);
 });
 
+for(const [marked,expected] of [[0,'back'],[2,'move-trash']])test(`opening Going to Trash from the keyboard with ${marked} marked moves focus into the panel`,async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index,index<marked?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
+ await measure(page,`root.getElementById('review').focus();`);await page.keyboard.press('Enter');await page.waitForTimeout(300);
+ const focus=await measure(page,`const e=root.activeElement,panel=root.getElementById('review-panel');return {open:!panel.hidden,inside:panel.contains(e),id:e?.id||'',text:e?.textContent?.trim()||''};`);
+ assert.equal(focus.open,true);assert.equal(focus.inside,true,JSON.stringify(focus));
+ if(expected==='back')assert.equal(focus.text,'\u2039 Back');else assert.equal(focus.id,'move-trash');
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
