@@ -105,10 +105,10 @@ test('video taps toggle playback and video drags decide without toggling',()=>{
 });
 test('dismissal retains its destination until reset and respects reduced motion',async()=>{
  const s=setup();let complete,cancelled=false;
- s.card.animate=(frames,options)=>{assert.match(frames[1].transform,/translate3d/);assert.equal(options.duration,180);return {finished:new Promise(resolve=>{complete=resolve;}),cancel:()=>{cancelled=true;}};};
+ s.card.animate=(frames,options)=>{assert.match(frames[1].transform,/translate3d/);assert.equal(options.duration,280);return {finished:new Promise(resolve=>{complete=resolve;}),cancel:()=>{cancelled=true;}};};
  s.send('pointerdown',0);s.send('pointerup',150);
- assert.deepEqual(s.decisions,['keep']);assert.match(s.card.style.transform,/450px/);
- complete();await s.feedback.finished;assert.match(s.card.style.transform,/450px/);
+ assert.deepEqual(s.decisions,['keep']);assert.match(s.card.style.transform,/390px/);
+ complete();await s.feedback.finished;assert.match(s.card.style.transform,/390px/);
  s.feedback.reset();assert.equal(s.card.style.transform,'');assert.equal(cancelled,true);
  const reduced=setup(true);reduced.card.animate=()=>assert.fail('Reduced motion must skip animation');reduced.send('pointerdown',0);reduced.send('pointerup',150);
  assert.deepEqual(reduced.decisions,['keep']);assert.equal(reduced.card.style.transform,'');
@@ -139,7 +139,7 @@ test('outgoing card animation survives resetting the live card and removes its c
  s.card.parentNode={append(node){outgoing=node;}};
  s.card.cloneNode=()=>({style:{...s.card.style},setAttribute(){},animate(){return {finished:new Promise(resolve=>{finish=resolve;})};},remove(){removed=true;}});
  s.send('pointerdown',0);s.send('pointerup',150);
- assert.match(outgoing.style.transform,/450px/);assert.equal(outgoing.inert,true);
+ assert.match(outgoing.style.transform,/390px/);assert.equal(outgoing.inert,true);
  assert.equal(s.card.style.visibility,'hidden');assert.equal(outgoing.style.visibility,'');
  s.feedback.reset();assert.equal(s.card.style.transform,'');assert.equal(s.card.style.visibility,'');assert.equal(removed,false);
  finish();await new Promise(resolve=>setTimeout(resolve,0));

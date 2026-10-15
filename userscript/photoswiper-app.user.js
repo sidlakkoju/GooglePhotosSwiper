@@ -353,11 +353,11 @@ function flashbackDeck(state,saved={},random=Math.random,now=Date.now(),focused=
  for(let i=reshuffle?0:fresh.length-1;i>0;i--){if(!fresh[i][0].date)continue;const j=Math.floor(random()*(i+1));[fresh[i],fresh[j]]=[fresh[j],fresh[i]];}
  if(!remainingUnswiped&&!keys.length)fresh.sort((a,b)=>Math.min(...a.map(item=>item.lastDecisionAt))-Math.min(...b.map(item=>item.lastDecisionAt)));
  let keySet=new Set(keys);
+ const present=new Set();for(const key of keys){const group=memoryOf.get(key);if(group)present.add(group);}
  for(const memory of fresh){
-  const fullMemory=memoryOf.get(memory[0].mediaKey),existing=keys.findIndex(key=>memoryOf.get(key)===fullMemory);
-  if(existing>=0){const merged=fullMemory.filter(item=>keySet.has(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);}
-  else keys.push(...memory.map(item=>item.mediaKey));
-  keySet=new Set(keys);
+  const fullMemory=memoryOf.get(memory[0].mediaKey);
+  if(present.has(fullMemory)){const existing=keys.findIndex(key=>memoryOf.get(key)===fullMemory),merged=fullMemory.filter(item=>keySet.has(item.mediaKey)||selected.has(item.mediaKey)).map(item=>item.mediaKey);const members=new Set(merged);keys.splice(existing,0,...merged);for(let index=keys.length-1;index>=existing+merged.length;index--)if(members.has(keys[index]))keys.splice(index,1);keySet=new Set(keys);}
+  else {for(const item of memory){keys.push(item.mediaKey);keySet.add(item.mediaKey);}present.add(fullMemory);}
  }
  if(reshuffle){
   const groups=memories.map(group=>group.filter(item=>keySet.has(item.mediaKey))).filter(group=>group.length);
@@ -425,6 +425,7 @@ function nextKeptReturn(state,now=Date.now()){
 }
 
 const LEASE_HEARTBEAT_MS=4000;
+const CHUNK_SIZE=500;
 const LEASE_EXPIRY_MS=12000;
 async function createLeaseOwner(window,crypto) {
  const key='photos-swipe-lease-owner';
@@ -455,6 +456,7 @@ async function openReviewDatabase(indexedDB) {
   request.onblocked=()=>reject(Error('Close other Photos Swipe tabs to open local storage.'));
  });
  db.onversionchange=()=>db.close();
+ const loaded=new Map(),legacyAccounts=new Set(),resumeLists=new Map(),metaKey=account=>`v2:${account}`,chunkKey=(account,index)=>`v2:${account}:${String(index).padStart(5,'0')}`;
  function transaction(store,key,change) {
   return new Promise((resolve,reject)=>{
    const tx=db.transaction(store,change?'readwrite':'readonly'),table=tx.objectStore(store),request=table.get(key);let result,failure;
@@ -467,17 +469,59 @@ async function openReviewDatabase(indexedDB) {
   });
  }
  return {
-  resume:async account=>await transaction('settings',`resume:${account}`)||{},
-  saveResume:(account,value)=>transaction('settings',`resume:${account}`,()=>value),
+  resume:account=>new Promise((resolve,reject)=>{
+   const tx=db.transaction('settings','readonly'),table=tx.objectStore('settings'),request=table.get(`resume:${account}`);let result={};
+   request.onsuccess=()=>{result=request.result||{};if(!result.flashbacks?.split)return;const lists=table.get(`resume-lists:${account}`);lists.onsuccess=()=>{const {split:_split,...flashbacks}=result.flashbacks;result={...result,flashbacks:{...flashbacks,...(lists.result||{})}};resumeLists.set(account,lists.result||null);};};
+   tx.oncomplete=()=>resolve(result);
+   tx.onabort=()=>reject(tx.error||Error('Local storage transaction failed.'));
+   tx.onerror=()=>{};
+  }),
+  saveResume:(account,value)=>new Promise((resolve,reject)=>{
+   const tx=db.transaction('settings','readwrite'),table=tx.objectStore('settings'),{flashbacks}=value;
+   const lists=flashbacks?{keys:flashbacks.keys,starts:flashbacks.starts}:null,last=resumeLists.get(account),changed=lists&&(!last||last.keys!==lists.keys||last.starts!==lists.starts);
+   const request=table.get(`resume:${account}`);
+   request.onsuccess=()=>{table.put(flashbacks?{...value,flashbacks:{...flashbacks,keys:undefined,starts:undefined,split:true}}:value,`resume:${account}`);if(changed)table.put(lists,`resume-lists:${account}`);};
+   tx.oncomplete=()=>{if(changed)resumeLists.set(account,lists);resolve(value);};
+   tx.onabort=()=>reject(tx.error||Error('Local storage transaction failed.'));
+   tx.onerror=()=>{};
+  }),
   settings:async()=>await transaction('settings','sync')||{},
   deleteSettings:()=>transaction('settings','sync',()=>undefined),
   saveSettings:value=>transaction('settings','sync',()=>value),
-  read:async account=>(await transaction('accounts',account))||emptyReview(),
-  save:(account,state)=>new Promise((resolve,reject)=>{
-   const tx=db.transaction('accounts','readwrite'),table=tx.objectStore('accounts'),revisionKey=`revision:${account}`,request=table.get(revisionKey);let result,failure;
-   const commit=current=>{try{if((current||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');result={...state,revision:state.revision+1};table.put(result,account);table.put(result.revision,revisionKey);}catch(error){failure=error;tx.abort();}};
-   request.onsuccess=()=>{if(Number.isSafeInteger(request.result)){commit(request.result);return;}const full=table.get(account);full.onsuccess=()=>commit(full.result?.revision);};
+  read:account=>new Promise((resolve,reject)=>{
+   const tx=db.transaction('accounts','readonly'),table=tx.objectStore('accounts'),meta=table.get(metaKey(account));let result;
+   meta.onsuccess=()=>{
+    const value=meta.result;
+    if(value&&Number.isSafeInteger(value.chunks)){
+     const chunks=Array(value.chunks);let pending=value.chunks;
+     const finish=()=>{const {chunks:_count,format:_format,...rest}=value;result={...rest,items:chunks.flat()};loaded.set(account,chunks);};
+     if(!pending)finish();
+     for(let index=0;index<value.chunks;index++){const request=table.get(chunkKey(account,index));request.onsuccess=()=>{chunks[index]=request.result||[];if(!--pending)finish();};}
+     return;
+    }
+    const legacy=table.get(account);legacy.onsuccess=()=>{result=legacy.result||emptyReview();loaded.delete(account);if(legacy.result)legacyAccounts.add(account);};
+   };
    tx.oncomplete=()=>resolve(result);
+   tx.onabort=()=>reject(tx.error||Error('Local storage transaction failed.'));
+   tx.onerror=()=>{};
+  }),
+  save:(account,state)=>new Promise((resolve,reject)=>{
+   const tx=db.transaction('accounts','readwrite'),table=tx.objectStore('accounts'),revisionKey=`revision:${account}`,request=table.get(revisionKey);let result,failure,written;
+   const commit=current=>{try{
+    if((current||0)!==state.revision)throw Error('Progress changed in another tab. Reopen Photos Swipe and retry.');
+    result={...state,revision:state.revision+1};
+    const {items=[],...rest}=result,previous=loaded.get(account)||[];written=[];
+    for(let index=0;index*CHUNK_SIZE<items.length;index++){
+     const chunk=items.slice(index*CHUNK_SIZE,(index+1)*CHUNK_SIZE),old=previous[index];
+     if(!old||old.length!==chunk.length||chunk.some((item,position)=>item!==old[position]))table.put(chunk,chunkKey(account,index));
+     written.push(chunk);
+    }
+    for(let index=written.length;index<previous.length;index++)table.delete(chunkKey(account,index));
+    table.put({...rest,chunks:written.length,format:2},metaKey(account));table.put(result.revision,revisionKey);
+    if(legacyAccounts.has(account))table.delete(account);
+   }catch(error){failure=error;tx.abort();}};
+   request.onsuccess=()=>{if(Number.isSafeInteger(request.result)){commit(request.result);return;}const meta=table.get(metaKey(account));meta.onsuccess=()=>{if(meta.result){commit(meta.result.revision);return;}const full=table.get(account);full.onsuccess=()=>commit(full.result?.revision);};};
+   tx.oncomplete=()=>{loaded.set(account,written);legacyAccounts.delete(account);resolve(result);};
    tx.onabort=()=>reject(failure||tx.error||Error('Local storage transaction failed.'));
    tx.onerror=()=>{};
   }),
@@ -625,9 +669,13 @@ function heartbeatSync(state,lastPullAt,now,activeAt=now){
 function markSyncChanges(previous,next) {
  const pending={...previous.syncPending},times={...previous.syncPendingTimes},undos={...previous.syncPendingUndo};
  const undo=next.history.length<previous.history.length;
- const old=new Map(previous.items.map(item=>[item.mediaKey,item.decision]));
+ const aligned=previous.items.length===next.items.length;let decisions=null;
+ const old={has:key=>(decisions||=new Map(previous.items.map(item=>[item.mediaKey,item.decision]))).has(key),get:key=>(decisions||=new Map(previous.items.map(item=>[item.mediaKey,item.decision]))).get(key)};
  let dirty=!!previous.syncDirty||JSON.stringify(previous.history)!==JSON.stringify(next.history);
- const items=next.items.map(item=>{
+ const items=next.items.map((item,index)=>{
+  const before=aligned?previous.items[index]:null;
+  if(before===item)return item;
+  if(before?.mediaKey===item.mediaKey){if((before.decision??null)!==(item.decision??null)){pending[item.mediaKey]=item.decision??null;times[item.mediaKey]=Date.now();undos[item.mediaKey]=undo||item.decision==='keep'&&(!!undos[item.mediaKey]||before.decision==='remove');dirty=true;}return item;}
   if(!old.has(item.mediaKey)&&previous.syncDecisions?.[item.mediaKey])return {...item,decision:previous.syncDecisions[item.mediaKey],revision:previous.history.findLast(entry=>entry.key===item.mediaKey)?.revision||item.revision||0};
   if((old.get(item.mediaKey)??null)!==(item.decision??null)){pending[item.mediaKey]=item.decision??null;times[item.mediaKey]=Date.now();undos[item.mediaKey]=undo||item.decision==='keep'&&(!!undos[item.mediaKey]||old.get(item.mediaKey)==='remove');dirty=true;}
   return item;
@@ -780,7 +828,8 @@ function createPagePhotosBridge({window,document,crypto,setTimeout,clearTimeout}
 }
 
 function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onDecide,playbackOnClick=false}) {
- let gesture=null,frame=null,animation=null,dismissing=false,finished=Promise.resolve(),cardWidth=300;
+ let gesture=null,frame=null,animation=null,incoming=null,dismissing=false,finished=Promise.resolve(),cardWidth=300;
+ const FLIGHT_MS=340,FLIGHT_EASING='cubic-bezier(.3,.2,.3,1)',FLING_MS=280,FLING_EASING='cubic-bezier(.2,.7,.3,1)';
  const motionPreference=window.matchMedia?.('(prefers-reduced-motion: reduce)');
  const reduced=()=>motionPreference?.matches===true;
  const eligible=({dx,dy})=>Math.abs(dx)>Math.abs(dy)*1.5;
@@ -810,20 +859,20 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   card.style.transform='';card.style.willChange='';card.style.visibility='';
   keep.style.opacity='0';remove.style.opacity='0';under.style.transform=reduced()?'':'scale(.94)';
  };
- const animate=transform=>{
+ const animate=(transform,{duration=180,easing='ease-out'}={})=>{
   const start=card.style.transform||'none';
   animation?.cancel();animation=null;
   card.style.transform=transform;
-  if(!reduced()&&card.animate){animation=card.animate([{transform:start},{transform:transform||'none'}],{duration:180,easing:'ease-out'});finished=animation.finished.catch(()=>{});}
+  if(!reduced()&&card.animate){animation=card.animate([{transform:start},{transform:transform||'none'}],{duration,easing});finished=animation.finished.catch(()=>{});}
   else finished=Promise.resolve();
   return finished;
  };
  const dismiss=decision=>{
   if(dismissing)return finished;
-  dismissing=true;const width=gesture?.width||cardWidth;release();
+  dismissing=true;const width=gesture?.width||cardWidth,flung=!!card.style.transform,duration=flung?FLING_MS:FLIGHT_MS,easing=flung?FLING_EASING:FLIGHT_EASING;release();
   const direction=decision==='keep'?1:-1;
   keep.style.opacity=decision==='keep'?'1':'0';remove.style.opacity=decision==='remove'?'1':'0';under.style.transform=reduced()?'':'scale(1)';
-  const destination=reduced()?'':`translate3d(${direction*(Math.max(window.innerWidth||0,width)*1.5)}px,0,0) rotate(${direction*15}deg)`;
+  const destination=reduced()?'':`translate3d(${Math.round(direction*width*1.3)}px,${Math.round((gesture?.dy||0)*.2)}px,0) rotate(${direction*16}deg)`;
   if(card.cloneNode&&card.parentNode){
    const outgoing=stillClonedVideos(card.cloneNode(true),card);
    outgoing.setAttribute('aria-hidden','true');outgoing.inert=true;
@@ -832,12 +881,14 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
    outgoing.style.position='absolute';outgoing.style.inset='0';outgoing.style.pointerEvents='none';outgoing.style.zIndex='3';
    card.parentNode.append(outgoing);
    card.style.visibility='hidden';
-   const flight=outgoing.animate?.(reduced()?[{opacity:1},{opacity:0}]:[{transform:card.style.transform||'none',opacity:1},{transform:destination,opacity:0}],{duration:reduced()?150:180,easing:'ease-out'});
-   outgoing.style.transform=destination;
+   const flight=outgoing.animate?.(reduced()?[{opacity:1},{opacity:0}]:[{transform:card.style.transform||'none',opacity:1,offset:0},{opacity:1,offset:.7},{transform:destination,opacity:0,offset:1}],{duration:reduced()?150:duration,easing:reduced()?'ease-out':easing});
+   outgoing.style.transform=destination;outgoing.style.opacity='0';
+   incoming?.cancel();incoming=null;
+   if(!reduced()&&card.animate)incoming=card.animate([{transform:'scale(.95)'},{transform:'none'}],{duration,easing:'cubic-bezier(.2,.8,.2,1)'});
    finished=flight?flight.finished.catch(()=>{}).then(()=>outgoing.remove()):Promise.resolve(outgoing.remove());
    return finished;
   }
-  return animate(destination);
+  return animate(destination,{duration,easing});
  };
  const cancelGesture=()=>{
   if(!gesture)return;
@@ -884,7 +935,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   let suppressClick=false;
   target.addEventListener('pointerdown',event=>{
    if(event.target.closest?.('[data-video-control]')||gesture||dismissing||!canSwipe()||event.isPrimary===false||event.button!==0)return;
-   suppressClick=false;animation?.cancel();animation=null;
+   suppressClick=false;animation?.cancel();animation=null;incoming?.finish?.();incoming=null;
    cardWidth=card.getBoundingClientRect?.().width||card.offsetWidth||300;
    gesture={id:event.pointerId,x:event.clientX,y:event.clientY,dx:0,dy:0,samples:Number.isFinite(event.timeStamp)?[{dx:0,time:event.timeStamp}]:[],velocity:0,width:cardWidth,target,suppressClick:()=>{suppressClick=true;},video:event.target.tagName==='VIDEO'?event.target:null,locked:false};
    if(event.pointerType==='mouse')target.setPointerCapture(event.pointerId);
@@ -1728,7 +1779,7 @@ function mountPhotosSwipe(environment) {
  const readyMessage=()=>gear.classList.contains('gear-error')?syncSummary:'';
  const idleMessage=()=>state.job?'A saved album operation is ready to retry.':readyMessage();
  const message=value=>{const statusNode=$('status');statusNode.textContent=otherTab?'Open in another tab':value;statusNode.title=statusNode.textContent;statusNode.classList?.remove?.('toast-show','toast-sticky');if(statusNode.textContent){void statusNode.offsetWidth;statusNode.classList?.add?.(/fail|error|unavailable|couldn|could not|denied|conflict|another tab|not been saved|unsaved|retry/i.test(statusNode.textContent)?'toast-sticky':'toast-show');}reviewStatus.textContent=reviewPanel.hidden?'':value;reviewStatus.hidden=!reviewStatus.textContent;useHere.hidden=!(otherTab||leaseError?.message.includes('busy in another tab'));if(!useHere.hidden)showLockCard();};
- function persistResume(){if(otherTab||!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value=structuredClone(resume);resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
+ function persistResume(){if(otherTab||!identity||!db||state.items!==persistedItems)return;const account=identity.account,item=current();resume={...resume,currentId:item?.mediaKey||null,inspected:!!inspected,filter:$('filter').value,sort:$('sort').value,reviewEvery:Number(reviewEvery.value)||25,deleteMethod:deleteMethod.value};const value={...resume,flashbacks:resume.flashbacks&&{...resume.flashbacks},video:resume.video&&{...resume.video}};resumeWrite=resumeWrite.catch(()=>{}).then(()=>db.saveResume(account,value)).catch(error=>message(`Could not save resume: ${error.message}`));}
  function captureVideo(){const video=$('media').querySelector('video');if(video&&video.dataset.resumeReady!=='pending'&&shown&&Number.isFinite(video.currentTime)){resume={...resume,video:{key:shown,time:video.currentTime}};persistResume();}}
  async function call(operation,args={}) {
   if(!pageVisible())throw sessionChanged();
@@ -2054,10 +2105,10 @@ function mountPhotosSwipe(environment) {
   else if(!item&&!$('overlay').hidden&&!otherTab&&!leaseError?.message.includes('busy in another tab'))renderEmpty();
  }
  function renderStats(){
-  const queue=reviewQueue(state),candidates=reviewTrashCandidates(state);
-  const trashed=state.items.filter(item=>item.state==='in_trash'&&item.decision==='remove');lifetime.textContent=(state.lifetimeFreed||0)>reviewStorage(trashed).bytes?formatStorageBytes(state.lifetimeFreed):estimate(trashed);
+  const queue=[],candidates=[],trashed=[];let decided=0;
+  for(const item of state.items){if(item.decision)decided++;if(item.decision!=='remove')continue;if(item.state==='in_trash'){trashed.push(item);continue;}if(item.needsPreview)continue;candidates.push(item);if(!item.queueSent)queue.push(item);}lifetime.textContent=(state.lifetimeFreed||0)>reviewStorage(trashed).bytes?formatStorageBytes(state.lifetimeFreed):estimate(trashed);
   storageCapsule.update(storageSession.total(state.items));queueSize.textContent='\u00b7 '+formatStorageBytes(reviewStorage(candidates).bytes);trashBadge.textContent=String(candidates.length);trashBadge.hidden=!candidates.length;queuePill.hidden=candidates.length<25;queuePillText.replaceChildren(document.createTextNode(`${candidates.length} going to Trash `),queueSize);queueGrowth.hidden=candidates.length<=25;queueGrowth.textContent=`+${candidates.length-25}`;queueThumbs.replaceChildren();for(const item of candidates.slice(-3)){const image=document.createElement('img');image.alt='';queueImage(image,item);queueThumbs.append(image);}
-  $('stats').textContent=`${deck().length} to review \u00b7 ${state.items.filter(item=>item.decision).length}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(state.items.filter(item=>item.decision==='remove'&&item.state==='in_trash'))} (running total)`;
+  $('stats').textContent=`${deck().length} to review \u00b7 ${decided}/${state.items.length} reviewed \u00b7 Queue: ${queue.length} (estimated savings: ${estimate(queue)}) \u00b7 In Trash: ${estimate(trashed)} (running total)`;
   const {nextUndo,historyLabel,decisionLabel}=historyView();
   undoPreview.textContent=nextUndo?`Next Undo: ${historyLabel(nextUndo)}; restores ${decisionLabel(nextUndo.previous)}.`:'No previous decisions can be undone.';
   $('undo').title=undoPreview.textContent;$('undo').setAttribute('aria-describedby','undo-preview');
