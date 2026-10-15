@@ -619,8 +619,35 @@ test('mounted Trash and deleted-item checks retain all 45 undecided items despit
   assert.equal(reviewDeck(state).length,45);assert.match(mounted.nodes.get('stats').textContent,/^45 to review/);
   assert.ok(state.items.slice(0,45).every(row=>row.state==='active'&&row.decision===null&&(row.revision||0)===0));
   assert.ok(state.items.slice(45).every(row=>row.state==='in_trash'&&row.decision==='remove'&&row.queueSent));
-  assert.deepEqual(requests,[...(action==='move-trash'?['XwAOJf']:[]),'zy0IHe',...Array(6).fill('VrseUb')]);
+  assert.deepEqual(requests,action==='move-trash'?['XwAOJf','zy0IHe']:['zy0IHe',...Array(6).fill('VrseUb')]);
  }
+});
+test('Move to Trash on a large library verifies only the moved batches, three at a time',async()=>{
+ const candidates=Array.from({length:60},(_,index)=>item(`queued-${index}`,{decision:'remove',dedupKey:`queued-stable-${index}`,size:1e6}));
+ const purged=Array.from({length:300},(_,index)=>item(`purged-${index}`,{decision:'remove',state:'in_trash',dedupKey:`purged-stable-${index}`}));
+ const library=Array.from({length:2000},(_,index)=>item(`library-${index}`,{dedupKey:`library-stable-${index}`}));
+ const byDedup=new Map(candidates.map(row=>[row.dedupKey,row.mediaKey])),trashed=[],requests=[];let inFlight=0,peak=0;
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);requests.push(entry[0]);
+  if(entry[0]==='XwAOJf'){inFlight++;peak=Math.max(peak,inFlight);await new Promise(resolve=>setTimeout(resolve,15));inFlight--;assert.ok(args[2].length<=25);trashed.unshift(...args[2].map(key=>byDedup.get(key)));return {ok:true,text:async()=>envelope('XwAOJf',[])};}
+  if(entry[0]==='zy0IHe')return {ok:true,text:async()=>envelope('zy0IHe',[trashed.slice(0,100).map(key=>[key,null,null,null]),null])};
+  return {ok:true,text:async()=>envelope(entry[0],[[args[0],['https://photos.fife.usercontent.google.com/fresh',800,600]],null])};
+ };
+ const mounted=await mountedReview([...library,...purged,...candidates],fetch);
+ mounted.environment.window.confirm=()=>true;
+ mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+ requests.length=0;
+ await mounted.click('move-trash');
+ for(let count=0;count<200&&!/Verified 60 items in Trash/.test(mounted.nodes.get('status').textContent);count++)await new Promise(resolve=>setTimeout(resolve,10));
+ assert.match(mounted.nodes.get('status').textContent,/Verified 60 items in Trash/);
+ assert.equal(requests.filter(id=>id==='XwAOJf').length,3);
+ assert.equal(requests.filter(id=>id==='zy0IHe').length,3);
+ assert.equal(requests.filter(id=>!['XwAOJf','zy0IHe'].includes(id)).length,0);
+ assert.ok(peak>1&&peak<=3,String(peak));
+ const state=await mounted.read(),rows=new Map(state.items.map(row=>[row.mediaKey,row]));
+ assert.ok(candidates.every(row=>rows.get(row.mediaKey).state==='in_trash'));
+ assert.ok(purged.every(row=>rows.get(row.mediaKey).state==='in_trash'&&(rows.get(row.mediaKey).revision||0)===0));
+ assert.ok(library.every(row=>rows.get(row.mediaKey).state==='active'));
 });
 test('legacy candidates share one Going to Trash grid and persist Keep across reload',async()=>{
  const sent=Array.from({length:5},(_,index)=>item(`QA-DUMMY-${index}`,{decision:'remove',queueSent:true,dedupKey:`stable-${index}`}));
@@ -2427,15 +2454,15 @@ test('revoked userscript shows recovery, keeps local swipes and clears credentia
 const settlePreviews=()=>new Promise(resolve=>setTimeout(resolve,30));
 const until=async(predicate,timeout=2000)=>{const end=Date.now()+timeout;while(!predicate()){if(Date.now()>end)return false;await new Promise(resolve=>setTimeout(resolve,5));}await settlePreviews();return true;};
 
-test('stale saved previews refresh only the current and preload window on open and resume',async()=>{
- const calls=[],items=Array.from({length:7},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
+test('stale saved previews refresh only the current item and the next seven on open and resume',async()=>{
+ const calls=[],items=Array.from({length:12},(_,i)=>item(`saved${i}`,{urlFetchedAt:Date.now()-41*60*1000}));
  const mounted=await mountedReview(items,async(url,options)=>{
   const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],key=JSON.parse(entry[1])[0];calls.push(key);
   return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
  });
- await until(()=>new Set(calls).size>=4&&/fresh-saved0/.test(mounted.nodes.get('media').querySelector('img')?.src||'')&&mounted.nodes.get('next-card').querySelector('img')?.dataset.key==='saved1');
- assert.deepEqual([...new Set(calls)].sort(),['saved0','saved1','saved2','saved3']);
- assert.equal(calls.length,4);
+ await until(()=>new Set(calls).size>=8&&/fresh-saved0/.test(mounted.nodes.get('media').querySelector('img')?.src||'')&&mounted.nodes.get('next-card').querySelector('img')?.dataset.key==='saved1');
+ assert.deepEqual([...new Set(calls)].sort(),Array.from({length:8},(_,index)=>`saved${index}`));
+ assert.equal(calls.length,8);
  assert.match(mounted.nodes.get('media').querySelector('img').src,/fresh-saved0/);
  assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
  assert.equal((await mounted.read()).items.filter(row=>row.decision).length,0);
@@ -2444,11 +2471,43 @@ test('stale saved previews refresh only the current and preload window on open a
  mounted.environment.document.listeners.visibilitychange();await settlePreviews();
  assert.equal(calls.length,0);
  const actualNow=Date.now;Date.now=()=>actualNow()+41*60*1000;
- try{mounted.environment.document.listeners.visibilitychange();await until(()=>calls.length>=4&&mounted.nodes.get('next-card').querySelector('img')?.dataset.key==='saved1');}finally{Date.now=actualNow;}
- assert.equal(calls.length,4);
+ try{mounted.environment.document.listeners.visibilitychange();await until(()=>calls.length>=8&&mounted.nodes.get('next-card').querySelector('img')?.dataset.key==='saved1');}finally{Date.now=actualNow;}
+ assert.equal(calls.length,8);
  assert.equal(mounted.nodes.get('next-card').hidden,false);assert.equal(mounted.nodes.get('next-card').querySelector('img').dataset.key,'saved1');
  mounted.nodes.get('close').onclick();calls.length=0;
  mounted.environment.document.listeners.visibilitychange();await settlePreviews();assert.equal(calls.length,0);
+});
+
+test('a stale current photo shows its saved link at once while the link refreshes in the background',async()=>{
+ const calls=[];let release;const gate=new Promise(resolve=>{release=resolve;});
+ const mounted=await mountedReview([item('saved0',{urlFetchedAt:Date.now()-41*60*1000,thumbUrl:'https://lh3.googleusercontent.com/old-saved0'})],async(url,options)=>{
+  const key=JSON.parse(JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][1])[0];calls.push(key);await gate;
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
+ });
+ await settlePreviews();
+ const media=mounted.nodes.get('media');
+ assert.doesNotMatch(media.textContent||'',/Refreshing preview/);
+ assert.match(media.querySelector('img')?.src||'',/old-saved0/);
+ assert.deepEqual(calls,['saved0']);
+ release();
+ assert.ok(await until(()=>/fresh-saved0/.test(media.querySelector('img')?.src||'')));
+ assert.deepEqual(calls,['saved0']);
+});
+
+test('each swipe refreshes the link that enters the seven-card lookahead before it is shown',async()=>{
+ const calls=[],items=Array.from({length:12},(_,index)=>item(`saved${index}`,{urlFetchedAt:index<8?Date.now():Date.now()-41*60*1000}));
+ const mounted=await mountedReview(items,async(url,options)=>{
+  const key=JSON.parse(JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0][1])[0];calls.push(key);
+  return {ok:true,text:async()=>envelope('VrseUb',[[key,[`https://photos.fife.usercontent.google.com/fresh-${key}`,800,600]],'https://video-downloads.google.com/download'])};
+ });
+ await settlePreviews();
+ assert.deepEqual(calls,[]);
+ mounted.nodes.get('keep').onclick();
+ assert.ok(await until(()=>calls.length>=1));
+ assert.deepEqual(calls,['saved8']);
+ mounted.nodes.get('keep').onclick();
+ assert.ok(await until(()=>calls.length>=2));
+ assert.deepEqual(calls,['saved8','saved9']);
 });
 
 test('photo and video errors refresh once then replace failed media with an explicit Retry card',async()=>{
