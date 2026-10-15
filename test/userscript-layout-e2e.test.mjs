@@ -8,7 +8,7 @@ let chromium;
 try{const playwright=await import('playwright');chromium=playwright[process.env.PS_ENGINE||'chromium'];}catch{}
 const item=(index,extra={})=>({mediaKey:`synthetic-${index}`,name:`synthetic-${index}.jpg`,date:new Date(2020,0,1+index).toISOString(),size:2e7,thumbUrl:`https://lh3.googleusercontent.com/synthetic-${index}`,type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now(),...extra});
 
-async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1}){
+async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1,init=null}){
  if(!chromium){t.skip('Playwright is unavailable');return null;}
  const browser=await chromium.launch({headless:true});
  t.after(()=>browser.close());
@@ -28,6 +28,7 @@ async function mount(t,{width,height,items,state={},scheme='light',touch=false,r
   await new Promise((resolve,reject)=>{const tx=db.transaction(['accounts','settings'],'readwrite');tx.objectStore('accounts').put(review,account);tx.objectStore('settings').put({onboardingDismissed:true},'sync');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
  },{...emptyReview(),revision:1,started:true,exhausted:true,...state,items});
  const source=(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8')).replace('document,location,GM:',"document,location:{origin:'https://photos.google.com',pathname:'/u/0/'},GM:");
+ if(init)await page.evaluate(init);
  await page.addScriptTag({content:source});
  await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick());
  await page.waitForFunction(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot;return root.getElementById('overlay')['aria-busy']!=='true'&&root.getElementById('overlay').getAttribute('aria-busy')==='false';});
@@ -329,4 +330,14 @@ for(const [width,height] of [[1366,600],[750,342]])test(`a short window puts the
  assert.ok(play.right<=seek.left&&seek.right<=time.left&&time.right<=mute.left,'the controls do not overlap');
  assert.ok(seek.bottom-seek.top>=44,`the timeline is a ${seek.bottom-seek.top}px touch target`);
  for(const control of [play,seek,time,mute])assert.ok(control.left>=layout.media.left&&control.right<=layout.media.right&&control.bottom<=layout.media.bottom+1);
+});
+
+test('with data saver on, a 3x phone keeps the card-sized photos and never fetches the full-density ones',async t=>{
+ const requested=[];
+ const page=await mount(t,{width:440,height:956,dpr:3,touch:true,init:()=>Object.defineProperty(navigator,'connection',{configurable:true,value:{saveData:true,effectiveType:'4g'}}),items:Array.from({length:5},(_,index)=>item(index)),routes:(route,url)=>{if(url.hostname==='lh3.googleusercontent.com'){const size=/=w(\d+)-h(\d+)/.exec(url.pathname);if(size)requested.push([url.pathname.split('=')[0],+size[1],+size[2]]);}return null;}});if(!page)return;
+ await page.waitForTimeout(1200);
+ const shown=await measure(page,`const image=q('#media img'),card=q('#media');return {natural:image.naturalWidth,card:card.offsetWidth,sharp:image.dataset.sharp||null};`);
+ assert.ok(shown.natural>0);assert.equal(shown.sharp,null,'the shown photo was swapped for its full-density version');
+ await page.keyboard.press('ArrowRight');await page.waitForTimeout(800);
+ assert.deepEqual(requested.filter(([,width])=>width>=shown.card*3-2),[],'a full-density photo was requested with data saver on');
 });
