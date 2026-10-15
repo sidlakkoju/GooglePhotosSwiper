@@ -125,7 +125,8 @@ export async function syncRequest(request,env={}) {
   if(route==='/api/trash-check'&&method==='POST'){
    const value=await body(request);if(!Array.isArray(value.ids)||value.ids.length>25||!value.ids.every(identifier))throw Error('Invalid items');
    const rows=await db.batch(value.ids.map(id=>db.prepare("SELECT d.id FROM decisions d LEFT JOIN decision_versions v ON v.scope = d.scope AND v.id = d.id LEFT JOIN decision_keeps k ON k.scope = d.scope AND k.id = d.id WHERE d.scope = ? AND d.id = ? AND d.decision = 'remove' AND COALESCE(k.updated_at,0) <= COALESCE(v.updated_at,0)").bind(scope,id)));
-   return respond({safe:rows.every(row=>row.results.length===1)});
+   const kept=value.ids.filter((id,index)=>rows[index].results.length!==1);
+   return respond({safe:!kept.length,kept});
   }
   if(route==='/api/progress'&&method==='GET')return respond((await read()).progress);
   if((route==='/api/progress'&&method==='PUT')||(route==='/api/undo'&&['PUT','POST'].includes(method))){

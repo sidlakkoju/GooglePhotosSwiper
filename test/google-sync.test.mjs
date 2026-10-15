@@ -660,3 +660,14 @@ test('space linking preserves versionless target removes against source keeps an
   assert.equal(env.DB.sqlite.prepare('SELECT * FROM decision_versions WHERE scope = ? AND id = ?').get(scope,id),undefined);
  }
 });
+
+test('Trash safety names only the photos another device kept, so the rest of the batch can still move',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys};
+ const a=await signIn(env,'3'.repeat(43)),b=await signIn(env,'4'.repeat(43));
+ const api=(device,path,method='GET',value)=>syncRequest(new Request(syncOrigin+'/api/'+path,{method,headers:{Authorization:'Bearer '+device.token},...(value?{body:JSON.stringify(value)}:{})}),env);
+ await api(a,'decisions','PUT',{decisions:['synthetic-a','synthetic-b','synthetic-x'].map((id,index)=>({id,decision:'remove',updatedAt:100+index}))});
+ await api(b,'decisions','PUT',{decisions:[{id:'synthetic-x',decision:'keep',updatedAt:150}]});
+ const check=await (await api(a,'trash-check','POST',{ids:['synthetic-a','synthetic-b','synthetic-x']})).json();
+ assert.equal(check.safe,false);assert.deepEqual(check.kept,['synthetic-x']);
+ assert.deepEqual(await (await api(a,'trash-check','POST',{ids:['synthetic-a','synthetic-b']})).json(),{safe:true,kept:[]});
+});
