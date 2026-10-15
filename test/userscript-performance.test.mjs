@@ -89,7 +89,7 @@ test('buffer and display share an exact synthetic preview URL and reuse without 
  assert.equal(reusablePreview({...image,complete:false},displayURL),null);
  assert.match(ui,/source:item=>previewSource\(item.thumbUrl\)/);assert.match(ui,/image.src=source;/);
  assert.match(ui,/const source=previewSource\(item.thumbUrl\);/);
- assert.match(ui,/const reused=!!cached;[\s\S]*?if\(!reused\)media.src=source/);
+ assert.match(ui,/const reused=!!\(sharp\|\|cached\);[\s\S]*?if\(!reused\)media.src=source/);
 });
 
 test('clearing preserves upcoming in-flight downloads and evicts replaced URLs',async()=>{
