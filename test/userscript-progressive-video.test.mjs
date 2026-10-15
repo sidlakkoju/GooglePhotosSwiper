@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {smallerVideoURL,startProgressiveVideo,watchVideoLoading} from '../lib/userscript-video.mjs';
+import {loopOnEnd,smallerVideoURL,startProgressiveVideo,watchVideoLoading} from '../lib/userscript-video.mjs';
 
 function fakeVideo(){
  const listeners=new Map();
@@ -289,4 +289,14 @@ test('a catch-up that has not converged after eight seconds gives up and retries
  late();assert.equal(full.playbackRate,1.5);
  clock.advance(7900);video.emit('timeupdate');assert.equal(full.src,url.replace('=original','=m22'));
  clock.advance(200);video.emit('timeupdate');assert.equal(full.src,'');assert.equal(full.isConnected,false);
+});
+
+test('videos loop by restarting on ended instead of the native loop attribute',()=>{
+ const video=fakeVideo();let active=true;
+ loopOnEnd(video,()=>active);
+ assert.equal(video.loop,false);
+ video.currentTime=3;video.paused=true;video.emit('ended');
+ assert.equal(video.currentTime,0);assert.equal(video.paused,false);assert.equal(video.playCalls,1);
+ active=false;video.currentTime=3;video.paused=true;video.emit('ended');
+ assert.equal(video.currentTime,3);assert.equal(video.playCalls,1);
 });
