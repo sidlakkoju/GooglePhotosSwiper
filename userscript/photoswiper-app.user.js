@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.125
+// @version 1.2.126
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1716,7 +1716,7 @@ function mountPhotosSwipe(environment) {
  const googleSettings=document.createElement('button');googleSettings.setAttribute('id','google-settings');settingsPanel.append(googleSettings);
  const googleSignOut=document.createElement('button');googleSignOut.setAttribute('id','google-sign-out');googleSignOut.textContent='Sign out';settingsPanel.append(googleSignOut);
  const storageDetails=document.createElement('div');const storageTitle=document.createElement('h3');storageTitle.textContent='What we store';storageDetails.append(storageTitle);
- for(const text of ["Your Google account email and Google account ID, to link your devices to one sync space.","Each Keep/Remove decision, keyed by Google Photos' internal item ID, with when and from which device it was made.","Your review queue and undo history: item IDs plus the details the app already shows (such as dates, type, and Google's own thumbnail link). The link only works for your signed-in Google account.","Each device's name (like \"Chrome on Mac\") and a hashed sign-in token. Pending sign-ins expire after 5 minutes.","No photos or videos, no image files, and no Google password or Google access token are ever stored."]){const paragraph=document.createElement('p');paragraph.textContent=text;storageDetails.append(paragraph);}settingsPanel.append(storageDetails);
+ for(const text of ["Your Google account email and Google account ID, to link your devices to one sync space.","Each Keep/Delete decision, keyed by Google Photos' internal item ID, with when and from which device it was made.","Your review progress and undo history: for each photo you\u2019ve reviewed, its item ID plus the details the app already shows (such as dates, type, and Google's own thumbnail link). The link only works for your signed-in Google account.","Each device's name (like \"Chrome on Mac\") and a hashed sign-in token. Pending sign-ins expire after 5 minutes.","No photos or videos, no image files, and no Google password or Google access token are ever stored."]){const paragraph=document.createElement('p');paragraph.textContent=text;storageDetails.append(paragraph);}settingsPanel.append(storageDetails);
  const showSyncAccount=settings=>{const signedIn=!!(settings.token&&settings.email);pairingNotice.textContent=signedIn?'Sync account: '+settings.email:settings.token?'Sign in with Google to link your existing sync progress.':'';googleSettings.textContent=signedIn?'Switch account':'Sign in with Google';googleSignOut.hidden=!signedIn;syncLocal.hidden=signedIn;accountMismatch.hidden=!signedIn||!identity?.label||identity.label===settings.email.toLowerCase();accountMismatch.textContent=accountMismatch.hidden?'':'This device syncs as '+settings.email+'; Photos is showing '+identity.label+'. Switch account in Settings.';};
  showSyncAccount({});
  googleSignOut.onclick=()=>run(async()=>{cancelGoogleSignIn?.();await syncRunning;const store=await pairingPromise,settings=await store.settings();await store.saveSettings({...settings,token:'',email:'',onboardingDismissed:true});syncEnabled=false;syncClient.configure({});showSyncAccount({});message('Signed out \u00b7 progress saved locally');});
@@ -2505,7 +2505,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.125":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.126":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
