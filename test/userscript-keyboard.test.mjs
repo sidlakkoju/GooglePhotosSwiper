@@ -9,7 +9,7 @@ function fixture(){
  let time=1000;
  const listeners={},decisions=[],root={},document={},sheet={hidden:true},dialog={hidden:true};
  const nodes={overlay:{hidden:false},card:{classList:{contains:()=>false}},media:{querySelector:()=>null}};
- const context=vm.createContext({Date:{now:()=>time},window:{addEventListener:(type,handler)=>listeners[type]=handler},document,root,sheet,pairingModal:{modal:dialog,close(){dialog.hidden=true;context.suppressViewerShortcuts();}},receivingPanel:null,$:id=>nodes[id],reviewPanel:{hidden:true},close(){},toggleEnlarge(){},undo(){},decide:decision=>decisions.push(decision),closeSettings(){sheet.hidden=true;root.activeElement={tagName:'BUTTON'};context.suppressViewerShortcuts();}});
+ const context=vm.createContext({Date:{now:()=>time},window:{addEventListener:(type,handler)=>listeners[type]=handler},document,root,sheet,pairingModal:{modal:dialog,close(){dialog.hidden=true;context.suppressViewerShortcuts();}},receivingPanel:null,$:id=>nodes[id],reviewPanel:{hidden:true},orderMenu:{hidden:true},close(){},toggleEnlarge(){},undo(){},decide:decision=>decisions.push(decision),closeSettings(){sheet.hidden=true;root.activeElement={tagName:'BUTTON'};context.suppressViewerShortcuts();}});
  vm.runInContext(source.slice(source.indexOf(' let viewerShortcutsBlockedUntil='),source.indexOf(' const syncStatus='))+'\nglobalThis.suppressViewerShortcuts=suppressViewerShortcuts;',context);
  vm.runInContext(source.slice(source.indexOf(' function editingFieldFocused('),source.lastIndexOf('\n}')),context);
  const press=(key,extra={})=>listeners.keydown({key,type:'keydown',preventDefault(){},stopImmediatePropagation(){},...extra});
