@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.101
+// @version 1.2.102
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1027,7 +1027,7 @@ function smallerVideoURL(value,compact=false){
  return url.href;
 }
 function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onFallback=()=>{},isActive}){
- let original=null,finished=false,seeking=false,wantsPlayback=true,seekIssued=0,retries=0,retryAt=0,realign=()=>{};
+ let original=null,finished=false,seeking=false,wantsPlayback=true,seekIssued=0,retries=0,retryAt=0,stuckAfter=4000,unstick=()=>{};
  const release=element=>{element.pause();element.removeAttribute('src');element.load();if(element!==video)element.remove();};
  const cancel=()=>{finished=true;if(original){release(original);original=null;}};
  video.cancelUpgrade=cancel;
@@ -1044,11 +1044,24 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   if(finished||original||!isActive())return;
   original=createVideo();const full=original;
   full.hidden=false;Object.assign(full.style,{position:'absolute',inset:'0',opacity:'0',pointerEvents:'none'});video.parentNode.append(full);full.preload='auto';full.muted=true;full.loop=video.loop;full.playsInline=true;full.poster=video.poster;
-  let seekStart=0,seekAttempts=0;
+  let seekStart=0,seekAttempts=0,lag=0,frameQueued=false,aheadOff=false,seekingAhead=false;
   const abandon=()=>{if(finished||original!==full)return;release(full);original=null;seeking=false;if(retries<3)retryAt=Date.now()+5000*2**retries++;};
+  const bufferedTo=time=>{const ranges=full.buffered;for(let index=0;index<(ranges?.length||0);index++)if(ranges.start(index)<=time&&time<=ranges.end(index))return ranges.end(index);return time;};
+  const caughtUp=()=>{frameQueued=false;align();};
   const align=()=>{
    if(finished||original!==full||!isActive()||full.readyState<2||seeking)return;
-   if(Math.abs(full.currentTime-video.currentTime)>.04){if(seekAttempts>=8){abandon();return;}seekAttempts++;seekStart=full.currentTime;seeking=true;seekIssued=Date.now();full.currentTime=video.currentTime;return;}
+   const ahead=full.currentTime-video.currentTime,playing=!video.paused&&video.playbackRate>0;
+   if(playing&&ahead>.04&&ahead<=1.6){
+    if(!frameQueued){frameQueued=true;if(video.requestVideoFrameCallback)video.requestVideoFrameCallback(caughtUp);else video.addEventListener('timeupdate',caughtUp,{once:true});}
+    return;
+   }
+   if(Math.abs(ahead)>.04){
+    if(seekAttempts>=8){abandon();return;}
+    let target=video.currentTime;
+    seekingAhead=false;
+    if(playing&&!aheadOff&&seekAttempts>=2&&lag>.04){const lead=Math.min(1.5,(lag*1.5+.05)*video.playbackRate,bufferedTo(target)-target-.05);if(lead>lag*video.playbackRate){target+=lead;seekingAhead=true;}}
+    stuckAfter=seekingAhead?1200:4000;seekAttempts++;seekStart=full.currentTime;seeking=true;seekIssued=Date.now();full.currentTime=target;return;
+   }
    const paused=video.paused;
    full.playbackRate=video.playbackRate;full.volume=video.volume;
    const swap=()=>{
@@ -1061,8 +1074,8 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
    if(paused){swap();return;}
    full.play().then(()=>{if(full.requestVideoFrameCallback)full.requestVideoFrameCallback(swap);else swap();}).catch(abandon);
   };
-  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
-  realign=align;
+  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;lag=video.paused?0:video.currentTime-full.currentTime;if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
+  unstick=()=>{if(seekingAhead)aheadOff=true;seekingAhead=false;stuckAfter=4000;if(seekAttempts>=8){abandon();return;}seekAttempts++;seekStart=full.currentTime;seekIssued=Date.now();full.currentTime=video.currentTime;};
   full.addEventListener('canplay',align);
   full.onerror=()=>{release(full);original=null;};
   full.src=compact?smallerVideoURL(url):url;full.load();
@@ -1082,7 +1095,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
  video.addEventListener('timeupdate',()=>{
   if(finished||!isActive())return;
   const now=Date.now();
-  if(original&&seeking&&now-seekIssued>4000){seeking=false;realign();return;}
+  if(original&&seeking&&now-seekIssued>stuckAfter){unstick();return;}
   if(!original&&retryAt&&now>=retryAt&&!video.paused){retryAt=0;prepare();}
  });
  const small=smallerVideoURL(url,compact);
@@ -2391,7 +2404,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.101":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.102":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

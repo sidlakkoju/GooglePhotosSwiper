@@ -251,3 +251,39 @@ test('a hidden seek that never completes is reissued after four seconds',t=>{
  clock.advance(3000);video.emit('timeupdate');full.emit('canplay');assert.equal(seeks,1);
  clock.advance(1500);video.emit('timeupdate');assert.equal(seeks,2);
 });
+
+function seekAheadSetup(bufferEnd){
+ const video=fakeVideo(),full=fakeVideo(),swaps=[],frames=[];
+ full.buffered={length:1,start:()=>0,end:()=>bufferEnd};
+ video.requestVideoFrameCallback=callback=>frames.push(callback);
+ startProgressiveVideo({video,url,compact:true,createVideo:()=>full,onSwap:value=>swaps.push(value),onError:()=>{},isActive:()=>true,setTimer:()=>{}});
+ video.currentTime=1;video.readyState=2;video.emit('loadeddata');
+ full.readyState=2;full.emit('canplay');
+ const late=()=>{video.currentTime+=.2;full.emit('seeked');};
+ return {video,full,swaps,frames,late};
+}
+
+test('after two late seeks the upgrade aims ahead inside its buffer, then swaps once playback catches up',async()=>{
+ const {video,full,swaps,frames,late}=seekAheadSetup(5);
+ assert.equal(full.currentTime,1);
+ late();assert.equal(full.currentTime,1.2);
+ late();assert.ok(Math.abs(full.currentTime-1.75)<1e-9,`seeked ahead to ${full.currentTime}`);
+ video.currentTime=1.6;full.emit('seeked');
+ assert.equal(frames.length,1);assert.deepEqual(swaps,[]);
+ video.currentTime=1.74;frames.shift()();await Promise.resolve();
+ assert.deepEqual(swaps,[full]);assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
+});
+
+test('without buffered room ahead the upgrade keeps exact seeks',()=>{
+ const {full,late}=seekAheadSetup(1.45);
+ late();late();assert.ok(Math.abs(full.currentTime-1.4)<1e-9,`exact seek to ${full.currentTime}`);
+});
+
+test('a seek ahead that stalls for 1.2 s is replaced by an exact seek and seeking ahead stops',t=>{
+ const clock=clocked(t);
+ const {video,full,late}=seekAheadSetup(5);
+ late();late();assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
+ clock.advance(1000);video.currentTime=1.5;video.emit('timeupdate');assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
+ clock.advance(300);video.emit('timeupdate');assert.equal(full.currentTime,1.5);
+ video.currentTime=1.7;full.emit('seeked');assert.equal(full.currentTime,1.7);
+});
