@@ -327,5 +327,6 @@ for(const [width,height] of [[1366,600],[750,342]])test(`a short window puts the
  assert.ok(layout.media.bottom-layout.video.bottom<=60,`the controls take ${layout.media.bottom-layout.video.bottom}px under the picture`);
  for(const control of [seek,time,mute])assert.ok(Math.abs(control.middle-play.middle)<=6,'the controls share one row');
  assert.ok(play.right<=seek.left&&seek.right<=time.left&&time.right<=mute.left,'the controls do not overlap');
+ assert.ok(seek.bottom-seek.top>=44,`the timeline is a ${seek.bottom-seek.top}px touch target`);
  for(const control of [play,seek,time,mute])assert.ok(control.left>=layout.media.left&&control.right<=layout.media.right&&control.bottom<=layout.media.bottom+1);
 });
