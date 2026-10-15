@@ -220,7 +220,7 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
    const mediaURL=()=> 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#436887"/></svg>');
    const previewSource=mediaURL;
    const thumbnails={bind:(image,item,source)=>{image.src=source(item);},resolve:async item=>item};
-   const estimate=()=> '96.4 MB',itemSize=()=> '4.1 MB',previewSize=()=>({}),message=()=>{},reviewTrashCandidates=state=>state.items;
+   const estimate=()=> '96.4 MB',itemSize=()=> '4.1 MB',captureDate=()=>null,previewSize=()=>({}),message=()=>{},reviewTrashCandidates=state=>state.items;
    const apply=next=>{state=next;renderTrashReview();},decideReview=(state,key,decision)=>({...state,items:state.items.map(item=>item.mediaKey===key?{...item,decision}:item)});
    ${methods}
    overlayElement.hidden=false;openReview();

@@ -8,11 +8,11 @@ let chromium;
 try{const playwright=await import('playwright');chromium=playwright[process.env.PS_ENGINE||'chromium'];}catch{}
 const item=(index,extra={})=>({mediaKey:`synthetic-${index}`,name:`synthetic-${index}.jpg`,date:new Date(2020,0,1+index).toISOString(),size:2e7,thumbUrl:`https://lh3.googleusercontent.com/synthetic-${index}`,type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now(),...extra});
 
-async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1,init=null,onboarding=false}){
+async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1,init=null,onboarding=false,timezoneId=undefined}){
  if(!chromium){t.skip('Playwright is unavailable');return null;}
  const browser=await chromium.launch({headless:true});
  t.after(()=>browser.close());
- const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:dpr,colorScheme:scheme,hasTouch:touch,isMobile:touch&&(process.env.PS_ENGINE||'chromium')==='chromium'});
+ const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:dpr,colorScheme:scheme,hasTouch:touch,isMobile:touch&&(process.env.PS_ENGINE||'chromium')==='chromium',...(timezoneId?{timezoneId,locale:'en-US'}:{})});
  await page.route('**/*',route=>{
   const url=new URL(route.request().url());
   if(routes){const handled=routes(route,url);if(handled)return handled;}
@@ -275,6 +275,16 @@ for(const [marked,trashName] of [[0,'Going to Trash'],[1,'Going to Trash, 1 item
  await measure(page,`root.getElementById('settings').click();`);await page.waitForTimeout(300);
  assert.equal(await page.getByRole('button',{name:'Done',exact:true}).count(),1);
  assert.equal(await page.getByRole('button',{name:'Close settings',exact:true}).count(),0);
+});
+
+for(const timezoneId of ['Asia/Tokyo','America/New_York'])test(`a photo taken on New Year's Eve in California shows that date to a viewer in ${timezoneId}`,async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,timezoneId,state:{exhausted:true},items:[item(0,{name:'eve.jpg',date:'2026-01-01T07:30:00.000Z',timezoneOffset:-8*3600000,decision:'remove',revision:1,lastDecisionAt:1000}),item(1,{name:'eve.jpg',date:'2026-01-01T07:30:00.000Z',timezoneOffset:-8*3600000})]});if(!page)return;
+ const shown=await measure(page,`return {caption:q('#caption').textContent,memory:q('.memory-label')?.textContent||''};`);
+ assert.match(shown.caption,/^eve\.jpg · 12\/31\/2025 · /);
+ if(shown.memory)assert.match(shown.memory,/^December 2025/);
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ await page.locator('.trash-tile [aria-label^="Preview "]').first().click();await page.waitForTimeout(300);
+ assert.match(await measure(page,`return q('.trash-preview-caption small').textContent;`),/^12\/31\/2025/);
 });
 
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
