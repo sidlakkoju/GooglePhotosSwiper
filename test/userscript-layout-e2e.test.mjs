@@ -545,3 +545,18 @@ for(const scheme of ['light','dark'])test(`dragging the enlarged card on iPhone 
  assert.deepEqual({hidden:dragged.hidden,display:dragged.display==='none',visibility:dragged.visibility,covers:dragged.covers},{hidden:false,display:false,visibility:'visible',covers:true});
  assert.ok(dragged.opacity>0);
 });
+
+test('the end-of-library message counts every page of a multi-page library, not just the last load',async t=>{
+ const total=151,pageSize=50,envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr',id,JSON.stringify(data)]])}\n`;
+ const page=await mount(t,{width:1280,height:900,items:[],state:{started:false,exhausted:false,cursor:null},routes:(route,url)=>{
+  if(url.hostname!=='photos.google.com'||!url.pathname.endsWith('/data/batchexecute'))return null;
+  const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0],args=JSON.parse(call[1]);
+  if(call[0]==='lcxiM'){const start=args[0]?Number(args[0].slice(1)):0,keys=Array.from({length:Math.min(pageSize,total-start)},(_,index)=>`AF1QipPage${start+index}x`);return route.fulfill({contentType:'text/plain',body:envelope(call[0],[keys.map((key,index)=>[key,[`https://lh3.googleusercontent.com/${key}`,800,600],Date.UTC(2026,0,1)-(start+index)*864e5,`dedup-${key}`,0,{}]),start+pageSize<total?`c${start+pageSize}`:null])});}
+  return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[],null])});
+ }});if(!page)return;
+ await measure(page,`q('.empty-action').click();`);
+ await page.waitForFunction(()=>/End of library/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('status').textContent),null,{timeout:15000});
+ const result=await measure(page,`return {status:q('#status').textContent,stats:q('#stats').textContent};`);
+ assert.match(result.stats,/^151 to review/);
+ assert.match(result.status,/^151 new items to review · 151 library rows checked · End of library/);
+});
