@@ -180,3 +180,53 @@ test('warmed video events from a passed card do not start an upgrade',()=>{
  active=false;video.readyState=4;video.emit('playing');video.emit('timeupdate');
  assert.equal(created,0);
 });
+
+function clocked(t){
+ const now=Date.now;let clock=now();Date.now=()=>clock;t.after(()=>{Date.now=now;});
+ return {advance:ms=>{clock+=ms;}};
+}
+function stubbornVideo(){
+ const element=fakeVideo();let time=0;
+ Object.defineProperty(element,'currentTime',{get:()=>time,set:value=>{element.seeks=(element.seeks||0)+1;time=Math.min(value,time+.01);}});
+ return element;
+}
+
+test('an upgrade abandoned under contention retries while the same card keeps playing and can then swap',async t=>{
+ const clock=clocked(t),video=fakeVideo(),created=[],swaps=[];
+ startProgressiveVideo({video,url,compact:true,createVideo:()=>{const element=created.length?fakeVideo():stubbornVideo();created.push(element);return element;},onSwap:value=>swaps.push(value),onError:()=>{},isActive:()=>true});
+ video.currentTime=12;video.readyState=2;for(const event of ['loadeddata','playing','timeupdate'])video.emit(event);
+ const first=created[0];first.readyState=2;first.emit('canplay');
+ for(let index=0;index<20;index++)first.emit('seeked');
+ assert.equal(first.src,'');assert.equal(created.length,1);
+ clock.advance(4000);video.emit('timeupdate');assert.equal(created.length,1);
+ video.pause();clock.advance(2000);video.emit('timeupdate');assert.equal(created.length,1);
+ await video.play();video.emit('timeupdate');
+ assert.equal(created.length,2);
+ const second=created[1];assert.equal(second.src,smallerVideoURL(url));
+ second.readyState=2;second.emit('canplay');assert.equal(second.currentTime,12);second.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[second]);
+});
+
+test('upgrade retries back off and stop after three attempts',t=>{
+ const clock=clocked(t),video=fakeVideo(),created=[];
+ startProgressiveVideo({video,url,createVideo:()=>{const element=stubbornVideo();created.push(element);return element;},onSwap:()=>{},onError:()=>{},isActive:()=>true});
+ video.currentTime=12;video.readyState=2;for(const event of ['loadeddata','playing','timeupdate'])video.emit(event);
+ const fail=element=>{element.readyState=2;element.emit('canplay');for(let index=0;index<20;index++)element.emit('seeked');};
+ const waits=[];
+ for(let round=0;round<4;round++){
+  fail(created.at(-1));const before=created.length;let waited=0;
+  while(created.length===before&&waited<60000){clock.advance(1000);waited+=1000;video.emit('timeupdate');}
+  waits.push(created.length>before?waited:null);
+ }
+ assert.deepEqual(waits,[5000,10000,20000,null]);assert.equal(created.length,4);
+});
+
+test('a hidden seek that never completes is reissued after four seconds',t=>{
+ const clock=clocked(t),video=fakeVideo(),full=fakeVideo();let seeks=0,time=0;
+ Object.defineProperty(full,'currentTime',{get:()=>time,set:value=>{seeks++;time=value-.3;}});
+ startProgressiveVideo({video,url,createVideo:()=>full,onSwap:()=>{},onError:()=>{},isActive:()=>true});
+ video.currentTime=9;video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
+ assert.equal(seeks,1);
+ clock.advance(3000);video.emit('timeupdate');full.emit('canplay');assert.equal(seeks,1);
+ clock.advance(1500);video.emit('timeupdate');assert.equal(seeks,2);
+});
