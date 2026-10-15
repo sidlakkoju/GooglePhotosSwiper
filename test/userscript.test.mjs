@@ -84,6 +84,13 @@ test('video and Trash reads use page-session RPCs and refuse direct deletion com
  const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
  const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
 });
+test('createShareLink sends the Create link request for one item and only accepts a photos.app.goo.gl link',async()=>{
+ const f=fixture(()=>['AF1QipSharedAlbumKey','https://photos.app.goo.gl/AbCd1234',null,null,'token',null,5,false,0]);
+ assert.deepEqual(await call(f,'createShareLink',{mediaKey:'photo'}),{url:'https://photos.app.goo.gl/AbCd1234',albumKey:'AF1QipSharedAlbumKey'});
+ assert.equal(f.calls[0].id,'SFKp8c');assert.deepEqual(f.calls[0].args[3][2],[[['photo']]]);
+ for(const data of [['AF1QipSharedAlbumKey','https://evil.example/AbCd1234'],[null,'https://photos.app.goo.gl/AbCd1234'],['AF1QipSharedAlbumKey',null]])assert.equal((await fixture(()=>data).api('createShareLink',{mediaKey:'photo'})).ok,false);
+ assert.equal((await f.api('createShareLink',{mediaKey:'bad key!'})).ok,false);
+});
 test('media URL refresh selects the preview tuple while video streams from the preview host, falling back to the playback URL',async()=>{
  const preview='https://photos.fife.usercontent.google.com/preview',playback='https://lh3.googleusercontent.com/playback';
  const f=fixture(()=>[['photo',[preview,800,600]],playback]);
