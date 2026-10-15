@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.122
+// @version 1.2.123
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1028,7 +1028,7 @@ function smallerVideoURL(value,compact=false){
  url.pathname=url.pathname.replace(/=.+$/,'')+(compact?'=m18':'=m22');
  return url.href;
 }
-function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onFallback=()=>{},isActive,held=()=>false,runOutAfter=2000}){
+function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onFallback=()=>{},isActive,held=()=>false,runOutAfter=2000,runOuts=0}){
  let original=null,finished=false,seeking=false,wantsPlayback=true,seekIssued=0,retries=0,retryAt=0,unstick=()=>{},chaseUntil=0,giveUp=()=>{};
  const release=element=>{element.pause();element.removeAttribute('src');element.load();if(element!==video)element.remove();};
  const cancel=()=>{finished=true;if(original){release(original);original=null;}};
@@ -1057,6 +1057,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
     pending=null;const muted=element.muted;element.pause();next.muted=muted;next.volume=element.volume;next.playbackRate=element.playbackRate;
     next.style.position='';next.style.inset='';next.style.opacity='';next.style.pointerEvents='';next.onerror=onError;next.dataset.resumeReady='ready';
     onSwap(next);release(element);onFallback();
+    if(runOuts<2)startProgressiveVideo({video:next,url,compact,createVideo,onSwap,onError,onFallback,isActive,held,runOutAfter,runOuts:runOuts+1});
    };
    const ready=()=>{
     if(pending!==next||!isActive()||starting||next.seeking||next.readyState<2||Math.abs(next.currentTime-time)>.25)return;
@@ -1084,7 +1085,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   if(held()){retryAt=retryAt||Date.now();return;}
   original=createVideo();const full=original;
   full.hidden=false;Object.assign(full.style,{position:'absolute',inset:'0',opacity:'0',pointerEvents:'none'});video.parentNode.append(full);full.preload='auto';full.muted=true;full.loop=video.loop;full.playsInline=true;full.poster=video.poster;
-  let seekStart=0,seekAttempts=0,frameQueued=false,chasing=false;
+  let seekStart=0,seekAttempts=0,frameQueued=false,chasing=false,reissued=false;
   const abandon=()=>{if(finished||original!==full)return;release(full);original=null;seeking=false;chasing=false;chaseUntil=0;if(retries<3)retryAt=Date.now()+5000*2**retries++;};
   const bufferedTo=time=>{const ranges=full.buffered;for(let index=0;index<(ranges?.length||0);index++)if(ranges.start(index)<=time&&time<=ranges.end(index))return ranges.end(index);return time;};
   const caughtUp=()=>{frameQueued=false;align();};
@@ -1127,8 +1128,8 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
    if(paused){swap();return;}
    full.play().then(()=>{if(full.requestVideoFrameCallback)onFrame(swap);else swap();}).catch(abandon);
   };
-  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
-  unstick=()=>{if(seekAttempts>=8){abandon();return;}seekAttempts++;seekStart=full.currentTime;seekIssued=Date.now();full.currentTime=video.currentTime;};
+  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;if(reissued){reissued=false;seekAttempts=1;}if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
+  unstick=()=>{if(seekAttempts>=8){abandon();return;}seekAttempts++;reissued=true;seekStart=full.currentTime;seekIssued=Date.now();full.currentTime=video.currentTime;};
   full.addEventListener('canplay',align);
   full.onerror=()=>{release(full);original=null;};
   full.src=compact?smallerVideoURL(url):url;full.load();
@@ -2501,7 +2502,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.122":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.123":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
