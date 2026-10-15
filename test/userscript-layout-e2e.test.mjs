@@ -298,6 +298,14 @@ for(const [marked,expected] of [[0,'back'],[2,'move-trash']])test(`opening Going
  if(expected==='back')assert.equal(focus.text,'\u2039 Back');else assert.equal(focus.id,'move-trash');
 });
 
+for(const marked of [0,2])test(`Going to Trash explains itself with ${marked} marked`,async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index,index<marked?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ const shown=await measure(page,`const p=root.getElementById('review-panel');return {sub:q('.trash-subtitle').textContent,help:q('.trash-help').textContent,selectAll:[...p.querySelectorAll('.trash-nav button')].some(b=>b.textContent==='Select All'&&b.getClientRects().length>0)};`);
+ if(marked){assert.match(shown.sub,/^2 of 2 selected/);assert.match(shown.help,/^Tap a photo to preview/);assert.equal(shown.selectAll,true);}
+ else{assert.equal(shown.sub,'Nothing marked for deletion');assert.match(shown.help,/^Swipe left or tap \u2715 to mark photos/);assert.equal(shown.selectAll,false);}
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
