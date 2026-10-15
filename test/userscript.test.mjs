@@ -1082,7 +1082,7 @@ test('opening with sync pauses if another tab takes ownership during sync',async
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
  const stats=mounted.nodes.get('stats').textContent;
- assert.equal(stats,'0 to review · 2/2 reviewed · Queue: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total)');
+ assert.equal(stats,'0 to review · 2/2 reviewed · Going to Trash: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total)');
  assert.equal(stats.match(/estimated savings/g).length,1);
 });
 test('mounted Keep names the decided item after advancing and during candidate inspection',async()=>{
@@ -4176,7 +4176,7 @@ test('a Move to Trash that fails after a verified batch reports how many moved a
  const items=Array.from({length:30},(_,index)=>item(`t${index}`,{decision:'remove',dedupKey:`stable-t${index}`,size:1e6}));
  const mounted=await mountedReview(items,{fetch,confirm:()=>true});
  await mounted.click('move-trash');
- assert.match(mounted.nodes.get('status').textContent,/^25 of 30 moved to Trash; 5 still queued\./);
+ assert.match(mounted.nodes.get('status').textContent,/^25 of 30 moved to Trash; 5 still marked for deletion\./);
  assert.equal((await mounted.read()).items.filter(row=>row.state==='in_trash').length,25);
  assert.equal(mounted.nodes.get('trash-done').hidden,true);
  await mounted.nodes.get('close').onclick();
@@ -4212,4 +4212,9 @@ test('saves check a small revision record, adopt legacy records without one, and
  assert.equal((await db.read('synthetic-account')).items[0].decision,'keep');
  const next=await db.save('synthetic-account',{...saved,items:[item('legacy',{decision:'remove'})]});
  assert.equal(next.revision,9);assert.equal((await db.read('synthetic-account')).revision,9);
+});
+test('user-facing text uses Delete and Going to Trash instead of the old queue wording',async()=>{
+ const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
+ for(const phrase of ['Swipe left to queue','\\u00d7 Queue','Removal queue','reviewed \\u00b7 Queue:','The removal queue is empty','The queue changed in another tab','still queued','local removal queue'])assert.equal(source.includes(phrase),false,phrase);
+ for(const phrase of ['Swipe left to delete','\\u00d7 Delete','Nothing is marked for deletion.','Going to Trash changed in another tab','still marked for deletion.'])assert.equal(source.includes(phrase),true,phrase);
 });
