@@ -305,3 +305,27 @@ for(const [label,width,height,dpr,top] of [['a large 3x phone upgrades video to 
  const final=await measure(page,`const shown=q('#media video:not([hidden])');return {src:(shown.currentSrc||shown.src).split('=').pop(),paused:shown.paused};`);
  assert.deepEqual(final,{src:top,paused:false});
 });
+
+test('a phone held sideways shows a full row of Going to Trash thumbnails and their ticks above the buttons',async t=>{
+ const page=await mount(t,{width:750,height:342,touch:true,items:Array.from({length:6},(_,index)=>item(index,index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{})),state:{exhausted:true}});if(!page)return;
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(500);
+ const layout=await measure(page,`const scroll=q('#review-panel .trash-scroll').getBoundingClientRect(),bar=q('#review-panel .trash-bar').getBoundingClientRect();return {scrollBottom:scroll.bottom,barTop:bar.top,tiles:[...root.querySelectorAll('#trash-review-grid .trash-tile')].map(tile=>({tile:tile.getBoundingClientRect().bottom,check:tile.querySelector('.trash-check').getBoundingClientRect().bottom}))};`);
+ assert.equal(layout.tiles.length,3);
+ for(const {tile,check} of layout.tiles){assert.ok(tile<=layout.scrollBottom&&tile<=layout.barTop,`thumbnail bottom ${tile} is hidden behind the buttons at ${layout.barTop}`);assert.ok(check<=layout.barTop);}
+});
+
+for(const [width,height] of [[1366,600],[750,342]])test(`a short window puts the video controls on one row so the picture keeps its height at ${width}×${height}`,async t=>{
+ const video=await readFile(new URL('fixtures/synthetic-video.webm',import.meta.url));
+ const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
+ const page=await mount(t,{width,height,touch:width<760,state:{exhausted:true},items:[item(0,{type:'video',duration:8000})],routes:(route,url)=>{
+  if(url.hostname==='photos.google.com'&&url.pathname.endsWith('/data/batchexecute')){const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[JSON.parse(call[1])[0],['https://lh3.googleusercontent.com/stream-'+JSON.parse(call[1])[0],800,600]],'https://video-downloads.googleusercontent.com/x'])});}
+  if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/stream-'))return fulfillVideo(route,video,'video/webm');
+  return null;}});if(!page)return;
+ await page.waitForFunction(()=>{const video=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelector('video:not([hidden])');return !!video&&video.videoWidth>0&&!!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#media>[data-video-control=seek]');},null,{timeout:15000});
+ const layout=await measure(page,`const media=q('#media').getBoundingClientRect(),video=q('#media video:not([hidden])').getBoundingClientRect(),controls=Object.fromEntries([...q('#media').querySelectorAll('[data-video-control]')].filter(e=>!e.hidden).map(e=>{const r=e.getBoundingClientRect();return [e.dataset.videoControl,{left:r.left,right:r.right,top:r.top,bottom:r.bottom,middle:r.top+r.height/2}];}));return {media:{top:media.top,bottom:media.bottom,left:media.left,right:media.right},video:{bottom:video.bottom},controls};`);
+ const {play,seek,time,mute}=layout.controls;
+ assert.ok(layout.media.bottom-layout.video.bottom<=60,`the controls take ${layout.media.bottom-layout.video.bottom}px under the picture`);
+ for(const control of [seek,time,mute])assert.ok(Math.abs(control.middle-play.middle)<=6,'the controls share one row');
+ assert.ok(play.right<=seek.left&&seek.right<=time.left&&time.right<=mute.left,'the controls do not overlap');
+ for(const control of [play,seek,time,mute])assert.ok(control.left>=layout.media.left&&control.right<=layout.media.right&&control.bottom<=layout.media.bottom+1);
+});
