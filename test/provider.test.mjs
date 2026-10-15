@@ -38,3 +38,18 @@ test('an untitled item is named after the date it was taken, in its own time zon
  assert.equal(result.data.items[0].timezoneOffset,-8*3600000);
  }finally{if(zone===undefined)delete process.env.TZ;else process.env.TZ=zone;}
 });
+function rawFixture(text,{eptZe='/_/PhotosUi/u/2/',origin='https://photos.google.com',pathname='/u/2/'}={}){const requests=[];const context={location:{origin,pathname},window:{WIZ_global_data:{SNlM0e:'fake-token',oPEP7c:'fixture@example.test',eptZe,FdrFJe:'fake-session',cfb2h:'build'}},crypto:webcrypto,TextEncoder,URL,URLSearchParams,AbortController,AbortSignal,setTimeout,clearTimeout,fetch:async(url,options)=>{requests.push({url,options});return {ok:true,text:async()=>text};}};return {requests,run:vm.runInNewContext(`(${photosOperation.toString()})`,context)};}
+const framed=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr',id,JSON.stringify(data)]])}\n`;
+test('Google Photos requests stay on the signed-in page path with its session, token and credentials',async()=>{
+ const f=rawFixture(framed('lcxiM',[[],null]));assert.equal((await f.run('library')).ok,true);
+ const {url,options}=f.requests[0],request=new URL(url),body=new URLSearchParams(options.body);
+ assert.equal(request.origin,'https://photos.google.com');assert.equal(request.pathname,'/_/PhotosUi/u/2/data/batchexecute');assert.equal(request.searchParams.get('source-path'),'/u/2/');assert.equal(request.searchParams.get('f.sid'),'fake-session');assert.equal(request.searchParams.get('rpcids'),'lcxiM');
+ assert.equal(options.credentials,'include');assert.equal(options.method,'POST');assert.equal(body.get('at'),'fake-token');
+ assert.deepEqual(JSON.parse(body.get('f.req')),[[['lcxiM',JSON.stringify([null,null,50,null,1,1]),null,'generic']]]);
+ for(const eptZe of ['https://invalid.test/','//invalid.test/','/u/2/../../']){const unsafe=rawFixture('',{eptZe});assert.equal((await unsafe.run('library')).ok,false);assert.equal(unsafe.requests.length,0);}
+ const elsewhere=rawFixture('',{origin:'https://invalid.test'});assert.equal((await elsewhere.run('library')).ok,false);assert.equal(elsewhere.requests.length,0);
+});
+test('Google Photos responses are read only from the matching envelope, through XSSI and length framing',async()=>{
+ assert.equal((await rawFixture(framed('lcxiM',[[],null])).run('library')).data.items.length,0);
+ for(const text of ['garbage',framed('wrong',[]),JSON.stringify([['wrb.fr','lcxiM',null]]),JSON.stringify([['wrb.fr','lcxiM','{']])])assert.equal((await rawFixture(text).run('library')).ok,false,text);
+});

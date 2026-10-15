@@ -9,7 +9,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {webcrypto,generateKeyPairSync,sign} from 'node:crypto';
 import vm from 'node:vm';
-import {buildPhotosRequest,parsePhotosResponse,createPhotosAPI} from '../lib/userscript-api.mjs';
+import {createPhotosAPI} from '../lib/userscript-api.mjs';
 import {emptyReview,reviewDeck,reviewQueue,reviewStorage,mergeReviewPage,canUndoReview,decideReview,finishReviewAlbum,sendReviewAlbum,readReviewTrash,reconcileReviewTrash,loadReviewPages} from '../lib/userscript-core.mjs';
 const tokens={SNlM0e:'fake-token',oPEP7c:'fake@example.test',eptZe:'/_/PhotosUi/u/2/',FdrFJe:'fake-session',cfb2h:'fake-build'};
 const page={origin:'https://photos.google.com',pathname:'/u/2/'};
@@ -25,19 +25,6 @@ function fixture(responder){
  return {calls,window,api};
 }
 async function call(f,operation,args){const result=await f.api(operation,args);if(!result.ok)throw Error(result.error);return result.data;}
-test('userscript request builder scopes the session path, tokens, credentials and RPC payload',()=>{
- const request=buildPhotosRequest(tokens,page,'lcxiM',['next',null,50,null,1,1]);
- const url=new URL(request.url),body=new URLSearchParams(request.options.body);
- assert.equal(url.origin,page.origin);assert.equal(url.pathname,'/_/PhotosUi/u/2/data/batchexecute');assert.equal(url.searchParams.get('source-path'),'/u/2/');assert.equal(url.searchParams.get('f.sid'),'fake-session');
- assert.equal(request.options.credentials,'include');assert.equal(request.options.method,'POST');assert.equal(body.get('at'),'fake-token');
- assert.deepEqual(JSON.parse(body.get('f.req')),[[['lcxiM',JSON.stringify(['next',null,50,null,1,1]),null,'generic']]]);
- for(const path of ['https://invalid.test/','//invalid.test/','/u/2/../../'])assert.throws(()=>buildPhotosRequest({...tokens,eptZe:path},page,'rpc',[]));
- assert.throws(()=>buildPhotosRequest(tokens,{...page,origin:'https://invalid.test'},'rpc',[]));
-});
-test('userscript response parser handles XSSI and length framing and rejects mismatched or malformed envelopes',()=>{
- assert.deepEqual(parsePhotosResponse(envelope('rpc',[['fake']]),'rpc'),[['fake']]);
- for(const raw of ['garbage',envelope('wrong',[]),JSON.stringify([['wrb.fr','rpc',null]]),JSON.stringify([['wrb.fr','rpc','{']])])assert.throws(()=>parsePhotosResponse(raw,'rpc'));
-});
 test('fake library and bulk metadata responses produce photos/videos and preserve next-page tokens',async()=>{
  const row=['video',['https://lh3.googleusercontent.com/fake',800,600],1720000000000,'stable',0,{76647426:[25000]}];
  const detail=['video',[]];detail[1][3]='fake.mp4';detail[1][9]=500;detail[1][35]=[1,300];
@@ -3870,6 +3857,34 @@ test('a failed server trash safety check prevents the Google Photos trash call',
   assert.equal(trashCalls,0);
   assert.match(mounted.nodes.get('status').textContent,/Sync decisions changed/);
   assert.equal((await mounted.read()).items[0].state,'active');
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
+test('a photo another device kept stays out of Trash while the rest of the batch still moves',async()=>{
+ const trashed=[],checked=[];
+ const candidates=['synthetic-a','synthetic-b','synthetic-x'].map(key=>item(key,{decision:'remove',dedupKey:`dedup-${key}`}));
+ const mounted=await mountedReview(candidates,{
+  confirm:()=>true,
+  fetch:async(url,options)=>{
+   if(new URL(url).origin!=='https://sync.example'){
+    const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+    if(entry[0]==='XwAOJf')trashed.push(...JSON.parse(entry[1]).flat(Infinity).filter(value=>typeof value==='string'&&value.startsWith('dedup-')));
+    return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed.map(dedup=>[dedup.slice(6),null,null,dedup])],null])};
+   }
+   const path=new URL(url).pathname;
+   if(path==='/api/trash-check'){const ids=JSON.parse(options.body).ids;checked.push(...ids);return {ok:true,json:async()=>({safe:!ids.includes('synthetic-x'),kept:ids.filter(id=>id==='synthetic-x')})};}
+   if(path==='/api/progress')return {ok:true,json:async()=>({items:JSON.parse(options.body).items})};
+   return {ok:true,json:async()=>({decisions:candidates.map(({mediaKey})=>({id:mediaKey,decision:'remove'})),history:[],progress:{}})};
+  }
+ },{url:'https://sync.example',token:'synthetic-token'});
+ try{
+  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+  await mounted.click('review');await mounted.click('move-trash');
+  assert.deepEqual(checked.sort(),['synthetic-a','synthetic-b','synthetic-x']);
+  assert.deepEqual(trashed.sort(),['dedup-synthetic-a','dedup-synthetic-b']);
+  const saved=Object.fromEntries((await mounted.read()).items.map(item=>[item.mediaKey,`${item.decision}/${item.state}`]));
+  assert.deepEqual(saved,{'synthetic-a':'remove/in_trash','synthetic-b':'remove/in_trash','synthetic-x':'keep/active'});
+  assert.equal(mounted.nodes.get('status').textContent,'Verified 2 items in Trash. 1 kept because another device kept it.');
  }finally{await mounted.nodes.get('close').onclick();}
 });
 
