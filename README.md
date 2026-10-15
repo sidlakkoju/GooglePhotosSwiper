@@ -1,109 +1,64 @@
 # Photos Swipe
 
-A local desktop app for reviewing Google Photos one photo or video at a time. Swipe right to keep an item; swipe left to add it to a removal queue. Send the queue to a private Google Photos review album, then delete the items yourself in Google Photos.
+Tinder-style cleanup for your Google Photos library. Photos Swipe shows one photo or video at a time: swipe left to send it toward the Trash, swipe right to keep it. When you're done, review what you marked and move it to Google Photos Trash in one step.
 
-**Swiping and creating an album never delete photos.** The core app has no Trash or permanent-deletion command.
+<p align="center"><img src="docs/images/swipe.gif" width="300" alt="Swiping through photos while the storage counter rolls up"></p>
 
-## Standalone userscript (desktop and iOS Safari)
+It's a userscript that runs inside your signed-in [photos.google.com](https://photos.google.com) tab on desktop browsers and iPhone Safari. There's no app to install and no Google password to hand over.
 
-[Install Photos Swipe](https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js) in Tampermonkey, Violentmonkey, or quoid's iOS **Userscripts** Safari extension. Open Google Photos in the browser, then tap the **Photos Swipe** launcher. This version runs inside your signed-in Photos page, with account-scoped decisions and progress saved in IndexedDB; no server or pairing is needed.
+## What it does
 
-See [userscript installation and usage](docs/userscript.md). The review card sits above the stats on mobile, with touch swipes and desktop keyboard controls. Album writes are verified. Move to Trash is opt-in and requires confirmation of the exact count; undo history survives reloads. State is separate from the desktop app and does not sync across devices. Physical iPhone/Safari validation remains outstanding.
+- **Swipe through your library.** Swipe, tap ✕ / ♥ or use ← → on a keyboard. Undo goes back through your recent decisions, even after a reload.
+- **Flashbacks.** The default order shuffles whole memories (photos taken around the same time and place) across your timeline. Timeline, Oldest first and Largest first are also available.
+- **Storage freed, live.** The counter at the top rolls up as you mark items. Items Google stores for free (most photos backed up before June 2021) are labelled *stored free* and add nothing, so the number matches what Google actually counts.
+- **Review before anything is deleted.** Going to Trash shows every marked item in a grid. Tap ✓ to rescue one, then move the rest to Google Photos Trash. Every batch is verified in Trash, and items stay restorable there for 60 days.
+- **Look closer.** Open the item in Google Photos to see what else is around it, share the photo or video itself, or go fullscreen. Fullscreen follows your device as you rotate it.
+- **Fast on big libraries.** Upcoming photos are preloaded, so swipes are instant. It's tested against a 34,000-item library.
+- **Sync across devices (optional).** Sign in with Google in Settings to carry decisions and progress between your phone and computer.
 
-For the experimental signed loader, use [the separate test install link](https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper-loader.user.js). On iPhone, first remove the old full Photos Swipe script from **Userscripts**, then open this link in Safari and save it in Userscripts. Enable the extension and allow it on photos.google.com in Safari settings, then open Google Photos in Safari. The loader fetches and verifies a signed release on each page load and uses its verified cached release when offline. The first load needs a network connection. Physical iPhone validation of this loader remains outstanding.
+<p align="center">
+  <img src="docs/images/going-to-trash.png" width="220" alt="Going to Trash review grid">
+  &nbsp;
+  <img src="docs/images/landscape.png" width="470" alt="Photos Swipe on a phone held sideways">
+</p>
 
-## Publishing the userscript
+## How it works
 
-Every merge to `main` should be followed by `./scripts/deploy-worker.sh` to republish the userscript. The script rebuilds both artifacts and signs the app using the Ed25519 PKCS8 PEM at `PHOTOSWIPER_SIGNING_KEY` (default `~/.photoswiper/photoswiper-signing.key`, then `/home/box/shared/photoswiper-signing.key`), then runs `npx --yes wrangler@4 deploy` from `worker/`. It uses existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment variables, or sources `~/.photoswiper/cloudflare.env` (falling back to `/home/box/shared/cloudflare.env`) when they are not both set. Keep credentials and the private signing key outside the repository and never commit secrets. Signing fails before deployment if the key is missing or does not match the loader’s pinned public key. The generated release module in `worker/generated/` is ignored by Git; local tests use synthetic releases and ephemeral keys.
-
-The `photoswiper-sync` Worker bundles the script at deployment time using a [Wrangler Text module rule](https://developers.cloudflare.com/workers/wrangler/bundling/). It serves public GET and HEAD requests at `/photoswiper.user.js` with a five-minute cache lifetime; unknown paths return 404.
-
-## Quick start
-
-Requirements: Node.js **22.13 or newer**, Chrome, and a Google Photos account. There are no npm dependencies to install and no hosted backend.
-
-```sh
-git clone git@github.com:sidlakkoju/GooglePhotosSwiper.git
-cd GooglePhotosSwiper
-npm start
+```
+photos.google.com tab
+ └─ Photos Swipe userscript
+     ├─ reads your library and moves items to Trash through the same web API the Photos site uses
+     ├─ keeps decisions and progress in the browser (IndexedDB)
+     └─ optional: syncs decisions to a small Cloudflare Worker (item IDs and decisions only)
 ```
 
-1. Open `http://localhost:3000/` in Chrome. Sign in using the local access code in `.data/access-code`, or open the access link saved in `.data/local-login-url`.
-2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the repository's `extension/` directory. Reload the app tab.
-3. Open Google Photos in a second Chrome tab, signed into your intended account.
-4. In the app, choose **Google Photos → Generate pairing code**. While the Photos tab is active, open the extension popup and enter that code.
-5. Return to the app, choose **Check connection**, close the connection dialog, and select **Load 50 more**.
+Swiping only records a decision. Nothing leaves your library until you confirm **Move N to Trash**, and there's no permanent delete. Photos and videos are never uploaded anywhere. See [privacy](docs/privacy.md).
 
-Use exactly `http://localhost:3000/`: the desktop bridge is configured for this origin and port. The Codex in-app browser can display the page but cannot use the Chrome extension. Leave the Google Photos tab open while reviewing.
+## Install
 
-See the [setup and troubleshooting guide](docs/setup.md), or open the human-readable [in-app guide](public/guide.html) at `http://localhost:3000/guide.html` after starting the server.
+1. Install a userscript manager:
+   - **Desktop:** [Tampermonkey](https://www.tampermonkey.net/) or Violentmonkey.
+   - **iPhone/iPad:** [Userscripts](https://github.com/quoid/userscripts) for Safari.
+2. Open the [Photos Swipe install link](https://photoswiper-sync.sidlakkoju.workers.dev/photoswiper.user.js) and accept the install.
+3. Open Google Photos in the browser and tap the **Photos Swipe** button at the bottom right.
 
-## Reviewing photos and videos
+The script updates itself. Step-by-step setup for each browser is in [docs/userscript.md](docs/userscript.md).
 
-| Control | Result |
-| --- | --- |
-| Swipe right, right arrow, or ✓ | Keep the item and advance |
-| Swipe left, left arrow, or × | Queue the item for removal and advance |
-| Z or Undo | Undo one of the last 100 swipes in this tab, including after reload |
-| F, double-click a photo, or enlarge button | Open the enlarged viewer |
-| F or Escape in the viewer | Close the enlarged viewer |
-| Space on a video | Play or pause |
-| Scroll/pinch, +/−, Fit | Zoom, pan, or reset a photo |
+| Action | Touch | Keyboard |
+| --- | --- | --- |
+| Keep | Swipe right or ♥ | → |
+| Mark for Trash | Swipe left or ✕ | ← |
+| Undo | ↺ | Z |
+| Fullscreen | ⤢ | F |
+| Play / pause video | Tap the video | Space |
 
-Videos autoplay muted and loop in the regular view. Use the volume control for sound. Enlarged review supports arrow decisions and Undo without closing; photos swipe at fit zoom, while zoomed dragging pans. Videos have a separate swipe area so native scrubbing remains usable. Queue thumbnails open the same photo/video viewer for inspection.
-
-**Load 50 more** scans past overlapping and already-reviewed pages until it finds at least 50 new review items, reaches the end, or hits a 12-page safety bound. A batch can contain more than 50 new items. Messages distinguish new review items from library rows checked. **Refresh latest** updates the head of the library without rewinding older-library progress; this requires bridge 1.3.1 or newer.
-
-## Removal queue and storage estimates
-
-- **Queue · estimated savings** counts only the current removal queue. It changes with swipes, Keep instead and Undo. An empty queue shows **0 KB**.
-- **Sent to album · awaiting Trash** counts fully verified sent items that have not been confirmed in Trash. They stay reviewed and are no longer queued, even if an album later becomes unavailable.
-- **In Trash · estimated savings** counts removal candidates confirmed in Google Photos Trash through **Check deleted items**.
-
-Known quota bytes take precedence over file size. Known non-quota media count as zero, and unknown sizes are marked. These are estimates, not a reading of Google's account storage meter.
-
-Choose **Send to review album** and confirm the count. Only a fully verified album update clears that batch from the queue; decisions remain saved, so sent items do not reappear after a restart or reimport. Partial/failed updates retain their candidates and checkpoints for retry. During an interrupted update, **Keep instead** does not remove a previously added item from the Google album.
-
-To delete, open the review album in Google Photos, select the items, then choose **More options → Move to trash**. Removing items from an album or deleting the album does not delete the underlying library items. Afterwards, use **Check deleted items** in this app. This performs reads only; unknown results leave local state unchanged.
-
-## Project layout
-
-| Path | Purpose |
-| --- | --- |
-| `public/` | Review UI, media viewer, preview cache, import controller, browser guide |
-| `server.mjs` | Loopback-only server, local authentication, application/bridge endpoints |
-| `lib/store.mjs` | SQLite persistence, revisions, account binding, album jobs, reconciliation |
-| `worker/` | Cloudflare Worker serving the bundled userscript publicly |
-| `userscript/` | Built standalone userscript for Google Photos in desktop browsers and iOS Safari |
-| `extension/` | Chrome Manifest V3 bridge and Google Photos web API adapter |
-| `test/` | Core regression tests and synthetic browser fixtures |
-| `docs/` | Setup, architecture, development, privacy, status and future plans |
-| `diagrams/` | Earlier design diagrams; architecture docs describe the current core app |
-| `.data/` | Private runtime database and credentials; excluded from Git |
-
-Read the [project context](PROJECT_CONTEXT.md), [architecture](docs/architecture.md), [development and testing](docs/development.md), and [privacy and local data](docs/privacy.md).
-
-## Branches and current scope
-
-| Branch | Status |
-| --- | --- |
-| `main` | Current core desktop app: review, playback, queue, albums, storage estimates and reconciliation |
-| `codex/core-review` | Preserved initial core-isolation checkpoint; later fixes are on `main` |
-| `codex/video-cropping` | Experimental cropping implementation and research; not part of the active core app |
-
-Cropping is not reliable enough for the main experience. The feature branch preserves the editor, macOS exporter, upload providers and recovery jobs. Existing private crop data and generated-copy exclusions remain intact; originals attached to unfinished crop jobs are protected from ordinary review/album sending in core.
-
-No website integration, cloud deployment or iPhone connection is deployed. See the [roadmap](docs/roadmap.md) and [local personal-site integration plan](docs/personal-site-integration.md).
-
-## Validation
+## Development
 
 ```sh
-npm test
-npm run check
+npm test                  # ~950 tests, including headless Chromium and WebKit runs of the built userscript
+./scripts/deploy-worker.sh  # rebuild, sign and publish the userscript and sync Worker
 ```
 
-`npm test` runs about 880 tests (Node's test runner, concurrency 4) with 0 skipped: the desktop app's core (authentication, persistence, pagination, album writes, reconciliation), the userscript (swipes, Undo, sync, leases, Flashbacks order, Trash safety, auto-update) and the Worker. Real-browser suites run the built userscript in headless Chromium and WebKit for layout, video and auto-update checks. Synthetic fixtures are used throughout; no tests send requests to Google. Physical iPhone/Safari behavior is checked by hand.
+The userscript source lives in `lib/` and builds to `userscript/`. Browser tests need Playwright (`npm i --no-save --no-package-lock playwright && npx playwright install chromium webkit`). More in [development](docs/development.md), [architecture](docs/architecture.md), [sync](docs/sync.md) and [performance](docs/performance.md). The original local desktop app (Node server + Chrome extension) is still in the repo; see [setup](docs/setup.md).
 
-Google Photos access uses an **undocumented web API** and can require maintenance when Google changes it. The RPC formats are adapted from [Google Photos Toolkit](https://github.com/xob0t/Google-Photos-Toolkit), revision `6db9ab355e4797327e4078cf87a2b6994d36cf73`. Its MIT attribution is retained in [third-party notices](extension/THIRD_PARTY_NOTICES.md) and [license notice](extension/LICENSE-GPTK).
-
-Optional userscript sync: [Worker and device setup](docs/sync.md). Sync stores only item IDs, decisions, progress and undo history in D1.
+Google Photos access uses an undocumented web API, so it can need maintenance when Google changes its site. The request formats are adapted from [Google Photos Toolkit](https://github.com/xob0t/Google-Photos-Toolkit) (MIT; see [third-party notices](extension/THIRD_PARTY_NOTICES.md)).

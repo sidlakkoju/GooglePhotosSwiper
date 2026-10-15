@@ -876,6 +876,7 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
   if(card.cloneNode&&card.parentNode){
    const outgoing=stillClonedVideos(card.cloneNode(true),card);
    outgoing.setAttribute('aria-hidden','true');outgoing.inert=true;
+   for(const control of outgoing.querySelectorAll?.('button,a,input')||[])control.remove();
    for(const element of outgoing.querySelectorAll?.('[id]')||[])element.removeAttribute('id');
    outgoing.removeAttribute?.('id');outgoing.style.willChange='';outgoing.style.transform=reduced()?'':card.style.transform;
    outgoing.style.position='absolute';outgoing.style.inset='0';outgoing.style.pointerEvents='none';outgoing.style.zIndex='3';
