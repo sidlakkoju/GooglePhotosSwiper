@@ -285,6 +285,9 @@ for(const timezoneId of ['Asia/Tokyo','America/New_York'])test(`a photo taken on
  await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
  await page.locator('.trash-tile [aria-label^="Preview "]').first().click();await page.waitForTimeout(300);
  assert.match(await measure(page,`return q('.trash-preview-caption small').textContent;`),/^12\/31\/2025/);
+ await page.keyboard.press('Escape');await page.waitForTimeout(200);await page.keyboard.press('Escape');await page.waitForTimeout(300);
+ await measure(page,`root.getElementById('share').click();`);await page.waitForTimeout(400);
+ assert.match(await measure(page,`return q('.share-sub').textContent;`),/12\/31\/2025/);
 });
 
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
