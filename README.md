@@ -12,6 +12,7 @@ It's a userscript that runs inside your signed-in [photos.google.com](https://ph
 - **Flashbacks.** The default order shuffles whole memories (photos taken around the same time and place) across your timeline. Timeline, Oldest first and Largest first are also available.
 - **Storage freed, live.** The counter at the top rolls up as you mark items. Items Google stores for free (most photos backed up before June 2021) are labelled *stored free* and add nothing, so the number matches what Google actually counts.
 - **Review before anything is deleted.** Going to Trash shows every marked item in a grid. Tap ✓ to rescue one, then move the rest to Google Photos Trash. Every batch is verified in Trash, and items stay restorable there for 60 days.
+- **Big-screen layout.** On a computer the photo takes most of the window with the controls beside it; on a phone it adapts to portrait or landscape.
 - **Look closer.** Open the item in Google Photos to see what else is around it, share the photo or video itself, or go fullscreen. Fullscreen follows your device as you rotate it.
 - **Fast on big libraries.** Upcoming photos are preloaded, so swipes are instant. It's tested against a 34,000-item library.
 - **Sync across devices (optional).** Sign in with Google in Settings to carry decisions and progress between your phone and computer.

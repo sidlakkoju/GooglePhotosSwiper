@@ -41,7 +41,7 @@ for(const [width,height] of [[1280,900],[393,852]])test(`Enlarge grows the card 
  await page.waitForTimeout(500);
  const after=await measure(page,`return {card:box('#card'),caption:getComputedStyle(q('#caption')).display,order:getComputedStyle(q('.order-row')).display,actions:box('.actions'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
  assert.ok(after.card.height>before.height+80,`${before.height} → ${after.card.height}`);
- if(width>600)assert.ok(after.card.width>before.width*2,`${before.width} → ${after.card.width}`);
+ if(width>600)assert.ok(after.card.width>=width-2&&after.card.height>=height-2,`${before.width} → ${after.card.width}`);
  assert.equal(after.caption,'none');assert.equal(after.order,'none');
  assert.ok(after.actions.y+after.actions.height<=height);
  assert.ok(after.scroll);
@@ -266,4 +266,15 @@ test('Share hands the photo itself to the share sheet when it can be downloaded'
  await measure(page,`q('#share').click();`);
  await page.waitForFunction(()=>window.__shared.length===1);
  assert.equal(JSON.stringify(await page.evaluate(()=>window.__shared)),JSON.stringify([[[`${key}.jpg`,'image/svg+xml',true]]]));
+});
+
+test('a large desktop window gives the photo most of the screen with the controls beside it',async t=>{
+ const page=await mount(t,{width:1720,height:1297,items:Array.from({length:8},(_,index)=>item(index,index<6?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{})),state:{exhausted:true}});if(!page)return;
+ const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),close:box('#close'),caption:box('#caption'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
+ assert.ok(layout.card.width>=1200&&layout.card.height>=1100,JSON.stringify(layout.card));
+ for(const control of ['keep','close','caption'])assert.ok(layout[control].x>=layout.card.x+layout.card.width,control);
+ assert.ok(layout.scroll);
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(500);
+ const review=await measure(page,`const tiles=[...root.querySelectorAll('.trash-tile')].map(tile=>box(tile));return {panel:box('#review-panel'),firstRow:tiles.filter(tile=>tile.y===tiles[0].y).length,tile:tiles[0]};`);
+ assert.ok(review.panel.width>=1600,JSON.stringify(review.panel));assert.ok(review.firstRow>=6,String(review.firstRow));assert.ok(review.tile.width>=170,String(review.tile.width));
 });

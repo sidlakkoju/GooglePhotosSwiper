@@ -132,8 +132,8 @@ test('decision controls and status fit short viewports with Enlarge on and off',
      assert.ok(rect.left>=0&&rect.top>=0&&rect.right<=width&&rect.bottom<=height,label+': inside viewport');
      assert.ok(rect.width>0&&rect.height>0,label+': visible');
     }
-    for(const control of snapshot.controls)assert.ok(snapshot.status.bottom<=control.top,label+': status above controls');assert.ok(snapshot.enlarge.bottom<=snapshot.status.top,label+': fullscreen clear of status');
-    assert.ok(snapshot.media.height>0,label+': media visible');assert.ok(snapshot.media.bottom<=snapshot.status.top,label+': media above status');
+    for(const control of snapshot.controls)assert.ok(snapshot.status.bottom<=control.top,label+': status above controls');const apart=(a,b)=>a.bottom<=b.top||b.bottom<=a.top||a.right<=b.left||b.right<=a.left;assert.ok(apart(snapshot.enlarge,snapshot.status),label+': fullscreen clear of status');
+    assert.ok(snapshot.media.height>0,label+': media visible');assert.ok(apart(snapshot.media,snapshot.status),label+': media clear of status');
     assert.equal(snapshot.scrollHeight,snapshot.clientHeight,label+': no shell scrolling');
    }
   }
@@ -226,7 +226,7 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
    overlayElement.hidden=false;openReview();
    const bounds=element=>{const r=element.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
    const title=bounds(reviewHeading),panel=bounds(reviewPanel),tiles=Array.from(reviewGrid.children).map(bounds),bar=bounds(reviewBar);
-   const result={titleVisible:title.width>100&&title.height>=30,panel,gridThree:tiles[0].top===tiles[1].top&&tiles[1].top===tiles[2].top&&tiles[3].top>tiles[0].top,square:tiles.every(tile=>Math.abs(tile.width-tile.height)<1),barInside:bar.bottom<=innerHeight&&bar.top>=0,keptFaded:getComputedStyle(reviewGrid.children[1].firstChild).opacity==='0.45',gridScrollable:getComputedStyle(reviewScroll).overflowY==='auto'};
+   const result={titleVisible:title.width>100&&title.height>=30,panel,gridThree:tiles[0].top===tiles[1].top&&tiles[1].top===tiles[2].top&&(innerWidth>=900&&innerHeight>=700||tiles[3].top>tiles[0].top),square:tiles.every(tile=>Math.abs(tile.width-tile.height)<1),barInside:bar.bottom<=innerHeight&&bar.top>=0,keptFaded:getComputedStyle(reviewGrid.children[1].firstChild).opacity==='0.45',gridScrollable:getComputedStyle(reviewScroll).overflowY==='auto'};
    previewKey='fixture-0';renderTrashReview();const preview=root.getElementById('trash-preview'),image=bounds(preview.querySelector('.trash-preview-media')),previewBar=bounds(preview.querySelector('.trash-bar'));
    result.previewFits=image.height>0&&image.bottom<=previewBar.top&&previewBar.bottom<=innerHeight;result.previewCount=preview.querySelector('.trash-nav').children[1].textContent;result.theme=getComputedStyle(reviewPanel).backgroundColor;
    const output=document.createElement('pre');output.hidden=true;output.textContent=JSON.stringify(result);document.body.append(output);
@@ -236,7 +236,7 @@ test('Going to Trash grid and preview fit phone and desktop in both themes',{ski
    await writeFile(frame,`<!doctype html><iframe style="border:0;width:${width}px;height:${height}px" src="file://${page}"></iframe><script>document.querySelector('iframe').onload=event=>document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:event.target.contentDocument.querySelector('pre').textContent}));</script>`);
    const result=spawnSync(chrome,['--headless','--no-sandbox','--disable-gpu','--allow-file-access-from-files',...(dark?['--force-dark-mode']:['--blink-settings=preferredColorScheme=1']),'--dump-dom',`file://${frame}`],{encoding:'utf8',timeout:30000});assert.equal(result.status,0,result.stderr);
    const values=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)[1]);for(const key of ['titleVisible','gridThree','square','barInside','keptFaded','gridScrollable','previewFits'])assert.equal(values[key],true,`${width}×${height}, dark=${dark}: ${key}`);
-   assert.equal(values.previewCount,'1 of 6');assert.equal(values.panel.width,width<=600?width:440);assert.equal(values.theme,dark?'rgb(0, 0, 0)':'rgb(242, 242, 247)');if(width<=600){assert.equal(values.panel.top,0);assert.equal(values.panel.bottom,height);}
+   assert.equal(values.previewCount,'1 of 6');if(width>=900&&height>=700)assert.ok(values.panel.width>=width-96,String(values.panel.width));else assert.equal(values.panel.width,width<=600?width:440);assert.equal(values.theme,dark?'rgb(0, 0, 0)':'rgb(242, 242, 247)');if(width<=600){assert.equal(values.panel.top,0);assert.equal(values.panel.bottom,height);}
   }
  }finally{await rm(dir,{recursive:true,force:true});}
 });
@@ -283,7 +283,7 @@ test('Flashbacks long place leaves the memory count clear of fullscreen on narro
     assert.ok(snapshot.gap>=8,label+': pill clears fullscreen');
     assert.equal(snapshot.countInside,true,label+': count inside pill');
     assert.equal(snapshot.countClear,true,label+': count clears fullscreen');
-    if(!(width>600&&snapshot.expanded)){assert.equal(snapshot.placeShrinks,true,label+': long place shrinks');assert.equal(snapshot.ellipsis,'ellipsis',label+': place ellipsizes');}
+    if(width<900&&!(width>600&&snapshot.expanded)){assert.equal(snapshot.placeShrinks,true,label+': long place shrinks');assert.equal(snapshot.ellipsis,'ellipsis',label+': place ellipsizes');}
     assert.ok(snapshot.placeWidth>0,label+': place remains visible');
    }
   }
