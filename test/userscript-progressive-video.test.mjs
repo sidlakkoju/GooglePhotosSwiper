@@ -470,3 +470,16 @@ test('leaving the card while the 720p switch is loading releases the hidden copy
  next.emit('loadedmetadata');next.readyState=2;next.emit('seeked');await Promise.resolve();
  assert.deepEqual(swaps,[full]);
 });
+
+test('after four seeks in a row land behind a playing video, the next seek aims ahead and the swap happens in sync',async()=>{
+ const {video,full,swaps,frames,late}=seekAheadSetup(1.45);
+ assert.ok(Math.abs(full.currentTime-1)<1e-9);
+ late();assert.ok(Math.abs(full.currentTime-video.currentTime)<1e-9,'second seek is exact');
+ late();assert.ok(Math.abs(full.currentTime-video.currentTime)<1e-9,'third seek is exact');
+ late();
+ const lead=full.currentTime-video.currentTime;
+ assert.ok(lead>=.1-1e-9&&lead<=1,`fourth behind landing seeks ahead by ${lead}`);
+ full.emit('seeked');assert.deepEqual(swaps,[]);assert.equal(frames.length,1);
+ video.currentTime=full.currentTime-.01;frames.shift()();await Promise.resolve();
+ assert.deepEqual(swaps,[full]);
+});

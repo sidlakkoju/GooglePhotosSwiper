@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.137
+// @version 1.2.138
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1100,7 +1100,7 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   if(held()){retryAt=retryAt||Date.now();return;}
   original=createVideo();const full=original;
   full.hidden=false;Object.assign(full.style,{position:'absolute',inset:'0',opacity:'0',pointerEvents:'none'});video.parentNode.append(full);full.preload='auto';full.muted=true;full.loop=video.loop;full.playsInline=true;full.poster=video.poster;
-  let seekStart=0,seekAttempts=0,frameQueued=false,chasing=false,reissued=false;
+  let seekStart=0,seekAttempts=0,frameQueued=false,chasing=false,reissued=false,behind=0,seekTook=0;
   const abandon=()=>{if(finished||original!==full)return;release(full);original=null;seeking=false;chasing=false;chaseUntil=0;if(retries<3)retryAt=Date.now()+5000*2**retries++;};
   const bufferedTo=time=>{const ranges=full.buffered;for(let index=0;index<(ranges?.length||0);index++)if(ranges.start(index)<=time&&time<=ranges.end(index))return ranges.end(index);return time;};
   const caughtUp=()=>{frameQueued=false;align();};
@@ -1136,14 +1136,15 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
    }
    if(Math.abs(ahead)>.04){
     if(seekAttempts>=8){abandon();return;}
-    seekAttempts++;seekStart=full.currentTime;seeking=true;seekIssued=Date.now();full.currentTime=video.currentTime;return;
+    behind=playing&&ahead<-.04?behind+1:0;const lead=behind>=4?Math.min(1,seekTook*video.playbackRate+.1):0;
+    seekAttempts++;seekStart=full.currentTime;seeking=true;seekIssued=Date.now();full.currentTime=video.currentTime+lead;return;
    }
    const paused=video.paused;
    full.playbackRate=video.playbackRate;full.volume=video.volume;
    if(paused){swap();return;}
    full.play().then(()=>{if(full.requestVideoFrameCallback)onFrame(swap);else swap();}).catch(abandon);
   };
-  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;if(reissued){reissued=false;seekAttempts=1;}if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
+  full.addEventListener('seeked',()=>{if(!seeking)return;seeking=false;seekTook=(Date.now()-seekIssued)/1000;if(reissued){reissued=false;seekAttempts=1;}if(Math.abs(full.currentTime-seekStart)<.001&&Math.abs(full.currentTime-video.currentTime)>.04){abandon();return;}align();});
   unstick=()=>{if(seekAttempts>=8){abandon();return;}seekAttempts++;reissued=true;seekStart=full.currentTime;seekIssued=Date.now();full.currentTime=video.currentTime;};
   full.addEventListener('canplay',align);
   full.onerror=()=>{release(full);original=null;};
@@ -2545,7 +2546,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.137":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.138":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
