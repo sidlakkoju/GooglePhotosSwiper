@@ -8,7 +8,7 @@ let chromium;
 try{const playwright=await import('playwright');chromium=playwright[process.env.PS_ENGINE||'chromium'];}catch{}
 const item=(index,extra={})=>({mediaKey:`synthetic-${index}`,name:`synthetic-${index}.jpg`,date:new Date(2020,0,1+index).toISOString(),size:2e7,thumbUrl:`https://lh3.googleusercontent.com/synthetic-${index}`,type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now(),...extra});
 
-async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1,init=null}){
+async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1,init=null,onboarding=false}){
  if(!chromium){t.skip('Playwright is unavailable');return null;}
  const browser=await chromium.launch({headless:true});
  t.after(()=>browser.close());
@@ -21,12 +21,12 @@ async function mount(t,{width,height,items,state={},scheme='light',touch=false,r
   return route.abort();
  });
  await page.goto('https://photos-swipe.test');
- await page.evaluate(async review=>{
+ await page.evaluate(async ({review,onboarding})=>{
   window.WIZ_global_data={SNlM0e:'synthetic-token',oPEP7c:'synthetic@example.test',eptZe:'/_/PhotosUi/u/0/'};
   const account=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(window.WIZ_global_data.oPEP7c))),byte=>byte.toString(16).padStart(2,'0')).join('');
   const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('photos-swipe-userscript',2);request.onupgradeneeded=()=>{for(const name of ['accounts','leases','settings'])request.result.createObjectStore(name);};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
-  await new Promise((resolve,reject)=>{const tx=db.transaction(['accounts','settings'],'readwrite');tx.objectStore('accounts').put(review,account);tx.objectStore('settings').put({onboardingDismissed:true},'sync');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
- },{...emptyReview(),revision:1,started:true,exhausted:true,...state,items});
+  await new Promise((resolve,reject)=>{const tx=db.transaction(['accounts','settings'],'readwrite');tx.objectStore('accounts').put(review,account);tx.objectStore('settings').put(onboarding?{}:{onboardingDismissed:true},'sync');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
+ },{review:{...emptyReview(),revision:1,started:true,exhausted:true,...state,items},onboarding});
  const source=(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8')).replace('document,location,GM:',"document,location:{origin:'https://photos.google.com',pathname:'/u/0/'},GM:");
  if(init)await page.evaluate(init);
  await page.addScriptTag({content:source});
@@ -223,6 +223,22 @@ test('long status messages, including sticky errors, stay on one scrollable fade
  const caption=await measure(page,`const caption=q('#caption'),style=getComputedStyle(caption);return {clamp:style.webkitLineClamp,lines:(caption.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom))/parseFloat(style.lineHeight),length:caption.textContent.length};`);
  assert.equal(caption.clamp,'2');assert.ok(caption.length>120);
  assert.ok(caption.lines<=2.01,`clamped caption leaves room for ${caption.lines.toFixed(2)} lines`);
+});
+
+for(const [width,height,touch,minCard] of [[393,852,true,300],[320,568,true,110],[852,393,true,300],[1280,900,false,500],[800,600,false,120]])test(`the first-run sync prompt is a styled card that leaves the photo and controls visible at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,onboarding:true,items:Array.from({length:4},(_,index)=>item(index))});if(!page)return;
+ const layout=await measure(page,`const o=q('#pair-onboarding'),style=getComputedStyle(o),overlap=(a,b)=>a.x<b.x+b.width-1&&b.x<a.x+a.width-1&&a.y<b.y+b.height-1&&b.y<a.y+a.height-1;return {visible:!o.hidden&&o.getClientRects().length>0,onb:box(o),content:box('.content'),card:box('#card'),caption:box('#caption'),actions:box('.actions'),background:style.backgroundColor,radius:parseFloat(style.borderTopLeftRadius),buttons:[...o.querySelectorAll('button')].map(b=>({text:b.textContent,box:box(b),background:getComputedStyle(b).backgroundColor,accent:getComputedStyle(q('.content')).getPropertyValue('--ps-accent').trim()})),overlaps:[q('#caption'),q('.actions')].filter(e=>overlap(box(o),box(e))).map(e=>e.id||e.className),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
+ assert.ok(layout.visible);
+ assert.notEqual(layout.background,'rgba(0, 0, 0, 0)');assert.ok(layout.radius>=12,String(layout.radius));
+ assert.ok(layout.onb.x>=layout.content.x+4&&layout.onb.x+layout.onb.width<=layout.content.x+layout.content.width-4,JSON.stringify(layout.onb));
+ assert.ok(layout.onb.y>=layout.content.y&&layout.onb.y+layout.onb.height<=layout.content.y+layout.content.height,JSON.stringify(layout.onb));
+ assert.deepEqual(layout.buttons.map(b=>b.text),['Continue locally','Sign in with Google']);
+ for(const button of layout.buttons)assert.ok(button.box.height>=44&&button.box.y+button.box.height<=height,JSON.stringify(button));
+ assert.notEqual(layout.buttons[1].background,layout.buttons[0].background);
+ assert.deepEqual(layout.overlaps,[]);
+ assert.ok(layout.actions.y+layout.actions.height<=height,JSON.stringify(layout.actions));
+ assert.ok(layout.card.height>=minCard,`card height ${layout.card.height}`);
+ assert.ok(layout.scroll);
 });
 
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
