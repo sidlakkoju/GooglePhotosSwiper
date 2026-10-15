@@ -371,6 +371,21 @@ for(const how of ['Escape','button'])test(`leaving the enlarged view with ${how}
  assert.notEqual(await measure(page,`return q('#caption').textContent;`),shown.caption);
 });
 
+for(const [width,height] of [[844,390],[1366,450]])test(`a short desktop window (${width}×${height}, no touch) puts the photo beside the controls`,async t=>{
+ const page=await mount(t,{width,height,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight&&document.scrollingElement.scrollWidth<=innerWidth};`);
+ assert.ok(layout.card.height>=300,`card height ${layout.card.height}`);
+ for(const control of ['keep','remove','close']){assert.ok(layout[control].x>=layout.card.x+layout.card.width,control);assert.ok(layout[control].y+layout[control].height<=height,control);}
+ assert.ok(layout.scroll);
+});
+
+test('a 600 px tall desktop window keeps the small window from #339',async t=>{
+ const page=await mount(t,{width:1366,height:600,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const layout=await measure(page,`return {content:box('.content'),card:box('#card'),keep:box('#keep')};`);
+ assert.ok(layout.content.width<=460,`content width ${layout.content.width}`);
+ assert.ok(layout.keep.y>=layout.card.y+layout.card.height,'controls below the photo');
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
