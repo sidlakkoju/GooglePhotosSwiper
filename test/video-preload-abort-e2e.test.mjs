@@ -25,7 +25,7 @@ for(const engineName of ['webkit','chromium'])test(`a phone video whose small pr
   }
   if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/clip-video')){
    requests.push(url.pathname.split('=').pop());
-   if(url.pathname.endsWith('=m18')&&!cancelled++)return route.abort('aborted');
+   if(url.pathname.endsWith('=m18')&&!cancelled){cancelled++;return route.abort('aborted');}
    return fulfillVideo(route,video,'video/webm');
   }
   if(url.hostname==='lh3.googleusercontent.com')return route.fulfill({contentType:'image/png',body:poster});

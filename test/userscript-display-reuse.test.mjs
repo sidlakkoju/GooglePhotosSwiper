@@ -59,23 +59,20 @@ test('transferred videos with metadata already loaded restore the saved playback
 });
 
 
-test('stale video keeps its warmed download while display awaits a thumbnail refresh',async()=>{
+test('stale video plays its warmed download at once without waiting for a thumbnail refresh',async()=>{
  const f=fixture('video'),size={width:360,height:480},previous={mediaKey:'previous',type:'photo',thumbUrl:'https://fixture.invalid/previous'},items=[previous,f.item];
- const preloader=createReviewPreloader({createImage:()=>({src:'',decode:async()=>{},removeAttribute(){}}),createVideo:()=>f.ready,videoURL:async()=>({url:f.item.thumbUrl}),previewURL:url=>url,playbackURL:url=>url});
+ const preloader=createReviewPreloader({createImage:()=>({src:'',style:{},dataset:{},complete:true,naturalWidth:640,decode:async()=>{},removeAttribute(){},setAttribute(){},addEventListener(){}}),createVideo:()=>f.ready,videoURL:async()=>({url:f.item.thumbUrl}),previewURL:url=>url,playbackURL:url=>url});
  preloader.update(items,previous,size);
  await new Promise(resolve=>setImmediate(resolve));
- const warmedAssignments=f.assignments();
- let finishRefresh;
+ const warmedAssignments=f.assignments(),refreshes=[];
  f.context.preloader=preloader;
  f.context.reviewURLStale=()=>true;
- f.context.refreshItemURL=()=>new Promise(resolve=>{finishRefresh=resolve;});
+ f.context.refreshItemURL=item=>{refreshes.push(item.mediaKey);return new Promise(()=>{});};
  const displaying=f.context.display(f.item);
  preloader.update(items,f.item,size);
- assert.equal(f.ready.paused,undefined);
- assert.equal(f.ready.loads,1);
- finishRefresh({...f.item,thumbUrl:'https://fixture.invalid/refreshed'});
  await displaying;
  assert.ok(f.media.children.includes(f.ready));
+ assert.deepEqual(refreshes,[]);
  assert.deepEqual(f.played,[f.ready]);
  assert.equal(f.assignments(),warmedAssignments);
  assert.equal(f.ready.loads,1);
