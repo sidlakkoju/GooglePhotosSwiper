@@ -306,6 +306,17 @@ for(const marked of [0,2])test(`Going to Trash explains itself with ${marked} ma
  else{assert.equal(shown.sub,'Nothing marked for deletion');assert.match(shown.help,/^Swipe left or tap \u2715 to mark photos/);assert.equal(shown.selectAll,false);}
 });
 
+for(const how of ['keyboard','mouse'])test(`Esc with the order menu open (${how}) closes only the menu`,async t=>{
+ const page=await mount(t,{width:1280,height:800,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index))});if(!page)return;
+ if(how==='keyboard'){await measure(page,`root.getElementById('order-switcher').focus();`);await page.keyboard.press('ArrowDown');}else await page.locator('#order-switcher').click({button:'right'});
+ await page.waitForTimeout(200);
+ assert.equal(await measure(page,`return !root.getElementById('order-menu').hidden;`),true);
+ await page.keyboard.press('Escape');await page.waitForTimeout(200);
+ assert.deepEqual(await measure(page,`return {overlay:!root.getElementById('overlay').hidden,menu:!root.getElementById('order-menu').hidden,focus:root.activeElement?.id};`),{overlay:true,menu:false,focus:'order-switcher'});
+ await page.keyboard.press('Escape');await page.waitForTimeout(300);
+ assert.equal(await measure(page,`return root.getElementById('overlay').hidden;`),true);
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
