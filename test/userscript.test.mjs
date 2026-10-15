@@ -1284,7 +1284,7 @@ test('decision history previews the same next Undo and updates after undo and re
  const mounted=await mountedReview([item('a'),item('b')]);await mounted.click('remove');await mounted.click('keep');
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: b · Unreviewed → Keep; restores Unreviewed/);assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
  await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
- reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Queue; restores Unreviewed/);reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
+ reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Delete; restores Unreviewed/);reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
 });
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
@@ -2812,7 +2812,7 @@ test('failed sync remains visible alongside keep, queue and undo confirmations',
  mounted.environment.AbortSignal=AbortSignal;
 
  await enableSyntheticSync(mounted);
- for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Added to the local removal queue\./],['undo',/Last swipe undone for b\./]]){
+ for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Marked b for deletion\./],['undo',/Last swipe undone for b\./]]){
   await mounted.click(action);
   assert.match(mounted.nodes.get('status').textContent,confirmation);
   assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
