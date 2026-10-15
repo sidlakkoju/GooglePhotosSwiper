@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.115
+// @version 1.2.116
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -1097,8 +1097,9 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   full.src=compact?smallerVideoURL(url):url;full.load();
  };
  video.onerror=fallback;
- let smallRetried=false;
- video.addEventListener('stalled',()=>{
+ let smallRetried=false,stallPending=false,lastTime=video.currentTime,movedAt=0;
+ video.addEventListener('timeupdate',()=>{if(video.currentTime!==lastTime){lastTime=video.currentTime;movedAt=Date.now();}});
+ const stall=()=>{
   if(finished||!isActive())return;
   if(!smallRetried&&video.readyState<2){
    smallRetried=true;const time=video.currentTime,restoreTime=video.dataset.resumeReady!=='pending';
@@ -1106,7 +1107,14 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
    video.load();if(wantsPlayback)video.play().catch(()=>{});return;
   }
   fallback();
+ };
+ video.addEventListener('stalled',()=>{
+  if(finished||!isActive())return;
+  if(!video.paused&&Date.now()-movedAt<1000){stallPending=true;return;}
+  stall();
  });
+ video.addEventListener('waiting',()=>{if(stallPending){stallPending=false;stall();}});
+ video.addEventListener('progress',()=>{stallPending=false;});
  for(const event of ['loadeddata','playing','timeupdate'])video.addEventListener(event,prepare,{once:true});
  video.addEventListener('timeupdate',()=>{
   if(finished||!isActive())return;
@@ -2455,7 +2463,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.115":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.116":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
