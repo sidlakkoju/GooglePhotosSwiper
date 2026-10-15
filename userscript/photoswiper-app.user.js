@@ -70,7 +70,7 @@ async function photosOperation(operation,args={},environment=globalThis) {
     if(!Array.isArray(bulk?.[0]?.[1]))throw Error();
     details=new Map(bulk[0][1].map(i=>[i[0],{name:i[1]?.[3],size:i[1]?.[9],spaceTaken:i[1]?.at(-1)?.[1],takesUpSpace:i[1]?.at(-1)?.[0]===undefined?null:i[1]?.at(-1)?.[0]===1}]));
    }catch{metadataWarning='Extra file sizes could not be read. Photos can still be reviewed.';}}
-   const items=rawItems.map(i=>{if(!validKey(i[0])||!safeMediaUrl(i[1]?.[0]))throw Error('Google media format changed.');const extra=i.at(-1)||{},duration=extra[76647426]?.[0],info=details.get(i[0])||{},timestamp=Number(i[2]);return {...info,mediaKey:i[0],dedupKey:i[3],name:info.name||extra[396644657]?.[0]||`Memory ${new Date(timestamp).toLocaleDateString()}`,type:duration!=null?'video':'photo',date:Number.isFinite(timestamp)?new Date(timestamp).toISOString():null,thumbUrl:i[1][0],width:i[1][1],height:i[1][2],duration,timezoneOffset:Number.isFinite(i[4])?i[4]:null,locationName:typeof extra[129168200]?.[1]?.[4]?.[0]?.[1]?.[0]?.[0]==='string'?extra[129168200][1][4][0][1][0][0].trim():null,location:Array.isArray(extra[129168200]?.[1]?.[0])?extra[129168200][1][0].slice(0,2):null};});
+   const items=rawItems.map(i=>{if(!validKey(i[0])||!safeMediaUrl(i[1]?.[0]))throw Error('Google media format changed.');const extra=i.at(-1)||{},duration=extra[76647426]?.[0],info=details.get(i[0])||{},timestamp=Number(i[2]);return {...info,mediaKey:i[0],dedupKey:i[3],name:info.name||extra[396644657]?.[0]||`Memory ${new Date(timestamp+(Number.isFinite(i[4])?i[4]:0)).toLocaleDateString(undefined,Number.isFinite(i[4])?{timeZone:'UTC'}:{})}`,type:duration!=null?'video':'photo',date:Number.isFinite(timestamp)?new Date(timestamp).toISOString():null,thumbUrl:i[1][0],width:i[1][1],height:i[1][2],duration,timezoneOffset:Number.isFinite(i[4])?i[4]:null,locationName:typeof extra[129168200]?.[1]?.[4]?.[0]?.[1]?.[0]?.[0]==='string'?extra[129168200][1][4][0][1][0][0].trim():null,location:Array.isArray(extra[129168200]?.[1]?.[0])?extra[129168200][1][0].slice(0,2):null};});
    return {ok:true,data:{items,nextPageId:data[1]||null,metadataWarning}};
   }
   if(operation==='trashPage') {
@@ -211,6 +211,11 @@ const emptyReview = () => ({revision:0,history:[],items:[],cursor:null,started:f
 const reviewDeck = state => state.items.filter(item=>!item.decision&&!item.needsPreview&&item.state!=='in_trash');
 const reviewQueue = state => state.items.filter(item=>item.decision==='remove'&&!item.needsPreview&&!item.queueSent&&item.state!=='in_trash');
 const reviewTrashCandidates = state => state.items.filter(item=>item.decision==='remove'&&!item.needsPreview&&item.state!=='in_trash');
+function captureDate(item,options) {
+ const time=Date.parse(item?.date);
+ if(!Number.isFinite(time))return null;
+ return Number.isFinite(item.timezoneOffset)?new Date(time+item.timezoneOffset).toLocaleDateString(undefined,{...options,timeZone:'UTC'}):new Date(time).toLocaleDateString(undefined,options);
+}
 function reviewStorage(items) {
  return items.reduce((total,item)=>{
   const bytes=item.takesUpSpace===false?0:item.spaceTaken??item.size;
@@ -2188,7 +2193,7 @@ function mountPhotosSwipe(environment) {
  }
  function renderCard(){
   const item=current();
-  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':item.decision==='keep'?'Kept before \u00b7 ':''}${item.name} \u00b7 ${item.date?new Date(item.date).toLocaleDateString():'Unknown date'} \u00b7 ${itemSize(item)}${item.takesUpSpace===false?' \u00b7 stored free':''}`:emptyDeck().caption;
+  $('caption').textContent=item?`${inspected?'Candidate inspection \u00b7 ':item.decision==='keep'?'Kept before \u00b7 ':''}${item.name} \u00b7 ${captureDate(item)||'Unknown date'} \u00b7 ${itemSize(item)}${item.takesUpSpace===false?' \u00b7 stored free':''}`:emptyDeck().caption;
   shareElement.hidden=openElement.hidden=!item;if(item)openElement.href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/photo/${encodeURIComponent(item.mediaKey)}`;
   $('caption').hidden=!item;coach.hidden=!item||!!inspected||reviewSwipeCount(state)>0||$('card').classList.contains('expanded');$('caption').title=item?$('caption').textContent:'';
   if(!$('overlay').hidden&&(shown!==(item?.mediaKey||null)||!$('media').childNodes.length))display(item);
@@ -2238,7 +2243,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   const item=rows.find(item=>item.mediaKey===previewKey);if(!item){previewKey=null;return;}
   const preview=document.createElement('section');preview.setAttribute('class','trash-preview');preview.setAttribute('id','trash-preview');preview.setAttribute('role','dialog');preview.setAttribute('aria-label',`Preview ${item.name}`);const nav=document.createElement('div');nav.setAttribute('class','trash-nav');const back=document.createElement('button'),position=document.createElement('span'),done=document.createElement('button');back.textContent='\u2039 Going to Trash';position.textContent=`${rows.indexOf(item)+1} of ${rows.length}`;done.textContent='Done';back.onclick=done.onclick=()=>{previewKey=null;renderTrashReview();};nav.append(back,position,done);
   const media=document.createElement('div');media.setAttribute('class','trash-preview-media');const image=document.createElement(item.type==='video'?'video':'img');if(item.type==='video'){image.controls=true;image.playsInline=true;previewVideo=image;const token=previewGeneration;const poster=document.createElement('img');poster.alt=item.name;media.append(poster);thumbnails.bind(poster,item,fresh=>previewSource(fresh.thumbUrl),{retryLookup:true});const loaded=poster.onload;poster.onload=()=>{loaded();if(token===previewGeneration){image.poster=poster.src;poster.hidden=true;}};videoURL(item).then(url=>{if(token===previewGeneration)image.src=url;}).catch(error=>message(error.message));}else{image.alt=item.name;thumbnails.bind(image,item,fresh=>previewSource(fresh.thumbUrl));}media.append(image);
-  const caption=document.createElement('div'),details=document.createElement('small');caption.setAttribute('class','trash-preview-caption');caption.textContent=item.name;details.textContent=[item.date?new Date(item.date).toLocaleDateString():'Unknown date',item.type==='video'?videoDuration(item):null,itemSize(item),item.legacy?'Previously marked':null].filter(Boolean).join(' \u00b7 ');caption.append(details);
+  const caption=document.createElement('div'),details=document.createElement('small');caption.setAttribute('class','trash-preview-caption');caption.textContent=item.name;details.textContent=[captureDate(item)||'Unknown date',item.type==='video'?videoDuration(item):null,itemSize(item),item.legacy?'Previously marked':null].filter(Boolean).join(' \u00b7 ');caption.append(details);
   const strip=document.createElement('div');strip.setAttribute('class','trash-strip');for(const row of rows){const button=document.createElement('button'),thumb=document.createElement('img');button.setAttribute('class',row.mediaKey===previewKey?'active':'');button.setAttribute('aria-label',`Preview ${row.name}`);thumb.alt='';thumbnails.bind(thumb,row,fresh=>mediaURL(fresh.thumbUrl));button.append(thumb);button.onclick=()=>{previewKey=row.mediaKey;renderTrashReview();};strip.append(button);}
   const bar=document.createElement('div');bar.setAttribute('class','trash-bar');const keep=document.createElement('button'),trash=document.createElement('button');keep.textContent='Keep';trash.textContent='Trash';trash.setAttribute('class','preview-trash');keep.setAttribute('aria-pressed',String(item.decision==='keep'));trash.setAttribute('aria-pressed',String(item.decision==='remove'));keep.onclick=()=>selectTrashItem(item.mediaKey,false);trash.onclick=()=>selectTrashItem(item.mediaKey,true);bar.append(keep,trash);preview.append(nav,media,caption,strip,bar);reviewPanel.append(preview);done.focus();
  }
@@ -2263,7 +2268,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   updateOrder();renderCard();const item=current();memoryLabel.hidden=!item||$('sort').value!=='flashbacks';
   const memory=item?memoryFor(item):null;
   const place=typeof item?.locationName==='string'?item.locationName.trim():'';
-  memoryDate.textContent=item?.date?new Date(item.date).toLocaleDateString(undefined,{month:'long',year:'numeric'}):'Unknown date';memoryPlace.textContent=place?` \u00b7 ${place}`:'';memoryPlace.hidden=!place;memoryPlace.title=place;memoryPosition.textContent=memory?` \u00b7 ${memory.findIndex(row=>row.mediaKey===item.mediaKey)+1} of ${memory.length}`:'';
+  memoryDate.textContent=captureDate(item,{month:'long',year:'numeric'})||'Unknown date';memoryPlace.textContent=place?` \u00b7 ${place}`:'';memoryPlace.hidden=!place;memoryPlace.title=place;memoryPosition.textContent=memory?` \u00b7 ${memory.findIndex(row=>row.mediaKey===item.mediaKey)+1} of ${memory.length}`:'';
   const next=inspected||$('card').classList.contains('expanded')?null:deck().find(candidate=>candidate.mediaKey!==item?.mediaKey);
   if(next&&underCard.querySelector('img')?.dataset?.key!==next.mediaKey){try{const preview=previewImage();preview.dataset.key=next.mediaKey;preview.alt='';preview.draggable=false;preview.src=previewSource(next.thumbUrl);underCard.replaceChildren(preview);}catch{underCard.replaceChildren();}}
   if(!next)underCard.replaceChildren();underCard.hidden=!next;
