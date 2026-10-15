@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.102
+// @version 1.2.103
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -992,10 +992,11 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
   if(finished||original||!isActive())return;
   original=createVideo();const full=original;
   full.hidden=false;Object.assign(full.style,{position:'absolute',inset:'0',opacity:'0',pointerEvents:'none'});video.parentNode.append(full);full.preload='auto';full.muted=true;full.loop=video.loop;full.playsInline=true;full.poster=video.poster;
-  let seekStart=0,seekAttempts=0,lag=0,frameQueued=false,aheadOff=false,seekingAhead=false;
-  const abandon=()=>{if(finished||original!==full)return;release(full);original=null;seeking=false;if(retries<3)retryAt=Date.now()+5000*2**retries++;};
+  let seekStart=0,seekAttempts=0,lag=0,frameQueued=false,aheadOff=false,seekingAhead=false,dataQueued=false,waitingSince=0;
+  const abandon=(slow=false)=>{if(finished||original!==full)return;release(full);original=null;seeking=false;if(retries<3)retryAt=Date.now()+(slow?20000:5000)*2**retries++;};
   const bufferedTo=time=>{const ranges=full.buffered;for(let index=0;index<(ranges?.length||0);index++)if(ranges.start(index)<=time&&time<=ranges.end(index))return ranges.end(index);return time;};
   const caughtUp=()=>{frameQueued=false;align();};
+  const moreData=()=>{dataQueued=false;align();};
   const align=()=>{
    if(finished||original!==full||!isActive()||full.readyState<2||seeking)return;
    const ahead=full.currentTime-video.currentTime,playing=!video.paused&&video.playbackRate>0;
@@ -1008,6 +1009,13 @@ function startProgressiveVideo({video,url,compact,createVideo,onSwap,onError,onF
     let target=video.currentTime;
     seekingAhead=false;
     if(playing&&!aheadOff&&seekAttempts>=2&&lag>.04){const lead=Math.min(1.5,(lag*1.5+.05)*video.playbackRate,bufferedTo(target)-target-.05);if(lead>lag*video.playbackRate){target+=lead;seekingAhead=true;}}
+    if(playing&&seekAttempts>0&&full.buffered&&bufferedTo(target)<target+.1){
+     if(!waitingSince)waitingSince=Date.now();
+     if(Date.now()-waitingSince>8000){abandon(true);return;}
+     if(!dataQueued){dataQueued=true;video.addEventListener('timeupdate',moreData,{once:true});}
+     return;
+    }
+    waitingSince=0;
     stuckAfter=seekingAhead?1200:4000;seekAttempts++;seekStart=full.currentTime;seeking=true;seekIssued=Date.now();full.currentTime=target;return;
    }
    const paused=video.paused;
@@ -2358,7 +2366,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.102":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.103":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

@@ -116,7 +116,7 @@ test('a clamped no-op seek abandons the hidden upgrade without repeated seeks',(
 
 test('alignment attempts stay bounded when seeks progress without reaching the target',()=>{
  const {video,full,swaps}=setup();let time=0,seeks=0;
- Object.defineProperty(full,'currentTime',{get:()=>time,set:()=>{seeks++;time+=.01;}});
+ Object.defineProperty(full,'currentTime',{get:()=>time,set:value=>{seeks++;time=value-.2+seeks*.01;}});
  video.currentTime=12;video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
  for(let index=0;index<20;index++)full.emit('seeked');
  assert.equal(seeks,8);assert.equal(full.src,'');assert.deepEqual(swaps,[]);
@@ -208,7 +208,7 @@ function clocked(t){
 }
 function stubbornVideo(){
  const element=fakeVideo();let time=0;
- Object.defineProperty(element,'currentTime',{get:()=>time,set:value=>{element.seeks=(element.seeks||0)+1;time=Math.min(value,time+.01);}});
+ Object.defineProperty(element,'currentTime',{get:()=>time,set:value=>{element.seeks=(element.seeks||0)+1;time=value-.2;}});
  return element;
 }
 
@@ -275,7 +275,7 @@ test('after two late seeks the upgrade aims ahead inside its buffer, then swaps 
 });
 
 test('without buffered room ahead the upgrade keeps exact seeks',()=>{
- const {full,late}=seekAheadSetup(1.45);
+ const {full,late}=seekAheadSetup(1.6);
  late();late();assert.ok(Math.abs(full.currentTime-1.4)<1e-9,`exact seek to ${full.currentTime}`);
 });
 
@@ -286,4 +286,18 @@ test('a seek ahead that stalls for 1.2 s is replaced by an exact seek and seekin
  clock.advance(1000);video.currentTime=1.5;video.emit('timeupdate');assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
  clock.advance(300);video.emit('timeupdate');assert.equal(full.currentTime,1.5);
  video.currentTime=1.7;full.emit('seeked');assert.equal(full.currentTime,1.7);
+});
+
+test('a hidden upgrade waits for data instead of seeking past its buffer, and gives up after 8 s',t=>{
+ const clock=clocked(t),video=fakeVideo(),created=[];let end=1.1;
+ startProgressiveVideo({video,url,compact:true,createVideo:()=>{const element=fakeVideo();element.seeks=0;let time=0;Object.defineProperty(element,'currentTime',{get:()=>time,set:value=>{element.seeks++;time=value-.3;}});element.buffered={length:1,start:()=>0,end:()=>end};created.push(element);return element;},onSwap:()=>{},onError:()=>{},isActive:()=>true,setTimer:()=>{}});
+ video.currentTime=1;video.readyState=2;for(const event of ['loadeddata','playing','timeupdate'])video.emit(event);
+ const full=created[0];full.readyState=2;full.emit('canplay');assert.equal(full.seeks,1);
+ video.currentTime=1.3;full.emit('seeked');assert.equal(full.seeks,1);
+ end=3;video.currentTime=1.5;video.emit('timeupdate');assert.equal(full.seeks,2);
+ end=1.8;video.currentTime=2;full.emit('seeked');assert.equal(full.seeks,2);
+ for(let step=0;step<40;step++){clock.advance(250);video.currentTime+=.25;video.emit('timeupdate');}
+ assert.equal(full.seeks,2);assert.equal(full.src,'');
+ clock.advance(15000);video.emit('timeupdate');assert.equal(created.length,1);
+ clock.advance(6000);video.emit('timeupdate');assert.equal(created.length,2);
 });
