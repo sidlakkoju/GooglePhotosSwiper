@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.126
+// @version 1.2.127
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -2216,7 +2216,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   if(doneSummary&&!reviewPanel.hidden){doneFreed.textContent=`${doneSummary.freed} freed`;doneCounts.textContent=`${doneSummary.deleted} moved to Trash${doneSummary.kept?` \u00b7 ${doneSummary.kept} kept`:''}`;const upcoming=reviewDeck(state).length;doneNext.textContent=upcoming?`Up next: ${upcoming} to review`:state.exhausted?'You\u2019ve reviewed everything in your library.':'Up next: more from your library';doneTrash.href=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/trash`;}
   if(reviewPanel.hidden){doneSummary=null;doneView.hidden=true;if(resumeReviewPlayback&&!overlayElement.hidden){mediaElement.querySelector('video')?.play().catch(()=>{});resumeReviewPlayback=false;}previewGeneration++;if(previewVideo){previewVideo.pause();previewVideo.removeAttribute('src');previewVideo.load();previewVideo=null;}reviewSignature='';return;}
   const rows=reviewRows(),selected=rows.filter(item=>item.decision==='remove');
-  sizeValue.textContent=estimate(selected);const storedFree=selected.filter(item=>item.takesUpSpace===false).length;reviewSubtitle.textContent=`${selected.length} of ${rows.length} selected \u00b7 ${estimate(selected)}${storedFree?` \u00b7 ${storedFree} stored free, so they don\u2019t use storage`:''}`;moveTrash.textContent=trashProgress||`Move ${selected.length} to Trash`;moveTrash.disabled=busy||!identity||!selected.length;
+  sizeValue.textContent=estimate(selected);const storedFree=selected.filter(item=>item.takesUpSpace===false).length;reviewSubtitle.textContent=`${selected.length} of ${rows.length} selected \u00b7 ${estimate(selected)}${storedFree?` \u00b7 ${storedFree} stored free, so ${storedFree===1?'it doesn\u2019t':'they don\u2019t'} use storage`:''}`;moveTrash.textContent=trashProgress||`Move ${selected.length} to Trash`;moveTrash.disabled=busy||!identity||!selected.length;
   const signature=JSON.stringify([previewKey,rows.map(item=>[item.mediaKey,item.decision,item.thumbUrl,item.name,item.state])]);if(signature===reviewSignature)return;reviewSignature=signature;
   reviewGrid.replaceChildren();
   for(const item of rows){
@@ -2505,7 +2505,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.126":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.127":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
