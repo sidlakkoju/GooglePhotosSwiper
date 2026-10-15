@@ -43,6 +43,7 @@ test('display and zoom reset preserve swipe touch actions when expanded, while z
  await f.context.display(null);
  assert.equal(f.mediaElement.style.touchAction,'');
  vm.runInContext(source.split('\n').find(line=>line.startsWith(" $('zoom').oninput=")),f.context);
+ vm.runInContext('var fullscreenOwned=false;var fullscreenSupported=()=>false,fullscreenElement=()=>null;',f.context);
  vm.runInContext(source.split('\n').find(line=>line.startsWith(' function toggleEnlarge()')),f.context);
  f.context.toggleEnlarge();
  assert.equal(f.classes.has('expanded'),true);

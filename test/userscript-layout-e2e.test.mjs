@@ -7,13 +7,14 @@ let chromium;
 try{const playwright=await import('playwright');chromium=playwright[process.env.PS_ENGINE||'chromium'];}catch{}
 const item=(index,extra={})=>({mediaKey:`synthetic-${index}`,name:`synthetic-${index}.jpg`,date:new Date(2020,0,1+index).toISOString(),size:2e7,thumbUrl:`https://lh3.googleusercontent.com/synthetic-${index}`,type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now(),...extra});
 
-async function mount(t,{width,height,items,state={},scheme='light'}){
+async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null}){
  if(!chromium){t.skip('Playwright is unavailable');return null;}
  const browser=await chromium.launch({headless:true});
  t.after(()=>browser.close());
- const page=await browser.newPage({viewport:{width,height},colorScheme:scheme});
+ const page=await browser.newPage({viewport:{width,height},colorScheme:scheme,hasTouch:touch,isMobile:touch&&(process.env.PS_ENGINE||'chromium')==='chromium'});
  await page.route('**/*',route=>{
   const url=new URL(route.request().url());
+  if(routes){const handled=routes(route,url);if(handled)return handled;}
   if(url.hostname==='photos-swipe.test')return route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'});
   if(url.hostname==='lh3.googleusercontent.com')return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><rect width="1600" height="1200" fill="#3a7"/></svg>'});
   return route.abort();
@@ -176,7 +177,7 @@ test('every phone control has a touch target of at least 44 points on the swipe,
 
 const savedDecisions=async page=>{
  await page.waitForTimeout(2500);
- return page.evaluate(async()=>{const db=await new Promise(resolve=>{const request=indexedDB.open('photos-swipe-userscript');request.onsuccess=()=>resolve(request.result);});const stored=await new Promise(resolve=>{const request=db.transaction('accounts').objectStore('accounts').getAll();request.onsuccess=()=>resolve(request.result);});db.close();return {decided:stored[0].items.filter(entry=>entry.decision).length,history:stored[0].history.length};});
+ return page.evaluate(async()=>{const db=await new Promise(resolve=>{const request=indexedDB.open('photos-swipe-userscript');request.onsuccess=()=>resolve(request.result);});const entries=await new Promise(resolve=>{const found=[],request=db.transaction('accounts').objectStore('accounts').openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor)return resolve(found);found.push([String(cursor.key),cursor.value]);cursor.continue();};});db.close();const meta=entries.find(([key,value])=>/^v2:[^:]+$/.test(key)&&value);const state=meta?{...meta[1],items:entries.filter(([key])=>key.startsWith(meta[0]+':')).sort(([a],[b])=>a<b?-1:1).flatMap(([,value])=>value)}:entries.find(([key,value])=>value&&Array.isArray(value.items))[1];return {decided:state.items.filter(entry=>entry.decision).length,history:state.history.length};});
 };
 
 for(const [keys,expected] of [[['ArrowLeft','z','ArrowRight','z','ArrowLeft','ArrowLeft','z','z'],0],[['ArrowLeft','ArrowRight','ArrowLeft','z','ArrowRight','ArrowLeft','z','z','ArrowRight'],3]])test(`back-to-back keyboard decisions and undos are applied in order (${keys.length} keys, ${expected} left)`,async t=>{
@@ -220,4 +221,49 @@ test('long status messages, including sticky errors, stay on one scrollable fade
  const caption=await measure(page,`const caption=q('#caption'),style=getComputedStyle(caption);return {clamp:style.webkitLineClamp,lines:(caption.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom))/parseFloat(style.lineHeight),length:caption.textContent.length};`);
  assert.equal(caption.clamp,'2');assert.ok(caption.length>120);
  assert.ok(caption.lines<=2.01,`clamped caption leaves room for ${caption.lines.toFixed(2)} lines`);
+});
+
+test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
+ const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
+ assert.ok(layout.card.height>=300,`card height ${layout.card.height}`);assert.ok(layout.card.width>=500,`card width ${layout.card.width}`);
+ for(const control of ['keep','remove','close']){assert.ok(layout[control].x>=layout.card.x+layout.card.width,control);assert.ok(layout[control].y+layout[control].height<=393,control);}
+ assert.ok(layout.scroll);
+ await measure(page,`root.getElementById('enlarge').click();`);await page.waitForTimeout(700);
+ const full=await measure(page,`return box('#card');`);
+ assert.ok(full.width>=840&&full.height>=380,JSON.stringify(full));
+});
+
+test('Enlarge takes the card fullscreen where the browser allows it and leaving fullscreen restores the card',async t=>{
+ const page=await mount(t,{width:1280,height:800,items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
+ await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('enlarge').click());
+ await page.waitForTimeout(700);
+ const supported=await page.evaluate(()=>!!document.fullscreenEnabled);
+ const entered=await measure(page,`return {expanded:q('#card').classList.contains('expanded'),fullscreen:root.fullscreenElement?.id||null,card:box('#card')};`);
+ assert.equal(entered.expanded,true);
+ if(supported){assert.equal(entered.fullscreen,'card');assert.ok(entered.card.width>=1270&&entered.card.height>=790,JSON.stringify(entered.card));
+  await page.evaluate(()=>document.exitFullscreen());await page.waitForTimeout(500);
+  assert.deepEqual(await measure(page,`return {expanded:q('#card').classList.contains('expanded'),fullscreen:root.fullscreenElement?.id||null};`),{expanded:false,fullscreen:null});}
+});
+
+test('Open in Google Photos links to the shown item and Share falls back to copying its link',async t=>{
+ const page=await mount(t,{width:393,height:852,items:[item(1,{takesUpSpace:false,spaceTaken:0}),item(2)],routes:(route,url)=>url.pathname.includes('=w4096')?route.abort():null});if(!page)return;
+ await page.evaluate(()=>{window.__shared=[];Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.files?'files':data.url);}});Object.defineProperty(navigator,'canShare',{configurable:true,value:()=>true});});
+ const shown=await measure(page,`return {href:q('#open-photos').href,target:q('#open-photos').target,caption:q('#caption').textContent,share:box('#share'),open:box('#open-photos')};`);
+ const key=/^(synthetic-\d+)/.exec(shown.caption)[1];
+ assert.equal(shown.href,`https://photos.google.com/u/0/photo/${key}`);assert.equal(shown.target,'_blank');
+ assert.equal(/stored free/.test(shown.caption),key==='synthetic-1');
+ for(const control of ['share','open'])assert.ok(shown[control].width>=36&&shown[control].height>=36,control);
+ await measure(page,`q('#share').click();`);
+ await page.waitForFunction(()=>window.__shared.length===1);
+ assert.deepEqual(await page.evaluate(()=>window.__shared),[`https://photos.google.com/u/0/photo/${key}`]);
+});
+
+test('Share hands the photo itself to the share sheet when it can be downloaded',async t=>{
+ const page=await mount(t,{width:393,height:852,items:[item(1),item(2)]});if(!page)return;
+ await page.evaluate(()=>{window.__shared=[];Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.files?data.files.map(file=>[file.name,file.type,file.size>0]):data.url);}});Object.defineProperty(navigator,'canShare',{configurable:true,value:data=>!!data.files});});
+ const key=await measure(page,`return /^(synthetic-\\d+)/.exec(q('#caption').textContent)[1];`);
+ await measure(page,`q('#share').click();`);
+ await page.waitForFunction(()=>window.__shared.length===1);
+ assert.equal(JSON.stringify(await page.evaluate(()=>window.__shared)),JSON.stringify([[[`${key}.jpg`,'image/svg+xml',true]]]));
 });
