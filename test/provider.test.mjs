@@ -29,3 +29,12 @@ test('a network failure or timeout reaching Google gives a readable message inst
  const cut=vm.runInNewContext(`(${photosOperation.toString()})`,{...Object.fromEntries(['location','window','crypto','TextEncoder','URL','URLSearchParams','AbortController','AbortSignal','setTimeout','clearTimeout'].map(key=>[key,globalThis[key]])),location:{origin:'https://photos.google.com',pathname:'/'},window:{WIZ_global_data:{SNlM0e:'fixture-page-token',oPEP7c:'fixture@example.test',eptZe:'/_/PhotosUi/',FdrFJe:'sid',cfb2h:'build'}},crypto:webcrypto,fetch:async()=>({ok:true,text:async()=>{throw new TypeError('network error');}})});
  assert.equal((await cut('library')).error,'Couldn’t reach Google Photos. Check your connection and try again.');
 });
+test('an untitled item is named after the date it was taken, in its own time zone',async()=>{
+ const zone=process.env.TZ;process.env.TZ='Asia/Tokyo';
+ try{
+ const row=['untitled',['https://lh3.googleusercontent.com/thumb',800,600],Date.parse('2026-01-01T07:30:00Z'),'dedup',-8*3600000,{}];
+ const result=await fixture(id=>id==='lcxiM'?[[row],null]:id==='EWgK9e'?[[null,[]]]:null).run('library');
+ assert.equal(result.data.items[0].name,`Memory ${new Date(Date.UTC(2025,11,31,23,30)).toLocaleDateString(undefined,{timeZone:'UTC'})}`);
+ assert.equal(result.data.items[0].timezoneOffset,-8*3600000);
+ }finally{if(zone===undefined)delete process.env.TZ;else process.env.TZ=zone;}
+});
