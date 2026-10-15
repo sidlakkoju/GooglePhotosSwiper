@@ -317,6 +317,15 @@ for(const how of ['keyboard','mouse'])test(`Esc with the order menu open (${how}
  assert.equal(await measure(page,`return root.getElementById('overlay').hidden;`),true);
 });
 
+for(const how of ['Escape','Close'])test(`closing the share sheet with ${how} returns focus to Share`,async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
+ await page.locator('#share').click();await page.waitForTimeout(400);
+ assert.equal(await measure(page,`return !q('.share-sheet').hidden;`),true);
+ if(how==='Escape')await page.keyboard.press('Escape');else await page.locator('.share-close').click();
+ await page.waitForTimeout(300);
+ assert.deepEqual(await measure(page,`return {sheet:q('.share-sheet').hidden,overlay:!root.getElementById('overlay').hidden,focus:root.activeElement?.id||null};`),{sheet:true,overlay:true,focus:'share'});
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
