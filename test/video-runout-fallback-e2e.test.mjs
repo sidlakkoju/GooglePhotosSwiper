@@ -46,16 +46,17 @@ test('a full-quality video that runs out of data after the swap falls back to 72
  await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick());
  const shown=()=>page.evaluate(()=>{const video=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media')?.querySelector('video:not([hidden])');return video&&video.style.opacity===''?{src:video.currentSrc.replace(/^.*clip-video/,''),time:video.currentTime,paused:video.paused}:null;});
  await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media')?.querySelector('video:not([hidden])')?.currentSrc.endsWith('=dv'),null,{timeout:20000});
- let frozen=null,stuckSince=0,last=-1;
+ let frozen=null,firstShown=null,stuckSince=0,last=-1;
  for(const started=Date.now();Date.now()-started<20000;await page.waitForTimeout(100)){
   const state=await shown();
-  if(state?.src==='=m22'){frozen=last;break;}
+  if(state?.src==='=m22'){frozen=last;firstShown=state.time;break;}
   if(state&&state.time!==last){last=state.time;stuckSince=Date.now();}
  }
  assert.ok(requests.some(request=>request.startsWith('=dv ')&&+request.split(' ')[1]>=cut),'the full-quality download ran out and asked for the rest');
  assert.notEqual(frozen,null,'the video fell back to 720p');
+ assert.ok(firstShown>=frozen-.25,`the first 720p picture is at ${firstShown} s, not where the video froze (${frozen} s)`);
  const stuckFor=Date.now()-stuckSince;
- assert.ok(stuckFor<4000,`frozen for ${stuckFor} ms before falling back`);
+ assert.ok(stuckFor<5000,`frozen for ${stuckFor} ms before falling back`);
  await page.waitForFunction(time=>{const video=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelector('video:not([hidden])');return video.currentSrc.endsWith('=m22')&&!video.paused&&video.currentTime>time+.5;},frozen,{timeout:10000});
  assert.ok((await shown()).time>=frozen,'720p continues from where the full-quality video stopped');
 });
