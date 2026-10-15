@@ -263,15 +263,18 @@ function seekAheadSetup(bufferEnd){
  return {video,full,swaps,frames,late};
 }
 
-test('after two late seeks the upgrade aims ahead inside its buffer, then swaps once playback catches up',async()=>{
- const {video,full,swaps,frames,late}=seekAheadSetup(5);
- assert.equal(full.currentTime,1);
- late();assert.equal(full.currentTime,1.2);
- late();assert.ok(Math.abs(full.currentTime-1.75)<1e-9,`seeked ahead to ${full.currentTime}`);
- video.currentTime=1.6;full.emit('seeked');
- assert.equal(frames.length,1);assert.deepEqual(swaps,[]);
- video.currentTime=1.74;frames.shift()();await Promise.resolve();
- assert.deepEqual(swaps,[full]);assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
+test('a late seek inside the buffer is closed by playing the hidden video faster, then swaps without another seek',async()=>{
+ const {video,full,swaps,late}=seekAheadSetup(5),fullFrames=[];
+ full.requestVideoFrameCallback=callback=>fullFrames.push(callback);
+ let seeks=0,time=full.currentTime;Object.defineProperty(full,'currentTime',{get:()=>time,set:value=>{seeks++;time=value;}});
+ late();
+ assert.equal(seeks,0);assert.equal(full.playbackRate,1.5);assert.equal(full.paused,false);assert.deepEqual(swaps,[]);
+ time=1.4;video.currentTime=1.3;fullFrames.shift()();
+ assert.equal(full.playbackRate,.75);
+ time=1.45;video.currentTime=1.44;fullFrames.shift()();
+ assert.equal(full.playbackRate,1);assert.deepEqual(swaps,[]);
+ fullFrames.shift()();await Promise.resolve();
+ assert.deepEqual(swaps,[full]);assert.equal(seeks,0);assert.equal(full.playbackRate,1);
 });
 
 test('without buffered room ahead the upgrade keeps exact seeks',()=>{
@@ -279,11 +282,11 @@ test('without buffered room ahead the upgrade keeps exact seeks',()=>{
  late();late();assert.ok(Math.abs(full.currentTime-1.4)<1e-9,`exact seek to ${full.currentTime}`);
 });
 
-test('a seek ahead that stalls for 1.2 s is replaced by an exact seek and seeking ahead stops',t=>{
+test('a catch-up that has not converged after eight seconds gives up and retries later',t=>{
  const clock=clocked(t);
  const {video,full,late}=seekAheadSetup(5);
- late();late();assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
- clock.advance(1000);video.currentTime=1.5;video.emit('timeupdate');assert.ok(Math.abs(full.currentTime-1.75)<1e-9);
- clock.advance(300);video.emit('timeupdate');assert.equal(full.currentTime,1.5);
- video.currentTime=1.7;full.emit('seeked');assert.equal(full.currentTime,1.7);
+ full.requestVideoFrameCallback=()=>{};
+ late();assert.equal(full.playbackRate,1.5);
+ clock.advance(7900);video.emit('timeupdate');assert.equal(full.src,url.replace('=original','=m22'));
+ clock.advance(200);video.emit('timeupdate');assert.equal(full.src,'');assert.equal(full.isConnected,false);
 });
