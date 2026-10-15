@@ -29,56 +29,45 @@ test('storage formatting follows approved decimal units and precision',()=>{
  assert.equal(formatStorageBytes(0),'0.00 MB');assert.equal(formatStorageBytes(38.2e6),'38.2 MB');assert.equal(formatStorageBytes(500e6),'500 MB');assert.equal(formatStorageBytes(1.24e9),'1.24 GB');
 });
 
-function capsuleFixture({reduced=false}={}){
- const node=()=>({children:[],style:{setProperty(key,value){this[key]=value;}},attributes:{},classList:{values:new Set(),add(value){this.values.add(value);},remove(value){this.values.delete(value);}},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},setAttribute(key,value){this.attributes[key]=value;}});
- let now=0,id=0;const frames=new Map(),motion={matches:reduced,addEventListener(type,callback){this.change=callback;}},window={performance:{now:()=>now},matchMedia:()=>motion,requestAnimationFrame:callback=>{frames.set(++id,callback);return id;},cancelAnimationFrame:id=>frames.delete(id)};
- const document={createElement:tag=>tag==='canvas'?{getContext:()=>({measureText:()=>({width:7})})}:node(),createElementNS:()=>node(),addEventListener(){}};
- const element=node(),capsule=createStorageCapsule({document,window,root:node(),element,isVisible:()=>true});
- const svg=element.children[0].children[0].children[0],face=element.children[0].children[0].children[1],chip=element.children[1];
- const tick=time=>{now=time;const callbacks=[...frames.values()];frames.clear();for(const callback of callbacks)callback(now);};
- const transforms=()=>face.children.map(glyph=>glyph.style.transform);
- const centerX=()=>Number(/translate\(([-\d.]+)px/.exec(face.children[Math.floor(face.children.length/2)].style.transform)[1]);
- return {capsule,element,svg,chip,frames,motion,tick,transforms,centerX};
+function counterFixture({reduced=false}={}){
+ const timers=[];
+ const node=tag=>{const element={tag,children:[],style:{values:{},setProperty(key,value){this.values[key]=value;}},dataset:{},attributes:{},offsetWidth:1,textContent:'',className:'',
+  classList:{values:new Set(),add(value){this.values.add(value);},remove(...values){for(const value of values)this.values.delete(value);},toggle(value,force){if(force??!this.values.has(value))this.values.add(value);else this.values.delete(value);},contains(value){return this.values.has(value);}},
+  append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},setAttribute(key,value){this.attributes[key]=value;},
+  querySelectorAll(selector){const found=[],walk=current=>{for(const child of current.children){if(selector==='.'+child.className)found.push(child);walk(child);}};walk(this);return found;}};return element;};
+ const motion={matches:reduced},window={matchMedia:()=>motion,setTimeout:(callback,delay)=>{timers.push({callback,delay});return timers.length;},clearTimeout(){}};
+ const element=node('span'),capsule=createStorageCapsule({document:{createElement:node},window,root:node('root'),element,isVisible:()=>true});
+ const [label,value,note]=element.children,digits=value.children[0],unit=value.children[1];
+ const shown=()=>digits.children.map(child=>child.className==='sv-col'?child.children[0].style.values['--n']:child.textContent).join('')+' '+unit.textContent;
+ const flush=()=>{for(const timer of timers.splice(0))timer.callback();};
+ return {capsule,element,label,value,note,shown,flush,motion};
 }
 
-test('capsule stays still while idle and unchanged updates do not restart a turn',()=>{
- const {capsule,frames,tick,transforms}=capsuleFixture();
- capsule.update(0);const idle=transforms();tick(2000);capsule.update(0,{animate:true,delta:1e6});
- assert.equal(frames.size,0);assert.deepEqual(transforms(),idle);
- capsule.update(1e6);tick(2050);assert.equal(frames.size,1);capsule.update(1e6);tick(2550);
- assert.equal(frames.size,0);const settled=transforms();tick(5000);capsule.update(1e6);assert.deepEqual(transforms(),settled);
+test('the counter shows the formatted total with an accessible label and stays still when unchanged',()=>{
+ const {capsule,element,label,value,note,shown}=counterFixture();
+ capsule.update(0);assert.equal(shown(),'0.00 MB');assert.equal(label.textContent,'Freed');assert.equal(value.dataset.text,'0.00 MB');
+ assert.match(element.attributes['aria-label'],/^0.00 MB approximate storage freed/);assert.equal(element.attributes.role,'img');
+ capsule.update(0,{animate:true,delta:0});assert.equal(note.classList.contains('sv-go'),false);
 });
 
-for(const [name,initial,next,direction] of [['right',0,1e6,1],['left',1e6,0,-1]])test(`capsule rotates ${name} when the value ${direction>0?'increases':'decreases'}`,()=>{
- const {capsule,frames,tick,centerX,transforms}=capsuleFixture();
- capsule.update(initial);const restingX=centerX();capsule.update(next);assert.equal(frames.size,1);tick(25);
- assert.ok(direction*(centerX()-restingX)>0);tick(550);assert.equal(frames.size,0);
- const settled=transforms();tick(2000);assert.deepEqual(transforms(),settled);
+test('a queued item rolls the digits, tints the number and swaps the caption for the amount added',()=>{
+ const {capsule,element,value,note,shown,flush}=counterFixture();
+ capsule.update(0);capsule.update(38.2e6,{animate:true,delta:38.2e6});
+ assert.equal(shown(),'38.2 MB');assert.equal(value.dataset.text,'38.2 MB');
+ assert.equal(note.textContent,'+38.2 MB');assert.ok(note.classList.contains('sv-go'));assert.ok(element.classList.contains('sv-noting'));assert.equal(note.classList.contains('sv-free'),false);
+ assert.ok(value.classList.contains('sv-bump'));flush();assert.equal(value.classList.contains('sv-bump'),false);
+ capsule.update(1.24e9,{animate:true,delta:1.2e9});assert.equal(shown(),'1.24 GB');assert.equal(note.textContent,'+1.20 GB');
 });
 
-for(const [initial,next,direction] of [[0,1e6,1],[1e6,0,-1]])test(`capsule overshoots and bounces back to the front on ${direction>0?'increase':'decrease'}`,()=>{
- const animated=capsuleFixture(),resting=capsuleFixture();
- resting.capsule.update(next);const restingX=resting.centerX();
- animated.capsule.update(initial);animated.capsule.update(next);animated.tick(350);
- const overshoot=direction*(animated.centerX()-restingX);
- assert.ok(overshoot>10);
- animated.tick(450);const returning=direction*(animated.centerX()-restingX);
- assert.ok(returning>0);assert.ok(returning<overshoot);
- animated.tick(550);assert.equal(animated.frames.size,0);assert.deepEqual(animated.transforms(),resting.transforms());
- animated.tick(2000);assert.deepEqual(animated.transforms(),resting.transforms());
+test('an item Google stores free says so instead of looking stuck at zero',()=>{
+ const {capsule,note,shown}=counterFixture();
+ capsule.update(5e6);capsule.update(5e6,{animate:true,delta:0,free:true});
+ assert.equal(shown(),'5.00 MB');assert.equal(note.textContent,'Stored free');assert.ok(note.classList.contains('sv-free'));assert.ok(note.classList.contains('sv-go'));
 });
 
-test('capsule follows logarithmic heat, count-up and immediate reset',()=>{
- const {capsule,svg,element,chip,frames,tick}=capsuleFixture();
- capsule.update(0);assert.equal(svg.attributes.width,78);assert.equal(svg.attributes.height,32);assert.equal(svg.children[1].attributes.fill,'rgba(52,199,89,1)');
- capsule.update(50e9,{animate:false});assert.equal(svg.attributes.width,116);assert.equal(svg.attributes.height,38);assert.equal(svg.children[1].attributes.fill,'rgba(255,69,58,1)');
- capsule.reset();assert.equal(svg.attributes.width,78);assert.match(element.attributes['aria-label'],/^0.00 MB/);
- capsule.update(38.2e6,{animate:true,delta:38.2e6});assert.equal(chip.textContent,'+38.2 MB');tick(100);assert.ok(svg.attributes.width>78);assert.ok(svg.attributes.width<116);
- capsule.reset();assert.equal(frames.size,0);tick(1800);assert.equal(svg.attributes.width,78);assert.match(element.attributes['aria-label'],/^0.00 MB/);
-});
-
-test('capsule respects reduced motion and stops a running turn when the preference changes',()=>{
- const {capsule,frames,motion,chip,element}=capsuleFixture({reduced:true});
- capsule.update(0);capsule.update(38.2e6,{animate:true,delta:38.2e6});assert.equal(frames.size,0);assert.equal(chip.classList.values.has('go'),false);assert.match(element.attributes['aria-label'],/^38.2 MB/);
- motion.matches=false;capsule.update(0);assert.equal(frames.size,1);motion.matches=true;motion.change();assert.equal(frames.size,0);
+test('reset returns to zero at once and reduced motion skips the caption swap',()=>{
+ const {capsule,element,note,shown}=counterFixture({reduced:true});
+ capsule.update(0);capsule.update(38.2e6,{animate:true,delta:38.2e6});
+ assert.equal(shown(),'38.2 MB');assert.equal(note.classList.contains('sv-go'),false);assert.match(element.attributes['aria-label'],/^38.2 MB/);
+ capsule.reset();assert.equal(shown(),'0.00 MB');assert.equal(element.classList.contains('sv-noting'),false);assert.match(element.attributes['aria-label'],/^0.00 MB/);
 });

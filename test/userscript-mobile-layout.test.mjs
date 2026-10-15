@@ -71,8 +71,8 @@ test('iPhone capsule stays centered without clipping and status updates do not a
   const rect=element=>element.getBoundingClientRect();
   const snapshot=()=>({height:rect(divElement4).height,scrollHeight:divElement4.scrollHeight,clientHeight:divElement4.clientHeight,outerScroll:overlayElement.scrollHeight,outerHeight:overlayElement.clientHeight});
   const before=snapshot();
-  const capsule=counter.querySelector('svg'),face=counter.querySelector('.face');
-  const results={width:innerWidth,height:innerHeight,countLabel:face.textContent,headerHeight:rect(headerElement5).height,counterCentered:Math.abs((rect(capsule).left+rect(capsule).right)/2-(rect(headerElement5).left+rect(headerElement5).right)/2)<1,countUnclipped:rect(capsule).left>=rect(gear).right&&rect(capsule).right<=rect(reviewButton).left,headerInside:rect(closeElement).right<=rect(divElement4).right,noInitialScroll:before.scrollHeight===before.clientHeight&&before.outerScroll===before.outerHeight};
+  const capsule=counter.querySelector('.sv-value');
+  const results={width:innerWidth,height:innerHeight,countLabel:capsule.dataset.text,headerHeight:rect(headerElement5).height,counterCentered:Math.abs((rect(capsule).left+rect(capsule).right)/2-(rect(headerElement5).left+rect(headerElement5).right)/2)<1,countUnclipped:rect(capsule).left>=rect(gear).right&&rect(capsule).right<=rect(reviewButton).left,headerInside:rect(closeElement).right<=rect(divElement4).right,noInitialScroll:before.scrollHeight===before.clientHeight&&before.outerScroll===before.outerHeight};
   for(const [name,value] of Object.entries({short:'Saved locally',long:'Local save failed. '+('Please retry after checking your connection. '.repeat(30)),empty:''})){
    statusElement.textContent=value;
    const after=snapshot();

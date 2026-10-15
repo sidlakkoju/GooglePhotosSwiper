@@ -241,3 +241,9 @@ test('building a Flashbacks deck for a 28,000-item library stays far below quadr
  started=performance.now();flashbackDeck(next,saved,()=>0.5,now,saved.keys[1],true);const again=performance.now()-started;
  assert.ok(first<1500,`first build ${first.toFixed(0)} ms`);assert.ok(again<1500,`rebuild ${again.toFixed(0)} ms`);
 });
+test('a first Flashbacks build over 30,000 items spread across thousands of memories stays fast',()=>{
+ const next=random(),large=Array.from({length:30000},(_,index)=>({mediaKey:`spread-${index}`,date:new Date(Date.UTC(2009,0,1)+Math.floor(next()*6000)*86400000+Math.floor(next()*4)*3600000).toISOString(),decision:null,state:'active'}));
+ assert.ok(reviewMemories(large).length>5000);
+ const started=performance.now(),deck=flashbackDeck({items:large,started:true,exhausted:true},{},random(),Date.UTC(2026,9,14),null,true),elapsed=performance.now()-started;
+ assert.equal(deck.length,30000);assert.ok(elapsed<1500,`first build ${elapsed.toFixed(0)} ms`);
+});

@@ -22,3 +22,17 @@ node --test test/userscript-perf-e2e.test.mjs
 ```
 
 These synthetic tests do not establish real Google Photos download or video start-up timings.
+
+## Large libraries
+
+Measured on 2026-10-14 by replaying swipes headlessly against a real 33,909-item library state (metadata only, synthetic images):
+
+| | Before | After |
+| --- | --- | --- |
+| First Flashbacks build with no saved order | 7.4 s | 70 ms |
+| Main-thread work per swipe | ~84 ms | ~35 ms |
+| Garbage collection per swipe | 6.6 ms | 1.7 ms |
+| Local save per swipe | full 20 MB state | one 500-item chunk |
+| JS heap after 40 swipes | 48 MB, flat | 48 MB, flat |
+
+`test/flashbacks-order.test.mjs` guards a 30,000-item first build spread over thousands of memories, and `test/userscript-db-chunks.test.mjs` checks that a decision rewrites only its chunk.

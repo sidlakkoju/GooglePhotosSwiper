@@ -787,8 +787,9 @@ test('touch drag, spring-back and outgoing copy share the card transform',async(
   if(committing)await mounted.settle();
   assert.equal(captured,false);
   assert.equal(card.style.transform,'');
-  assert.equal(animations.length,1);
+  assert.equal(animations.length,committing?2:1);
   assert.equal(animations[0].frames[0].transform,pose);
+  if(committing)assert.equal(JSON.stringify(animations[1].frames),JSON.stringify([{transform:'scale(.95)'},{transform:'none'}]));
   if(release==='short'||release==='cancel'){
    assert.equal(animations[0].frames[1].transform,'none');
    assert.equal(copies.length,0);
@@ -796,7 +797,7 @@ test('touch drag, spring-back and outgoing copy share the card transform',async(
   }else{
    assert.equal(copies.length,1);
    assert.match(copies[0].style.transform,/translate3d/);
-   assert.match(animations[0].frames[1].transform,new RegExp(`translate3d\\(${dx>0?'':'-'}[0-9]+px,0,0\\) rotate`));
+   assert.match(animations[0].frames.at(-1).transform,new RegExp(`translate3d\\(${dx>0?'':'-'}[0-9]+px,-?[0-9]+px,0\\) rotate`));
    await mounted.settle();
    assert.equal((await mounted.read()).items[0].decision,release);
   }
@@ -2362,14 +2363,15 @@ for(const [key,button,decision,side] of [['ArrowLeft','remove','remove',-1],['Ar
   const mounted=await mountedReview([item('a'),item('b')]),animations=controlledCardAnimations(mounted);
   pressReviewKey(mounted,key);
   await mounted.settle();
-  assert.match(animations[0].frames[1].transform,new RegExp(`translate3d\\(${side*450}px`));
+  assert.match(animations.find(animation=>/translate3d/.test(animation.frames.at(-1).transform||'')).frames.at(-1).transform,new RegExp(`translate3d\\(${side*390}px`));
   mounted.nodes.get(button).onclick();
   mounted.nodes.get('undo').onclick();
-  await waitForReview(()=>animations.length===3);
-  assert.match(animations[2].frames[0].transform,new RegExp(`translateX\\(${side*120}vw\\)`));
-  assert.equal(animations[2].options.duration,350);
+  const undoing=()=>animations.find(animation=>/vw/.test(animation.frames[0].transform||''));
+  await waitForReview(()=>!!undoing());
+  assert.match(undoing().frames[0].transform,new RegExp(`translateX\\(${side*120}vw\\)`));
+  assert.equal(undoing().options.duration,350);
   assert.equal((await mounted.read()).items[1].decision,null);
-  animations[2].finish();
+  undoing().finish();
   await mounted.settle();
   assert.equal((await mounted.read()).items[0].decision,decision);
  });
