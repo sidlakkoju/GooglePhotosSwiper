@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.113
+// @version 1.2.114
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -965,7 +965,7 @@ function reviewPreviewWindow(items,current,compact=false) {
 const reviewURLStale = (item,now=Date.now()) => !item.urlFetchedAt||now-item.urlFetchedAt>=40*60*1000;
 function createReviewPreloader({createImage,createVideo,videoURL,previewURL,playbackURL}) {
  const entries=new Map(),links=new Map(),warmed=new Map();
- let warmKey=null;
+ let warmKey=null,videosHeld=false;
  const active=entry=>entries.get(entry.key)===entry;
  const activeLink=entry=>links.get(entry.key)===entry;
  function disposeVideo(entry){
@@ -976,7 +976,7 @@ function createReviewPreloader({createImage,createVideo,videoURL,previewURL,play
  function dispose(entry){entry.image?.removeAttribute('src');}
  function removeLink(entry){links.delete(entry.key);disposeVideo(entry);}
  function warm(entry){
-  if(!activeLink(entry)||entry.key!==warmKey||!entry.source)return;
+  if(videosHeld||!activeLink(entry)||entry.key!==warmKey||!entry.source)return;
   const preview=entries.get(entry.key)?.preview,existing=warmed.get(entry.source);
   if(existing){if(preview)existing.poster=preview;return;}
   const video=createVideo();warmed.set(entry.source,video);
@@ -1019,7 +1019,8 @@ function createReviewPreloader({createImage,createVideo,videoURL,previewURL,play
    }).catch(()=>{if(active(entry)){entries.delete(entry.key);dispose(entry);}});
   }
  }
- return {update,take(key,url){const entry=entries.get(key);if(!entry?.ready||entry.preview!==url)return null;entries.delete(key);return entry.image;},cancelVideos(){warmKey=null;for(const entry of links.values())disposeVideo(entry);},takeVideo(key){const source=links.get(key)?.source,video=warmed.get(source);if(!video)return null;warmed.delete(source);return video;},videoSource:key=>links.get(key)?.source||links.get(key)?.request,clear(items=[],size){const wanted=new Map();for(const item of items){try{wanted.set(item.mediaKey,previewURL(item.thumbUrl,size));}catch{}}for(const [key,entry] of entries){if(wanted.get(key)===entry.preview)continue;entries.delete(key);dispose(entry);}for(const [key,entry] of links)if(!wanted.has(key))removeLink(entry);}};
+ function holdVideos(held){videosHeld=held;const link=links.get(warmKey);if(!held&&link)warm(link);}
+ return {update,holdVideos,take(key,url){const entry=entries.get(key);if(!entry?.ready||entry.preview!==url)return null;entries.delete(key);return entry.image;},cancelVideos(){warmKey=null;for(const entry of links.values())disposeVideo(entry);},takeVideo(key){const source=links.get(key)?.source,video=warmed.get(source);if(!video)return null;warmed.delete(source);return video;},videoSource:key=>links.get(key)?.source||links.get(key)?.request,clear(items=[],size){const wanted=new Map();for(const item of items){try{wanted.set(item.mediaKey,previewURL(item.thumbUrl,size));}catch{}}for(const [key,entry] of entries){if(wanted.get(key)===entry.preview)continue;entries.delete(key);dispose(entry);}for(const [key,entry] of links)if(!wanted.has(key))removeLink(entry);}};
 }
 
 function smallerVideoURL(value,compact=false){
@@ -1969,6 +1970,7 @@ function mountPhotosSwipe(environment) {
  }
   const mobile=/iPhone|iPad/.test(window.navigator?.userAgent||'');
  const smallBuffer=mobile||window.navigator?.deviceMemory<=4||window.navigator?.connection?.saveData;
+ let dwellKey=null,shownAt=0,lastDwell=0,warmHoldTimer=null;
  let previousKey=null,swipeAt=null,idlePending=false,reopenAfterClose=null,doneSummary=null;
  const metrics={paint:[],hits:0,misses:0};
  const buffer=createPreloadBuffer({size:smallBuffer?2:3,source:item=>previewSource(item.thumbUrl),load:(item,signal,source)=>new Promise((resolve,reject)=>{
@@ -2039,6 +2041,7 @@ function mountPhotosSwipe(environment) {
   (window.requestAnimationFrame?.bind(window)||((task)=>window.setTimeout(task,0)))(finish);
  }
  function dropWarmVideo(){preloader.cancelVideos();}
+ function holdNextVideo(ms){window.clearTimeout(warmHoldTimer);preloader.holdVideos(ms>0);warmHoldTimer=ms>0?window.setTimeout(()=>preloader.holdVideos(false),ms):null;}
  function stopMedia(clearUnderCard=true){setVideoLoading(false);captureVideo();swipeFeedback.reset();if(clearUnderCard){underCard.replaceChildren();underCard.hidden=true;}generation++;const image=$('media').querySelector('img');const old=state.items.find(item=>item.mediaKey===shown);if(image&&old&&image.complete&&image.naturalWidth)buffer.retain(old,image);const video=$('media').querySelector('video');if(video){video.cancelUpgrade?.();video.pause();video.removeAttribute('src');video.load();}$('media').replaceChildren();shown=null;}
  function showLockCard(){
   stopMedia();
@@ -2047,7 +2050,7 @@ function mountPhotosSwipe(environment) {
  }
  async function display(item,retried=false,forceRefresh=false) {
   const preview=underCard.querySelector('img'),preloaded=preview?.dataset?.key===item?.mediaKey?preview:null;
-  stopMedia(shown!==(item?.mediaKey||null));$('zoom').value='1';$('card').classList.remove('zoomed');mediaElement.style.touchAction='';shown=item?.mediaKey||null;const token=generation;
+  stopMedia(shown!==(item?.mediaKey||null));if(item&&item.mediaKey!==dwellKey){lastDwell=dwellKey?Date.now()-shownAt:0;dwellKey=item.mediaKey;shownAt=Date.now();}holdNextVideo(item?.type==='video'&&lastDwell>=2000?4000:0);$('zoom').value='1';$('card').classList.remove('zoomed');mediaElement.style.touchAction='';shown=item?.mediaKey||null;const token=generation;
   $('media').style.color='var(--ps-label)';$('media').setAttribute('aria-busy','false');
   if(otherTab||leaseError?.message.includes('busy in another tab')){showLockCard();return;}
   if(!item){renderEmpty();return;}
@@ -2091,7 +2094,7 @@ function mountPhotosSwipe(environment) {
     if(media.readyState>=2)reveal();
     if(warmed)media.play().catch(()=>{});
     if(retried||forceRefresh)videoURLs.delete(item.mediaKey);const url=await videoURL(item);if(token!==generation||handlingError)return;
-    const sharpVideo=previewSize().compact&&Math.min(window.screen?.width||0,window.screen?.height||0)*(Number(window.devicePixelRatio)||1)>=1000&&!window.navigator?.connection?.saveData;const upgrade=(video,compact,next)=>startProgressiveVideo({video,url,compact,createVideo:()=>document.createElement('video'),isActive:()=>token===generation&&!handlingError,held:()=>swipeFeedback.dragging,onError:failed,onFallback:clearLoading,onSwap:full=>{if(token!==generation||handlingError)return;clearLoading();trackVideoLoading(full,token);setVideoLoading(full.paused&&full.readyState<3,token);full.addEventListener('timeupdate',()=>{if(Date.now()-videoSavedAt>=1000){videoSavedAt=Date.now();captureVideo();}});full.addEventListener('pause',captureVideo);const mediaNode=$('media');for(const child of Array.from(mediaNode.childNodes||[]))if(child!==full)child.remove();if(full.parentNode!==mediaNode)mediaNode.append?.(full);loopOnEnd(full,()=>token===generation&&!handlingError);addVideoControls(full);if(next)upgrade(full,false,false);}});upgrade(media,previewSize().compact,sharpVideo);
+    const sharpVideo=previewSize().compact&&Math.min(window.screen?.width||0,window.screen?.height||0)*(Number(window.devicePixelRatio)||1)>=1000&&!window.navigator?.connection?.saveData;const upgrade=(video,compact,next)=>startProgressiveVideo({video,url,compact,createVideo:()=>document.createElement('video'),isActive:()=>token===generation&&!handlingError,held:()=>swipeFeedback.dragging,onError:failed,onFallback:()=>{clearLoading();holdNextVideo(0);},onSwap:full=>{if(token!==generation||handlingError)return;clearLoading();holdNextVideo(0);trackVideoLoading(full,token);setVideoLoading(full.paused&&full.readyState<3,token);full.addEventListener('timeupdate',()=>{if(Date.now()-videoSavedAt>=1000){videoSavedAt=Date.now();captureVideo();}});full.addEventListener('pause',captureVideo);const mediaNode=$('media');for(const child of Array.from(mediaNode.childNodes||[]))if(child!==full)child.remove();if(full.parentNode!==mediaNode)mediaNode.append?.(full);loopOnEnd(full,()=>token===generation&&!handlingError);addVideoControls(full);if(next)upgrade(full,false,false);}});upgrade(media,previewSize().compact,sharpVideo);
     if(media.readyState>=2)reveal();
    }
    else {media.style.maxWidth='100%';media.style.maxHeight='100%';media.style.width='';media.style.touchAction='';media.alt=item.name;media.draggable=false;media.hidden=true;media.onload=()=>{if(token===generation){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);upgradeSharp(item,token);}};$('media').append(media);const reused=!!(sharp||cached);$('media').setAttribute('aria-busy',String(!(reused&&media.complete)));if(!reused)media.src=source;if(reused&&media.complete){if(media.naturalWidth>0){media.hidden=false;$('media').setAttribute('aria-busy','false');painted(media,token);upgradeSharp(item,token);}else await failed();}}
@@ -2408,7 +2411,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   if(!pageVisible()||!identity||$('overlay').hidden||closingPromise)return;
   startRenewal();await refreshLease();refreshStalePreviews();
  }
- function clearMedia(){stopMedia();dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);}
+ function clearMedia(){stopMedia();holdNextVideo(0);dropWarmVideo();buffer.clear();window.clearTimeout(syncTimer);}
  function leavePage(){
   const releasing=suspendPage();
   clearMedia();return releasing;
@@ -2452,7 +2455,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.113":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.114":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
