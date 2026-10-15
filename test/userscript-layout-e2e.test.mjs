@@ -357,6 +357,20 @@ test('the order menu works from the keyboard and arrow keys never decide the pho
  const spaced=await state();assert.equal(spaced.menu,false);assert.equal(spaced.order,labels[1]);assert.equal(spaced.focusId,'order-switcher');
 });
 
+for(const how of ['Escape','button'])test(`leaving the enlarged view with ${how} resets the zoom so the card swipes again`,async t=>{
+ const page=await mount(t,{width:1280,height:800,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index))});if(!page)return;
+ await page.keyboard.press('f');await page.waitForTimeout(400);
+ const media=await page.locator('#media').boundingBox();await page.mouse.move(media.x+media.width/2,media.y+media.height/2);await page.mouse.wheel(0,-400);await page.waitForTimeout(300);
+ assert.equal(await measure(page,`return q('#card').classList.contains('zoomed');`),true);
+ if(how==='Escape')await page.keyboard.press('Escape');else await page.locator('#enlarge').click();
+ await page.waitForTimeout(400);
+ const shown=await measure(page,`const m=q('#media');return {expanded:q('#card').classList.contains('expanded'),zoomed:q('#card').classList.contains('zoomed'),scrolls:m.scrollWidth>m.clientWidth+1||m.scrollHeight>m.clientHeight+1,caption:q('#caption').textContent};`);
+ assert.deepEqual([shown.expanded,shown.zoomed,shown.scrolls],[false,false,false]);
+ const card=await page.locator('#card').boundingBox(),x=card.x+card.width/2,y=card.y+card.height/2;
+ await page.mouse.move(x,y);await page.mouse.down();for(let step=1;step<=12;step++){await page.mouse.move(x+400*step/12,y);await page.waitForTimeout(16);}await page.mouse.up();await page.waitForTimeout(700);
+ assert.notEqual(await measure(page,`return q('#caption').textContent;`),shown.caption);
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
