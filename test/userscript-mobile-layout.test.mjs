@@ -77,7 +77,7 @@ test('iPhone capsule stays centered without clipping and status updates do not a
    statusElement.textContent=value;
    const after=snapshot();
    results[name+'Stable']=JSON.stringify(after)===JSON.stringify(before);
-   if(name==='long')results.longReadable=statusElement.scrollHeight>statusElement.clientHeight&&getComputedStyle(statusElement).overflowY==='auto';
+   if(name==='long')results.longReadable=statusElement.scrollWidth>statusElement.clientWidth&&getComputedStyle(statusElement).overflowX==='auto'&&statusElement.scrollHeight<=statusElement.clientHeight+4;
   }
   document.body.replaceChildren(Object.assign(document.createElement('pre'),{textContent:JSON.stringify(results)}));
   </script></body></html>`);

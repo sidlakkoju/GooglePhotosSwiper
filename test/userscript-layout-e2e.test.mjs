@@ -202,3 +202,22 @@ test('Going to Trash lists every item it counts, and the badge, button and confi
  await measure(page,`root.getElementById('move-trash').click();`);await page.waitForTimeout(300);
  assert.equal(prompts.length,1);assert.match(prompts[0],/^Move exactly 3 items to Google Photos Trash\?/);
 });
+
+test('long status messages, including sticky errors, stay on one scrollable faded line in the fixed status slot, and the caption shows exactly two lines',async t=>{
+ const long='a-very-long-synthetic-file-name-that-keeps-going-and-going-for-the-summer-holiday-final-final-v2.jpg';
+ const page=await mount(t,{width:390,height:844,items:Array.from({length:3},(_,index)=>item(index,{name:`${index}-${long}`})),state:{exhausted:true}});if(!page)return;
+ const status=()=>measure(page,`const status=q('#status'),style=getComputedStyle(status);return {text:status.textContent,title:status.title,sticky:status.classList.contains('toast-sticky'),height:status.getBoundingClientRect().height,overflowing:status.scrollWidth>status.clientWidth,scrollable:style.overflowX==='auto',faded:/gradient/.test(style.webkitMaskImage||style.maskImage),nowrap:style.whiteSpace==='nowrap',lines:status.scrollHeight/parseFloat(style.lineHeight)};`);
+ await page.keyboard.press('ArrowLeft');await page.keyboard.press('z');
+ await page.waitForFunction(()=>/^Last swipe undone for /.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('status').textContent),null,{timeout:5000});
+ const routine=await status();
+ assert.equal(routine.sticky,false);assert.equal(routine.height,24);assert.equal(routine.nowrap,true);assert.equal(routine.overflowing,true);assert.equal(routine.scrollable,true);assert.equal(routine.faded,true);assert.ok(routine.lines<1.5,`one line (${routine.lines})`);assert.equal(routine.title,routine.text);
+ const error='Move to Trash failed: Google Photos did not confirm 3 of 5 items. Nothing else was changed; tap Retry in Going to Trash to try again.';
+ await measure(page,`const status=q('#status');status.textContent='';status.className='status';root.getElementById('trash').click();`);
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('status').classList.contains('toast-sticky'),null,{timeout:5000});
+ await measure(page,`const status=q('#status');status.textContent=${JSON.stringify(error)};status.title=status.textContent;`);
+ const sticky=await status();
+ assert.equal(sticky.height,24);assert.equal(sticky.nowrap,true);assert.equal(sticky.scrollable,true);assert.equal(sticky.faded,true);assert.ok(sticky.lines<1.5,`one line (${sticky.lines})`);assert.equal(sticky.title,error);
+ const caption=await measure(page,`const caption=q('#caption'),style=getComputedStyle(caption);return {clamp:style.webkitLineClamp,lines:(caption.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom))/parseFloat(style.lineHeight),length:caption.textContent.length};`);
+ assert.equal(caption.clamp,'2');assert.ok(caption.length>120);
+ assert.ok(caption.lines<=2.01,`clamped caption leaves room for ${caption.lines.toFixed(2)} lines`);
+});
