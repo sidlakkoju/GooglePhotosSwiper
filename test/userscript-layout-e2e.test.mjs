@@ -526,3 +526,22 @@ test('with data saver on, a 3x phone keeps the card-sized photos and never fetch
  await page.keyboard.press('ArrowRight');await page.waitForTimeout(800);
  assert.deepEqual(requested.filter(([,width])=>width>=shown.card*3-2),[],'a full-density photo was requested with data saver on');
 });
+
+for(const scheme of ['light','dark'])test(`dragging the enlarged card on iPhone reveals the next photo in ${scheme} instead of black`,async t=>{
+ const colors=['#c0392b','#2e86de','#27ae60'];
+ const page=await mount(t,{width:393,height:852,scheme,items:Array.from({length:3},(_,index)=>item(index)),init:()=>{for(const target of [Element.prototype,HTMLElement.prototype])for(const name of ['requestFullscreen','webkitRequestFullscreen'])delete target[name];for(const name of ['fullscreenEnabled','webkitFullscreenEnabled'])Object.defineProperty(document,name,{configurable:true,get:()=>false});},routes:(route,url)=>{const index=/synthetic-(\d+)/.exec(url.pathname)?.[1];return url.hostname==='lh3.googleusercontent.com'&&index!==undefined?route.fulfill({contentType:'image/svg+xml',body:`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><rect width="1600" height="1200" fill="${colors[index]}"/></svg>`}):null;}});if(!page)return;
+ await measure(page,`q('#enlarge').click();`);await page.waitForTimeout(500);
+ const shown=await measure(page,`return {expanded:q('#card').classList.contains('expanded'),fullscreen:!!(root.fullscreenElement||document.fullscreenElement),caption:q('#caption').textContent,background:getComputedStyle(q('#card')).backgroundColor,surface:getComputedStyle(q('#media')).backgroundColor};`);
+ assert.deepEqual([shown.expanded,shown.fullscreen],[true,false]);
+ assert.notEqual(shown.background,'rgb(0, 0, 0)');assert.equal(shown.background,shown.surface);
+ await page.waitForFunction(()=>{const image=document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card img');return image&&image.complete&&image.naturalWidth>0;});
+ const media=await page.locator('#media').boundingBox(),x=media.x+media.width/2,y=media.y+media.height/2;
+ await page.mouse.move(x,y);await page.mouse.down();for(let step=1;step<=6;step++){await page.mouse.move(x+150*step/6,y);await page.waitForTimeout(16);}
+ await page.waitForTimeout(100);
+ const dragged=await measure(page,`const under=q('#next-card'),top=q('.top-card').getBoundingClientRect(),area=under.getBoundingClientRect(),style=getComputedStyle(under),gap={x:top.left/2,y:top.top+top.height/2};return {current:/^(synthetic-\\d+)/.exec(q('#caption').textContent)[1],next:under.querySelector('img')?.dataset.key,hidden:under.hidden,display:style.display,visibility:style.visibility,opacity:Number(style.opacity),moved:top.left>40,covers:area.left<=gap.x&&area.right>=gap.x&&area.top<=gap.y&&area.bottom>=gap.y};`);
+ await page.mouse.up();
+ assert.ok(dragged.moved,'the card follows the drag');
+ assert.ok(dragged.next&&dragged.next!==dragged.current,JSON.stringify(dragged));
+ assert.deepEqual({hidden:dragged.hidden,display:dragged.display==='none',visibility:dragged.visibility,covers:dragged.covers},{hidden:false,display:false,visibility:'visible',covers:true});
+ assert.ok(dragged.opacity>0);
+});
