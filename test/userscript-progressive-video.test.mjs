@@ -263,7 +263,7 @@ function seekAheadSetup(bufferEnd){
  return {video,full,swaps,frames,late};
 }
 
-test('a late seek inside the buffer is closed by playing the hidden video faster, then swaps without another seek',async()=>{
+test('a late seek inside the buffer is closed by playing the hidden video faster, then swaps on the in-sync frame before restoring the rate',async()=>{
  const {video,full,swaps,late}=seekAheadSetup(5),fullFrames=[];
  full.requestVideoFrameCallback=callback=>fullFrames.push(callback);
  let seeks=0,time=full.currentTime;Object.defineProperty(full,'currentTime',{get:()=>time,set:value=>{seeks++;time=value;}});
@@ -272,8 +272,6 @@ test('a late seek inside the buffer is closed by playing the hidden video faster
  time=1.4;video.currentTime=1.3;fullFrames.shift()();
  assert.equal(full.playbackRate,.75);
  time=1.45;video.currentTime=1.44;fullFrames.shift()();
- assert.equal(full.playbackRate,1);assert.deepEqual(swaps,[]);
- fullFrames.shift()();await Promise.resolve();
  assert.deepEqual(swaps,[full]);assert.equal(seeks,0);assert.equal(full.playbackRate,1);
 });
 
@@ -299,4 +297,12 @@ test('videos loop by restarting on ended instead of the native loop attribute',(
  assert.equal(video.currentTime,0);assert.equal(video.paused,false);assert.equal(video.playCalls,1);
  active=false;video.currentTime=3;video.paused=true;video.emit('ended');
  assert.equal(video.currentTime,3);assert.equal(video.playCalls,1);
+});
+
+test('the catch-up compares the presented frame time, not the coarser currentTime',()=>{
+ const {video,full,swaps,late}=seekAheadSetup(5),fullFrames=[];
+ full.requestVideoFrameCallback=callback=>fullFrames.push(callback);
+ late();assert.equal(full.playbackRate,1.5);
+ full.currentTime=1.3;video.currentTime=1.42;fullFrames.shift()(0,{mediaTime:1.41});
+ assert.deepEqual(swaps,[full]);assert.equal(full.playbackRate,1);
 });
