@@ -2,16 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {emptyReview} from '../lib/userscript-core.mjs';
+import {fulfillVideo} from './fixtures/video-route.mjs';
 
 let chromium;
 try{const playwright=await import('playwright');chromium=playwright[process.env.PS_ENGINE||'chromium'];}catch{}
 const item=(index,extra={})=>({mediaKey:`synthetic-${index}`,name:`synthetic-${index}.jpg`,date:new Date(2020,0,1+index).toISOString(),size:2e7,thumbUrl:`https://lh3.googleusercontent.com/synthetic-${index}`,type:'photo',state:'active',decision:null,revision:0,urlFetchedAt:Date.now(),...extra});
 
-async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null}){
+async function mount(t,{width,height,items,state={},scheme='light',touch=false,routes=null,dpr=1}){
  if(!chromium){t.skip('Playwright is unavailable');return null;}
  const browser=await chromium.launch({headless:true});
  t.after(()=>browser.close());
- const page=await browser.newPage({viewport:{width,height},colorScheme:scheme,hasTouch:touch,isMobile:touch&&(process.env.PS_ENGINE||'chromium')==='chromium'});
+ const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:dpr,colorScheme:scheme,hasTouch:touch,isMobile:touch&&(process.env.PS_ENGINE||'chromium')==='chromium'});
  await page.route('**/*',route=>{
   const url=new URL(route.request().url());
   if(routes){const handled=routes(route,url);if(handled)return handled;}
@@ -277,4 +278,30 @@ test('a large desktop window gives the photo most of the screen with the control
  await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(500);
  const review=await measure(page,`const tiles=[...root.querySelectorAll('.trash-tile')].map(tile=>box(tile));return {panel:box('#review-panel'),firstRow:tiles.filter(tile=>tile.y===tiles[0].y).length,tile:tiles[0]};`);
  assert.ok(review.panel.width>=1600,JSON.stringify(review.panel));assert.ok(review.firstRow>=6,String(review.firstRow));assert.ok(review.tile.width>=170,String(review.tile.width));
+});
+
+test('on a 3x phone the shown photo and the next one load at full screen density',async t=>{
+ const requested=[];
+ const page=await mount(t,{width:440,height:956,dpr:3,touch:true,items:Array.from({length:5},(_,index)=>item(index)),routes:(route,url)=>{if(url.hostname==='lh3.googleusercontent.com'){const size=/=w(\d+)-h(\d+)/.exec(url.pathname);if(size)requested.push([url.pathname.split('=')[0],+size[1],+size[2]]);}return null;}});if(!page)return;
+ await page.waitForTimeout(1200);
+ const shown=await measure(page,`const image=q('#media img'),card=q('#media');return {natural:image.naturalWidth,src:image.src,card:card.offsetWidth};`);
+ assert.ok(shown.natural>=shown.card*3-2,JSON.stringify(shown));
+ const key=new URL(shown.src).pathname.split('=')[0];
+ assert.ok(requested.some(([path,width])=>path!==key&&width>=shown.card*3-2),'the next photo is fetched sharp ahead of time');
+ await page.keyboard.press('ArrowRight');await page.waitForTimeout(80);
+ const next=await measure(page,`const image=q('#media img');return {natural:image.naturalWidth,complete:image.complete};`);
+ assert.ok(next.complete&&next.natural>=shown.card*3-2,JSON.stringify(next));
+});
+
+for(const [label,width,height,dpr,top] of [['a large 3x phone upgrades video to the original after 720p',440,956,3,'dv'],['a small 2x phone keeps video at 720p',375,667,2,'m22']])test(label,async t=>{
+ const video=await readFile(new URL('fixtures/synthetic-video.webm',import.meta.url));
+ const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
+ const page=await mount(t,{width,height,dpr,touch:true,state:{exhausted:true},items:[item(0,{type:'video',duration:8000})],routes:(route,url)=>{
+  if(url.hostname==='photos.google.com'&&url.pathname.endsWith('/data/batchexecute')){const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[JSON.parse(call[1])[0],['https://lh3.googleusercontent.com/stream-'+JSON.parse(call[1])[0],800,600]],'https://video-downloads.googleusercontent.com/x'])});}
+  if(url.hostname==='lh3.googleusercontent.com'&&url.pathname.startsWith('/stream-'))return fulfillVideo(route,video,'video/webm');
+  return null;}});if(!page)return;
+ await page.waitForFunction(top=>{const shown=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelector('video:not([hidden])');return shown&&(shown.currentSrc||shown.src).endsWith('='+top)&&shown.currentTime>0;},top,{timeout:15000});
+ await page.waitForTimeout(1500);
+ const final=await measure(page,`const shown=q('#media video:not([hidden])');return {src:(shown.currentSrc||shown.src).split('=').pop(),paused:shown.paused};`);
+ assert.deepEqual(final,{src:top,paused:false});
 });
