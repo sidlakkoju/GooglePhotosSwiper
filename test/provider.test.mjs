@@ -19,3 +19,13 @@ test('individual state checks use explicit trash evidence and leave missing medi
  const trashed=fixture(()=>[['photo',null,null,null,{225032867:[1720000000000]}]]);assert.equal((await trashed.run('itemState',{mediaKey:'photo'})).data.state,'in_trash');
  const restored=fixture(()=>[['photo',null,null,null,{163238866:[1]}]]);assert.equal((await restored.run('itemState',{mediaKey:'photo'})).data.state,'active');
 });
+test('a network failure or timeout reaching Google gives a readable message instead of the raw browser error',async()=>{
+ const offline=await fixture(()=>{throw new TypeError('Failed to fetch');}).run('library');
+ assert.equal(offline.ok,false);assert.equal(offline.error,'Couldn’t reach Google Photos. Check your connection and try again.');
+ const safari=await fixture(()=>{throw new TypeError('Load failed');}).run('moveToTrash',{dedupKeys:['stable-content'],confirmed:true});
+ assert.equal(safari.error,'Couldn’t reach Google Photos. Check your connection and try again.');
+ const timeout=await fixture(()=>{throw Object.assign(new Error('signal is aborted without reason'),{name:'AbortError'});}).run('trashPage');
+ assert.equal(timeout.error,'Google Photos didn’t respond in time. Check your connection and try again.');
+ const cut=vm.runInNewContext(`(${photosOperation.toString()})`,{...Object.fromEntries(['location','window','crypto','TextEncoder','URL','URLSearchParams','AbortController','AbortSignal','setTimeout','clearTimeout'].map(key=>[key,globalThis[key]])),location:{origin:'https://photos.google.com',pathname:'/'},window:{WIZ_global_data:{SNlM0e:'fixture-page-token',oPEP7c:'fixture@example.test',eptZe:'/_/PhotosUi/',FdrFJe:'sid',cfb2h:'build'}},crypto:webcrypto,fetch:async()=>({ok:true,text:async()=>{throw new TypeError('network error');}})});
+ assert.equal((await cut('library')).error,'Couldn’t reach Google Photos. Check your connection and try again.');
+});
