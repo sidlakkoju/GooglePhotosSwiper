@@ -347,3 +347,61 @@ test('a stall that clears when data arrives again never falls back',t=>{
  video.emit('stalled');video.emit('progress');video.emit('waiting');
  assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,0);
 });
+
+async function swappedUp(t,{compact=false,active=()=>true}={}){
+ t.mock.timers.enable({apis:['setTimeout','Date']});
+ const video=fakeVideo(),full=fakeVideo(),swaps=[],fallbacks=[];
+ startProgressiveVideo({video,url,compact,createVideo:()=>full,onSwap:value=>swaps.push(value),onError:()=>{},onFallback:()=>fallbacks.push(full.src),isActive:active});
+ video.currentTime=3;video.readyState=2;video.emit('loadeddata');
+ full.readyState=2;full.emit('canplay');full.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full]);assert.equal(full.paused,false);
+ return {full,fallbacks,lower:smallerVideoURL(url,compact),upper:compact?smallerVideoURL(url):url};
+}
+const play=(t,element,seconds)=>{for(let step=0;step<seconds*4;step++){element.currentTime+=.25;element.emit('timeupdate');t.mock.timers.tick(250);}};
+
+test('when the full-quality video runs out of data after the swap it falls back to 720p at the same time',async t=>{
+ const {full,fallbacks,lower,upper}=await swappedUp(t);
+ assert.equal(full.src,upper);
+ play(t,full,4);
+ const frozen=full.currentTime,loads=full.loads;
+ t.mock.timers.tick(1500);assert.equal(full.src,upper);
+ t.mock.timers.tick(300);
+ assert.equal(full.src,lower);assert.equal(full.loads,loads+1);assert.equal(full.paused,false);assert.deepEqual(fallbacks,[lower]);
+ full.currentTime=0;full.emit('loadedmetadata');assert.equal(full.currentTime,frozen);
+ t.mock.timers.tick(10000);assert.equal(full.loads,loads+1);assert.deepEqual(fallbacks,[lower]);
+});
+
+test('a full-quality video that pauses briefly and keeps playing is not replaced',async t=>{
+ const {full,fallbacks,upper}=await swappedUp(t);
+ for(let round=0;round<5;round++){play(t,full,2);t.mock.timers.tick(1500);}
+ assert.equal(full.src,upper);assert.deepEqual(fallbacks,[]);
+});
+
+test('a paused full-quality video is not treated as running out of data',async t=>{
+ const {full,fallbacks,upper}=await swappedUp(t);
+ full.pause();t.mock.timers.tick(10000);
+ assert.equal(full.src,upper);assert.deepEqual(fallbacks,[]);
+});
+
+test('the 720p step of the phone chain leaves a run-out to the original-quality upgrade still in progress',async t=>{
+ const {full,fallbacks,upper}=await swappedUp(t,{compact:true});
+ startProgressiveVideo({video:full,url,createVideo:()=>fakeVideo(),onSwap:()=>{},onError:()=>{},isActive:()=>true});
+ t.mock.timers.tick(5000);
+ assert.equal(full.src,upper);assert.deepEqual(fallbacks,[]);
+});
+
+test('a run-out on a card that is no longer shown changes nothing',async t=>{
+ let active=true;
+ const {full,fallbacks,upper}=await swappedUp(t,{active:()=>active});
+ active=false;t.mock.timers.tick(10000);
+ assert.equal(full.src,upper);assert.deepEqual(fallbacks,[]);
+});
+
+test('a run-out check that fires long after it was due, as after the computer wakes from sleep, waits for a fresh check',async t=>{
+ const {full,fallbacks,lower,upper}=await swappedUp(t);
+ play(t,full,1);
+ t.mock.timers.setTime(Date.now()+60000);t.mock.timers.tick(2000);
+ assert.equal(full.src,upper);assert.deepEqual(fallbacks,[]);
+ t.mock.timers.tick(2000);
+ assert.equal(full.src,lower);assert.deepEqual(fallbacks,[lower]);
+});
