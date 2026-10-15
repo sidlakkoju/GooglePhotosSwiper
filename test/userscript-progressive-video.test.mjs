@@ -399,7 +399,7 @@ test('a card that keeps running out of full-quality data settles on 720p after t
   assert.equal(swaps.at(-1),next);visible=next;
   if(round<2){const back=created.at(-1);assert.notEqual(back,next);back.readyState=2;back.emit('canplay');back.emit('seeked');await Promise.resolve();assert.equal(swaps.at(-1),back);visible=back;}
  }
- const count=created.length;t.mock.timers.tick(30000);
+ assert.equal(created.at(-1),visible);const count=created.length;play(t,visible,3);t.mock.timers.tick(30000);
  assert.equal(created.length,count);assert.equal(visible.src,lower);
 });
 
@@ -413,6 +413,21 @@ test('seeks reissued while the full-quality download is stalled do not use up th
  assert.equal(seeks,8);assert.notEqual(full.src,'');
  time=video.currentTime-.5;full.emit('seeked');
  assert.equal(seeks,9);assert.notEqual(full.src,'');
+});
+
+test('a 720p switch dropped because data came back does not use up a return, so only the third real run-out stays on 720p',async t=>{
+ const {full,swaps,created,lower,upper}=await swappedUp(t);
+ const runOut=async visible=>{play(t,visible,3);t.mock.timers.tick(2100);const next=created.at(-1);assert.equal(next.src,lower);next.emit('loadedmetadata');next.readyState=2;next.emit('seeked');await Promise.resolve();assert.equal(swaps.at(-1),next);return next;};
+ const comeBack=async()=>{const back=created.at(-1);assert.equal(back.src,upper);back.readyState=2;back.emit('canplay');back.emit('seeked');await Promise.resolve();assert.equal(swaps.at(-1),back);return back;};
+ let visible=await comeBack(await runOut(full));
+ play(t,visible,3);t.mock.timers.tick(2100);
+ const dropped=created.at(-1);assert.equal(dropped.src,lower);
+ visible.currentTime+=.25;visible.emit('timeupdate');
+ assert.equal(dropped.src,'');assert.equal(swaps.at(-1),visible);
+ visible=await comeBack(await runOut(visible));
+ visible=await runOut(visible);
+ assert.equal(created.at(-1),visible);const count=created.length;play(t,visible,3);t.mock.timers.tick(30000);
+ assert.equal(created.length,count);assert.equal(visible.src,lower);assert.equal(swaps.at(-1),visible);
 });
 
 test('a switch to 720p that is still loading is dropped when the full-quality video starts moving again',async t=>{
