@@ -74,6 +74,13 @@ test('normal initial waiting does not abandon the smaller rendition, and a stall
  video.emit('stalled');assert.equal(video.src,url);
 });
 
+test('retrying the smaller rendition keeps an applied resume position and leaves a pending one to the display',()=>{
+ const {video}=setup();video.readyState=1;video.currentTime=16;video.dataset.resumeReady='ready';
+ video.emit('stalled');video.currentTime=0;video.emit('loadedmetadata');assert.equal(video.currentTime,16);
+ const pending=setup();pending.video.readyState=1;pending.video.currentTime=4;pending.video.dataset.resumeReady='pending';
+ pending.video.emit('stalled');pending.video.currentTime=0;pending.video.emit('loadedmetadata');assert.equal(pending.video.currentTime,0);
+});
+
 test('a stall after the smaller rendition has data falls back to the original without a retry',()=>{
  const {video}=setup();video.readyState=2;video.emit('stalled');assert.equal(video.src,url);
 });
