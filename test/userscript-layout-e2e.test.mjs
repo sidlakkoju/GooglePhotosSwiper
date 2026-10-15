@@ -225,7 +225,7 @@ test('long status messages, including sticky errors, stay on one scrollable fade
  assert.ok(caption.lines<=2.01,`clamped caption leaves room for ${caption.lines.toFixed(2)} lines`);
 });
 
-for(const [width,height,touch,minCard] of [[393,852,true,300],[320,568,true,110],[852,393,true,300],[1280,900,false,500],[800,600,false,120]])test(`the first-run sync prompt is a styled card that leaves the photo and controls visible at ${width}×${height}`,async t=>{
+for(const [width,height,touch,minCard] of [[393,852,true,300],[320,568,true,110],[320,480,true,100],[852,393,true,300],[1280,900,false,500],[800,600,false,120]])test(`the first-run sync prompt is a styled card that leaves the photo and controls visible at ${width}×${height}`,async t=>{
  const page=await mount(t,{width,height,touch,onboarding:true,items:Array.from({length:4},(_,index)=>item(index))});if(!page)return;
  const layout=await measure(page,`const o=q('#pair-onboarding'),style=getComputedStyle(o),overlap=(a,b)=>a.x<b.x+b.width-1&&b.x<a.x+a.width-1&&a.y<b.y+b.height-1&&b.y<a.y+a.height-1;return {visible:!o.hidden&&o.getClientRects().length>0,onb:box(o),content:box('.content'),card:box('#card'),caption:box('#caption'),actions:box('.actions'),background:style.backgroundColor,radius:parseFloat(style.borderTopLeftRadius),buttons:[...o.querySelectorAll('button')].map(b=>({text:b.textContent,box:box(b),background:getComputedStyle(b).backgroundColor,accent:getComputedStyle(q('.content')).getPropertyValue('--ps-accent').trim()})),overlaps:[q('#caption'),q('.actions')].filter(e=>overlap(box(o),box(e))).map(e=>e.id||e.className),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
  assert.ok(layout.visible);
@@ -239,6 +239,16 @@ for(const [width,height,touch,minCard] of [[393,852,true,300],[320,568,true,110]
  assert.ok(layout.actions.y+layout.actions.height<=height,JSON.stringify(layout.actions));
  assert.ok(layout.card.height>=minCard,`card height ${layout.card.height}`);
  assert.ok(layout.scroll);
+});
+
+for(const [width,height,onboarding,all] of [[320,480,true,false],[320,568,true,false],[320,480,false,true],[375,667,true,true],[393,852,true,true]])test(`card buttons stay inside the card and clear of the first-run hint at ${width}×${height}${onboarding?' with the sync prompt':''}`,async t=>{
+ const page=await mount(t,{width,height,touch:true,onboarding,items:Array.from({length:4},(_,index)=>item(index))});if(!page)return;
+ const layout=await measure(page,`const overlap=(a,b)=>a.x<b.x+b.width-1&&b.x<a.x+a.width-1&&a.y<b.y+b.height-1&&b.y<a.y+a.height-1;const tools=['enlarge','open-photos','share'].map(id=>root.getElementById(id)).filter(e=>e.getClientRects().length);const labels=[...root.querySelectorAll('.coach .coach-arrows > *')].filter(e=>e.getClientRects().length);return {card:box('#card'),tools:tools.map(e=>({id:e.id,box:box(e)})),labels:labels.map(e=>box(e)),overlaps:tools.flatMap(e=>labels.filter(l=>overlap(box(e),box(l))).map(()=>e.id))};`);
+ assert.ok(layout.labels.length===2,'the first-run hint is showing');
+ assert.ok(layout.tools.some(tool=>tool.id==='enlarge'));
+ if(all)assert.deepEqual(layout.tools.map(tool=>tool.id).sort(),['enlarge','open-photos','share']);
+ for(const tool of layout.tools)assert.ok(tool.box.y>=layout.card.y&&tool.box.y+tool.box.height<=layout.card.y+layout.card.height,`${tool.id} ${JSON.stringify(tool.box)} in ${JSON.stringify(layout.card)}`);
+ assert.deepEqual(layout.overlaps,[]);
 });
 
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
