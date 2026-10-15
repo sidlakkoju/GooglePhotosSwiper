@@ -483,3 +483,13 @@ test('after four seeks in a row land behind a playing video, the next seek aims 
  video.currentTime=full.currentTime-.01;frames.shift()();await Promise.resolve();
  assert.deepEqual(swaps,[full]);
 });
+
+test('a hidden video that is playing in sync swaps on its first frame even while WebKit still holds back the play() promise',async()=>{
+ const {video,full,swaps}=setup();const fullFrames=[];
+ full.requestVideoFrameCallback=callback=>fullFrames.push(callback);
+ full.play=function(){this.playCalls=(this.playCalls||0)+1;this.paused=false;return new Promise(()=>{});};
+ video.readyState=2;video.currentTime=3;video.paused=false;video.emit('loadeddata');full.readyState=2;full.currentTime=3;full.emit('canplay');
+ assert.equal(full.playCalls,1);assert.equal(fullFrames.length,1);assert.deepEqual(swaps,[]);
+ video.currentTime=3.5;full.currentTime=3.52;fullFrames.shift()(0,{mediaTime:3.52});
+ await Promise.resolve();assert.deepEqual(swaps,[full]);assert.equal(full.style.opacity,'');assert.equal(video.src,'');
+});
