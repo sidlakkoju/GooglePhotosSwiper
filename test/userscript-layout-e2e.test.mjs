@@ -251,6 +251,15 @@ for(const [width,height,onboarding,all] of [[320,480,true,false],[320,568,true,t
  assert.deepEqual(layout.overlaps,[]);
 });
 
+test('the sync privacy disclosure uses the app vocabulary',async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,onboarding:true,items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
+ await measure(page,`root.getElementById('settings').click();`);await page.waitForTimeout(300);
+ const text=await measure(page,`return q('.settings-sheet').textContent;`);
+ assert.match(text,/Each Keep\/Delete decision, keyed by Google Photos' internal item ID/);
+ assert.match(text,/Your review progress and undo history: for each photo you\u2019ve reviewed, its item ID/);
+ assert.doesNotMatch(text,/review queue|Keep\/Remove/);
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
