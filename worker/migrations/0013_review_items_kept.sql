@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS review_items_kept ON review_items (scope) WHERE (COALESCE(json_extract(data, '$.revision'), 0) > 0 OR COALESCE(json_extract(data, '$.state'), 'active') != 'active' OR COALESCE(json_extract(data, '$.queueSent'), 0) OR COALESCE(json_extract(data, '$.lastDecisionAt'), 0) > 0 OR COALESCE(json_extract(data, '$.keepCount'), 0) > 0);

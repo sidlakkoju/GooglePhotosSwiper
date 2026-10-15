@@ -19,11 +19,12 @@ class CountingD1 {
   for(const [,table,alias] of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+(\w+)(?:\s+(?:AS\s+)?(?!ON\b|WHERE\b|LEFT\b|JOIN\b|SET\b|SELECT\b|VALUES\b)(\w+))?/gi)){aliases.set(table,table);if(alias)aliases.set(alias,table);}
   let whole=0;
   for(const {detail} of this.sqlite.prepare('EXPLAIN QUERY PLAN '+sql).all(...args)){
-   const step=/^(SCAN|SEARCH) (\w+)(?: USING (?:COVERING )?(?:INDEX \w+|PRIMARY KEY|INTEGER PRIMARY KEY) \(([^)]*)\))?/.exec(detail);
+   const step=/^(SCAN|SEARCH) (\w+)(?: USING (?:COVERING )?(?:INDEX (\w+)|PRIMARY KEY|INTEGER PRIMARY KEY) \(([^)]*)\))?/.exec(detail);
    if(!step||detail.includes('VIRTUAL TABLE'))continue;
    const table=aliases.get(step[2])||step[2];
    if(!large.includes(table))continue;
-   const scoped=step[1]==='SEARCH'&&step[3]==='scope=?';
+   const partial=step[3]&&/\bWHERE\b/i.test(this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?").get(step[3])?.sql||'');
+   const scoped=step[1]==='SEARCH'&&step[4]==='scope=?'&&!partial;
    if(step[1]==='SCAN'||scoped&&!/\bMAX\(/i.test(sql)){whole+=this.sqlite.prepare(`SELECT count(*) AS n FROM ${table}`).get().n;this.stats.unbounded.push(sql);}
   }
   this.stats.rowsRead+=Math.max(rows,whole?whole:rows);
@@ -244,4 +245,44 @@ test('the UI merge keeps the new sync cursor and undo base',()=>{
  const synced={...snapshot,syncCursor:{key:'k',at:'5.abc'},syncHistory:[],syncProgress:{},syncCheckpoint:{}};
  const merged=mergeSyncResult({...snapshot,syncCursor:{key:'k',at:'1.abc'}},snapshot,synced);
  assert.deepEqual(merged.syncCursor,{key:'k',at:'5.abc'});assert.deepEqual(merged.syncHistory,[]);
+});
+
+function seedLibrary(e,kept,idle){
+ const old=Date.now()-86400000,insert=(sql,rows)=>{const statement=e.DB.sqlite.prepare(sql);e.DB.sqlite.exec('BEGIN');for(const row of rows)statement.run(...row);e.DB.sqlite.exec('COMMIT');};
+ const decided=Array.from({length:kept},(_,index)=>`synthetic-${index}`),untouched=Array.from({length:idle},(_,index)=>`synthetic-idle-${index}`);
+ insert("INSERT INTO decisions (scope,id,decision) VALUES ('default',?,?)",decided.map((key,index)=>[key,index%2?'keep':'remove']));
+ insert("INSERT INTO decision_versions (scope,id,device_id,updated_at,changed_at) VALUES ('default',?,'legacy',?,?)",decided.map(key=>[key,old,old]));
+ insert("INSERT INTO review_items (scope,id,data,updated_at) VALUES ('default',?,?,?)",[...decided.map(key=>[key,JSON.stringify({mediaKey:key,type:'photo',size:2e6,spaceTaken:2e6,takesUpSpace:true,state:'active',revision:1,lastDecisionAt:old}),old]),...untouched.map(key=>[key,JSON.stringify({mediaKey:key,type:'photo',size:2e6,spaceTaken:2e6,takesUpSpace:true,state:'active',revision:0}),0])]);
+ e.DB.sqlite.prepare("INSERT INTO review_state (scope,progress,history) VALUES ('default',?,'[]')").run(JSON.stringify({started:true,reviewed:kept,items:[],swipeCount:kept,lifetimeFreed:0}));
+ return {decided,untouched};
+}
+
+test('a newly added device joining a large space reads only the reviewed rows and uploads nothing back',async()=>{
+ const e=env(),kept=300,idle=6000;const {decided}=seedLibrary(e,kept,idle);
+ const requests=[],client=clientFor(e,requests);
+ e.DB.reset();
+ const rebuild=async value=>({...value,items:[...value.items.map(item=>({...item,needsPreview:false})),{mediaKey:'synthetic-fresh',name:'synthetic-fresh.jpg',type:'photo',state:'active',revision:0,decision:null}],cursor:'next',exhausted:false});
+ let state=await client.sync('default',{started:false,items:[],history:[]},save,{rebuild});
+ const methods=requests.map(({url,options})=>`${options.method||'GET'} ${url.pathname}`);
+ assert.equal(Object.keys(state.syncDecisions).length,kept);
+ assert.deepEqual(decided.filter(key=>!state.items.some(item=>item.mediaKey===key&&item.decision===state.syncDecisions[key])),[]);
+ assert.deepEqual(methods,['GET /api/state']);
+ assert.ok(e.DB.stats.rowsRead<=4*kept,`join rows read ${e.DB.stats.rowsRead}`);
+ e.DB.reset();requests.length=0;
+ state=await client.sync('default',state,save);
+ assert.deepEqual(requests.map(({url,options})=>`${options.method||'GET'} ${url.pathname}`),['GET /api/state']);
+ assert.ok(e.DB.stats.rowsRead<=10,`follow-up rows read ${e.DB.stats.rowsRead}`);
+});
+
+test('a device that already reviewed locally uploads only what the space does not have yet',async()=>{
+ const e=env(),kept=300;const {decided}=seedLibrary(e,kept,2000);
+ const old=Date.now()-86400000,requests=[],client=clientFor(e,requests);
+ const local=[...decided.map((key,index)=>({mediaKey:key,name:`${key}.jpg`,type:'photo',size:2e6,spaceTaken:2e6,takesUpSpace:true,state:'active',revision:1,lastDecisionAt:old,decision:index%2?'keep':'remove'})),{mediaKey:'synthetic-new',name:'synthetic-new.jpg',type:'photo',state:'in_trash',revision:4,lastDecisionAt:old,decision:'remove'}];
+ e.DB.reset();
+ const state=await client.sync('default',{started:true,items:local,history:[],syncDecisions:{...Object.fromEntries(decided.map((key,index)=>[key,index%2?'keep':'remove'])),'synthetic-new':'remove'}},save);
+ const uploads=requests.filter(({url})=>url.pathname==='/api/progress').map(({options})=>JSON.parse(options.body).items.map(item=>item.mediaKey));
+ assert.deepEqual(uploads,[['synthetic-new']]);
+ assert.equal(state.items.find(item=>item.mediaKey==='synthetic-new').state,'in_trash');
+ assert.ok(state.syncCheckpoint.items.some(item=>item.mediaKey==='synthetic-new')&&state.syncCheckpoint.items.some(item=>item.mediaKey===decided[0]));
+ assert.equal(JSON.parse(e.DB.sqlite.prepare("SELECT data FROM review_items WHERE id = 'synthetic-new'").get().data).state,'in_trash');
 });

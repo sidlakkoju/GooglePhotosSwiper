@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.142
+// @version 1.2.143
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -559,6 +559,8 @@ function changedProgressItems(items,previous=[]){
  const before=new Map(previous.map(item=>[item.mediaKey,item]));
  return items.filter(item=>{const old=before.get(item.mediaKey);return (syncedItemWorthKeeping(item)||syncedItemWorthKeeping(old))&&JSON.stringify(item)!==JSON.stringify(old);});
 }
+function serverKeeps(item,stored){return !!stored&&(stored.state==='in_trash'||item.state!=='in_trash'&&(item.revision||0)<=(stored.revision||0));}
+function sameMetadata(local,remote){return Object.entries(local).every(([key,value])=>JSON.stringify(value)===JSON.stringify(remote?.[key]));}
 function cursorKey(token){let hash=0x811c9dc5;for(let index=0;index<token.length;index++){hash^=token.charCodeAt(index);hash=Math.imul(hash,0x01000193)>>>0;}return hash.toString(36);}
 function syncedPreviewItem(item){const local={...item};delete local.urlFetchedAt;return local;}
 function mergeProgressItem(item,checkpoint) {
@@ -617,7 +619,7 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    }
    const remoteHistory=remote.delta?null:remote.history,historyBase=remoteHistory||state.syncHistory;
    const history=(remoteHistory?dirty?mergeHistory(remoteHistory,state.history,historyKeys):remoteHistory:state.history).filter(entry=>owners[entry.key]!==false).slice(-2000);
-   const checkpointItems=new Map((remote.progress.items||[]).map(item=>[item.mediaKey,item]));
+   const checkpointItems=new Map((remote.progress.items||[]).map(item=>[item.mediaKey,item])),serverItems=new Map(checkpointItems);
    const checkpointRevisions=new Map([...checkpointItems].map(([key,item])=>[key,item.revision||0]));
    const mergedItems=state.items.map(item=>{
     const checkpoint=checkpointItems.get(item.mediaKey);checkpointItems.delete(item.mediaKey);
@@ -638,10 +640,10 @@ function createSyncClient({fetch,status=()=>{},unpaired=()=>{}}) {
    }
    let progress=reviewSyncProgress(next,decisions);
    const {items:checkpointList,...checkpointMetadata}=state.syncCheckpoint||{},{items:progressList,...progressMetadata}=progress;
-   const changedItems=changedProgressItems(progressList,Array.isArray(checkpointList)?checkpointList:[]);
-   const progressDirty=dirty||(changedItems.length>0||JSON.stringify(progressMetadata)!==JSON.stringify(checkpointMetadata))&&state.items.length>0;
+   const accepted=new Map(),skipped=new Map(),changedItems=changedProgressItems(progressList,Array.isArray(checkpointList)?checkpointList:[]).filter(item=>{const stored=serverItems.get(item.mediaKey);if(!serverKeeps(item,stored))return true;skipped.set(item.mediaKey,stored);return false;});
+   const progressDirty=dirty||(changedItems.length>0||JSON.stringify(progressMetadata)!==JSON.stringify(checkpointMetadata)&&!(pull&&sameMetadata(progressMetadata,remote.progress)))&&state.items.length>0;
+   if(progressDirty)for(const [key,stored] of skipped)accepted.set(key,stored);
    let writeError=null,historySynced=false;
-   const accepted=new Map();
    try{
     if(dirty){
      const patch=historyBase&&historyPatch(historyBase,history),body=patch&&{action:'patch',base:cursorKey(JSON.stringify(historyBase)),...patch};
@@ -2549,7 +2551,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.142":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.143":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

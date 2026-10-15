@@ -17,18 +17,19 @@ export async function authenticate(request,env) {
   for(let index=0;index<digest.length;index++)difference|=digest[index]^legacyHash[index];
   if(difference===0){
    await db.prepare("INSERT OR IGNORE INTO devices (id,name,platform,created_at,last_seen_at,is_legacy) VALUES ('legacy','Legacy shared token','legacy',?,?,1)").bind(now,now).run();
-   const legacy=await db.prepare("SELECT * FROM devices WHERE id = 'legacy' AND revoked_at IS NULL").first();
+   const legacy=await db.prepare("SELECT *, (SELECT space FROM device_spaces WHERE device_id = devices.id) AS mapped_space FROM devices WHERE id = 'legacy' AND revoked_at IS NULL").first();
    if(!legacy)return null;
-   await touch(db,legacy.id,now);
+   await touch(db,legacy,now);
    return legacy;
   }
  }
- const device=await db.prepare('SELECT * FROM devices WHERE token_hash = ? AND revoked_at IS NULL').bind(digest).first();
- if(device)await touch(db,device.id,now);
+ const device=await db.prepare('SELECT *, (SELECT space FROM device_spaces WHERE device_id = devices.id) AS mapped_space FROM devices WHERE token_hash = ? AND revoked_at IS NULL').bind(digest).first();
+ if(device)await touch(db,device,now);
  return device;
 }
-async function touch(db,id,now) {
- await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND last_seen_at <= ?').bind(now,id,now-60).run();
+async function touch(db,device,now) {
+ if(device.last_seen_at>now-60)return;
+ await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ? AND last_seen_at <= ?').bind(now,device.id,now-60).run();
 }
 async function limit(db,key,now,maximum) {
  const window=Math.floor(now/3600)*3600;
