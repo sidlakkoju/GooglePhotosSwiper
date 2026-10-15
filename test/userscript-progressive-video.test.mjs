@@ -306,3 +306,26 @@ test('the catch-up compares the presented frame time, not the coarser currentTim
  full.currentTime=1.3;video.currentTime=1.42;fullFrames.shift()(0,{mediaTime:1.41});
  assert.deepEqual(swaps,[full]);assert.equal(full.playbackRate,1);
 });
+
+test('a full-quality retry that comes due during a swipe drag waits until the drag ends',async t=>{
+ const clock=clocked(t),video=fakeVideo(),created=[];let dragging=false;
+ startProgressiveVideo({video,url,createVideo:()=>{const element=fakeVideo();created.push(element);return element;},onSwap:()=>{},onError:()=>{},isActive:()=>true,held:()=>dragging});
+ video.currentTime=3;video.readyState=2;video.emit('loadeddata');
+ assert.equal(created.length,1);
+ const full=created[0];full.play=()=>Promise.reject(Error('synthetic'));full.readyState=2;full.emit('canplay');full.emit('seeked');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(full.isConnected,false);
+ dragging=true;clock.advance(5100);video.emit('timeupdate');
+ assert.equal(created.length,1);
+ dragging=false;video.emit('timeupdate');
+ assert.equal(created.length,2);
+});
+
+test('the first full-quality attempt is held while the card is being dragged',()=>{
+ const video=fakeVideo(),created=[];let dragging=true;
+ startProgressiveVideo({video,url,createVideo:()=>{const element=fakeVideo();created.push(element);return element;},onSwap:()=>{},onError:()=>{},isActive:()=>true,held:()=>dragging});
+ video.readyState=2;video.emit('loadeddata');video.emit('timeupdate');
+ assert.equal(created.length,0);
+ dragging=false;video.emit('timeupdate');
+ assert.equal(created.length,1);
+});
