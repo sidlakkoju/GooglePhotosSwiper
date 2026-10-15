@@ -67,9 +67,23 @@ test('fallback before metadata keeps the saved resume position owned by the disp
  assert.equal(video.currentTime,16);
 });
 
-test('normal initial waiting does not abandon the smaller rendition',()=>{
+test('normal initial waiting does not abandon the smaller rendition, and a stall with no data retries it once before the original',()=>{
  const {video}=setup();video.emit('waiting');assert.equal(video.src,smallerVideoURL(url));
+ const plays=video.playCalls;
+ video.emit('stalled');assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,1);assert.equal(video.playCalls,plays+1);
  video.emit('stalled');assert.equal(video.src,url);
+});
+
+test('a stall after the smaller rendition has data falls back to the original without a retry',()=>{
+ const {video}=setup();video.readyState=2;video.emit('stalled');assert.equal(video.src,url);
+});
+
+test('a retried smaller rendition that recovers keeps playing and still upgrades',async()=>{
+ const {video,full,swaps}=setup(true);
+ video.emit('stalled');assert.equal(video.src,smallerVideoURL(url,true));
+ video.currentTime=1;video.readyState=2;video.emit('loadeddata');
+ full.readyState=2;full.emit('canplay');full.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full]);assert.equal(full.src,smallerVideoURL(url));
 });
 
 for(const event of ['error','stalled'])test(`small ${event} resumes original after a browser error forces paused`,()=>{
