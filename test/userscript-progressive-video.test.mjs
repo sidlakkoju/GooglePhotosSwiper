@@ -372,7 +372,47 @@ test('when the full-quality video runs out of data after the swap it switches to
  next.readyState=2;next.emit('seeked');await Promise.resolve();
  assert.deepEqual(swaps,[full,next]);assert.equal(next.style.opacity,'');assert.equal(next.muted,false);assert.equal(next.paused,false);
  assert.equal(full.src,'');assert.deepEqual(fallbacks,[lower]);
- t.mock.timers.tick(10000);assert.equal(created.length,2);assert.deepEqual(fallbacks,[lower]);
+ assert.equal(created.length,3);const back=created[2];
+ assert.equal(back.src,upper);assert.equal(back.style.opacity,'0');assert.equal(next.src,lower);
+ t.mock.timers.tick(10000);assert.equal(created.length,3);assert.deepEqual(fallbacks,[lower]);
+});
+
+test('after a 720p fallback the video returns to full quality at the same moment once data comes back',async t=>{
+ const {full,swaps,created,lower,upper}=await swappedUp(t);
+ play(t,full,4);t.mock.timers.tick(2100);
+ const next=created[1];next.emit('loadedmetadata');next.readyState=2;next.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full,next]);
+ const back=created[2];assert.equal(back.src,upper);
+ next.currentTime+=3;back.readyState=2;back.emit('canplay');
+ assert.equal(back.currentTime,next.currentTime);assert.deepEqual(swaps,[full,next]);
+ back.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full,next,back]);assert.equal(back.style.opacity,'');assert.equal(back.paused,false);assert.equal(back.currentTime,next.currentTime);
+ assert.equal(next.src,'');assert.equal(back.src,upper);assert.notEqual(lower,upper);
+});
+
+test('a card that keeps running out of full-quality data settles on 720p after two returns',async t=>{
+ const {full,swaps,created,lower}=await swappedUp(t);
+ let visible=full;
+ for(let round=0;round<3;round++){
+  play(t,visible,3);t.mock.timers.tick(2100);
+  const next=created.at(-1);assert.equal(next.src,lower);next.emit('loadedmetadata');next.readyState=2;next.emit('seeked');await Promise.resolve();
+  assert.equal(swaps.at(-1),next);visible=next;
+  if(round<2){const back=created.at(-1);assert.notEqual(back,next);back.readyState=2;back.emit('canplay');back.emit('seeked');await Promise.resolve();assert.equal(swaps.at(-1),back);visible=back;}
+ }
+ const count=created.length;t.mock.timers.tick(30000);
+ assert.equal(created.length,count);assert.equal(visible.src,lower);
+});
+
+test('seeks reissued while the full-quality download is stalled do not use up the attempts once data returns',t=>{
+ const clock=clocked(t),video=fakeVideo(),full=fakeVideo();let seeks=0,time=0;
+ Object.defineProperty(full,'currentTime',{get:()=>time,set:value=>{seeks++;time=value;}});
+ startProgressiveVideo({video,url,createVideo:()=>full,onSwap:()=>{},onError:()=>{},isActive:()=>true});
+ video.currentTime=10;video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
+ assert.equal(seeks,1);
+ for(let index=0;index<7;index++){clock.advance(4500);video.currentTime+=4.5;video.emit('timeupdate');}
+ assert.equal(seeks,8);assert.notEqual(full.src,'');
+ time=video.currentTime-.5;full.emit('seeked');
+ assert.equal(seeks,9);assert.notEqual(full.src,'');
 });
 
 test('a switch to 720p that is still loading is dropped when the full-quality video starts moving again',async t=>{
