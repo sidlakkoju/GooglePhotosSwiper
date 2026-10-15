@@ -80,6 +80,13 @@ export async function photosOperation(operation,args={},environment=globalThis) 
    if(args.confirmed!==true||!Array.isArray(args.dedupKeys)||!args.dedupKeys.length||args.dedupKeys.length>25||new Set(args.dedupKeys).size!==args.dedupKeys.length||args.dedupKeys.some(key=>!validKey(key)))throw Error('Invalid confirmed Trash batch.');
    await rpc('XwAOJf',[null,1,args.dedupKeys,3]);return {ok:true,data:{requested:args.dedupKeys.length}};
   }
+  if(operation==='createShareLink') {
+   if(!validKey(args.mediaKey))throw Error('Invalid media identifier.');
+   const data=await rpc('SFKp8c',[null,null,[null,1,null,null,1,null,[[[1,1],0],[[1,2],0],[[2,1],1],[[2,2],1],[[3,1],1]]],[2,null,[[[args.mediaKey]]],null,null,null,[1],0,null,null,null,null,null,0],null,null,null,null,[1,2,3,5,6]]);
+   const url=data?.[1],albumKey=data?.[0];
+   if(typeof url!=='string'||!/^https:\/\/photos\.app\.goo\.gl\/[A-Za-z0-9_-]{4,64}$/.test(url)||!validKey(albumKey))throw Error('Google did not return a share link. Try again in Google Photos.');
+   return {ok:true,data:{url,albumKey}};
+  }
   if(operation==='video'||operation==='mediaURL') {
    if(!validKey(args.mediaKey))throw Error('Invalid media identifier.');const data=await rpc('VrseUb',[args.mediaKey,null,null,null,null]);
    const preview=data?.[0]?.[1]?.[0],stream=typeof preview==='string'&&safeMediaUrl(preview)?(()=>{const value=new URL(preview);value.pathname=value.pathname.replace(/=.+$/,'')+'=dv';return value.href;})():null;

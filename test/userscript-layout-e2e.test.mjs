@@ -300,28 +300,45 @@ test('Enlarge takes the card fullscreen where the browser allows it and leaving 
   assert.deepEqual(await measure(page,`return {expanded:q('#card').classList.contains('expanded'),fullscreen:root.fullscreenElement?.id||null};`),{expanded:false,fullscreen:null});}
 });
 
-test('Open in Google Photos links to the shown item and Share falls back to copying its link',async t=>{
- const page=await mount(t,{width:393,height:852,items:[item(1,{takesUpSpace:false,spaceTaken:0}),item(2)],routes:(route,url)=>url.pathname.includes('=w4096')?route.abort():null});if(!page)return;
- await page.evaluate(()=>{window.__shared=[];Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.files?'files':data.url);}});Object.defineProperty(navigator,'canShare',{configurable:true,value:()=>true});});
+test('Open in Google Photos links to the shown item and the Share sheet sends the photo itself',async t=>{
+ const page=await mount(t,{width:393,height:852,items:[item(1,{takesUpSpace:false,spaceTaken:0}),item(2)]});if(!page)return;
+ await page.evaluate(()=>{window.__shared=[];Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.files?data.files.map(file=>[file.name,file.size>0]):data.url);}});Object.defineProperty(navigator,'canShare',{configurable:true,value:data=>!!data.files});});
  const shown=await measure(page,`return {href:q('#open-photos').href,target:q('#open-photos').target,caption:q('#caption').textContent,share:box('#share'),open:box('#open-photos')};`);
  const key=/^(synthetic-\d+)/.exec(shown.caption)[1];
  assert.equal(shown.href,`https://photos.google.com/u/0/photo/${key}`);assert.equal(shown.target,'_blank');
  assert.equal(/stored free/.test(shown.caption),key==='synthetic-1');
  for(const control of ['share','open'])assert.ok(shown[control].width>=36&&shown[control].height>=36,control);
  await measure(page,`q('#share').click();`);
+ await page.waitForFunction(()=>{const send=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('share-send');return send&&!send.disabled;});
+ await page.waitForTimeout(400);
+ const sheet=await measure(page,`return {open:!q('.share-sheet').hidden,title:q('.share-title').textContent,send:q('#share-send .share-label').textContent,link:q('#share-link .share-label').textContent,box:box('.share-sheet')};`);
+ assert.deepEqual({open:sheet.open,title:sheet.title,send:sheet.send,link:sheet.link},{open:true,title:`${key}.jpg`,send:'Send photo',link:'Create public link'});
+ assert.ok(sheet.box.y+sheet.box.height<=852&&sheet.box.x>=0&&sheet.box.x+sheet.box.width<=393,JSON.stringify(sheet.box));
+ await page.keyboard.press('ArrowLeft');
+ assert.equal(await measure(page,`return q('#caption').textContent.startsWith('${key}');`),true,'arrow keys do not decide while the sheet is open');
+ await measure(page,`q('#share-send').click();`);
  await page.waitForFunction(()=>window.__shared.length===1);
- assert.deepEqual(await page.evaluate(()=>window.__shared),[`https://photos.google.com/u/0/photo/${key}`]);
+ assert.equal(JSON.stringify(await page.evaluate(()=>window.__shared)),JSON.stringify([[[`${key}.jpg`,true]]]));
+ assert.equal(await measure(page,`return q('.share-sheet').hidden;`),true);
 });
 
-test('Share hands the photo itself to the share sheet when it can be downloaded',async t=>{
- const page=await mount(t,{width:393,height:852,items:[item(1),item(2)]});if(!page)return;
- await page.evaluate(()=>{window.__shared=[];Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.files?data.files.map(file=>[file.name,file.type,file.size>0]):data.url);}});Object.defineProperty(navigator,'canShare',{configurable:true,value:data=>!!data.files});});
- const key=await measure(page,`return /^(synthetic-\\d+)/.exec(q('#caption').textContent)[1];`);
+test('Create public link asks Google for a share link once and offers Copy and Share',async t=>{
+ const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr','unrelated','[]'],['wrb.fr',id,JSON.stringify(data)]])}\n`;
+ const calls=[];
+ const page=await mount(t,{width:393,height:852,items:[item(1)],routes:(route,url)=>{if(url.hostname==='photos.google.com'&&url.pathname.endsWith('/data/batchexecute')){const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];calls.push(call);return route.fulfill({contentType:'text/plain',body:envelope(call[0],['AF1QipSyntheticSharedAlbum','https://photos.app.goo.gl/SyntheticLink1',null,null,'token',null,5,false,0])});}return null;}});if(!page)return;
+ await page.evaluate(()=>{window.__shared=[];window.__copied=[];Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.url||'files');}});Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copied.push(text);}}});});
  await measure(page,`q('#share').click();`);
- await page.waitForFunction(()=>window.__shared.length===1);
- assert.equal(JSON.stringify(await page.evaluate(()=>window.__shared)),JSON.stringify([[[`${key}.jpg`,'image/svg+xml',true]]]));
+ await measure(page,`q('#share-link').click();`);
+ await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.share-link-row').hidden);
+ assert.equal(await measure(page,`return q('.share-link-row input').value;`),'https://photos.app.goo.gl/SyntheticLink1');
+ assert.equal(calls.length,1);assert.equal(calls[0][0],'SFKp8c');assert.match(calls[0][1],/\[\[\["synthetic-1"\]\]\]/);
+ await measure(page,`const buttons=q('.share-link-row').querySelectorAll('button');buttons[0].click();buttons[1].click();`);
+ await page.waitForFunction(()=>window.__shared.length===1&&window.__copied.length===1);
+ assert.deepEqual(await page.evaluate(()=>[window.__copied,window.__shared]),[['https://photos.app.goo.gl/SyntheticLink1'],['https://photos.app.goo.gl/SyntheticLink1']]);
+ await measure(page,`q('.share-close').click();q('#share').click();`);
+ assert.equal(await measure(page,`return [q('.share-link-row').hidden,q('#share-link').hidden];`).then(value=>JSON.stringify(value)),JSON.stringify([false,true]));
+ assert.equal(calls.length,1,'reopening reuses the link instead of creating another album');
 });
-
 test('a large desktop window gives the photo most of the screen with the controls beside it',async t=>{
  const page=await mount(t,{width:1720,height:1297,items:Array.from({length:8},(_,index)=>item(index,index<6?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{})),state:{exhausted:true}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),close:box('#close'),caption:box('#caption'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);

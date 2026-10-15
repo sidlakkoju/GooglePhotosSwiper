@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.128
+// @version 1.2.129
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -105,6 +105,13 @@ async function photosOperation(operation,args={},environment=globalThis) {
   if(operation==='moveToTrash') {
    if(args.confirmed!==true||!Array.isArray(args.dedupKeys)||!args.dedupKeys.length||args.dedupKeys.length>25||new Set(args.dedupKeys).size!==args.dedupKeys.length||args.dedupKeys.some(key=>!validKey(key)))throw Error('Invalid confirmed Trash batch.');
    await rpc('XwAOJf',[null,1,args.dedupKeys,3]);return {ok:true,data:{requested:args.dedupKeys.length}};
+  }
+  if(operation==='createShareLink') {
+   if(!validKey(args.mediaKey))throw Error('Invalid media identifier.');
+   const data=await rpc('SFKp8c',[null,null,[null,1,null,null,1,null,[[[1,1],0],[[1,2],0],[[2,1],1],[[2,2],1],[[3,1],1]]],[2,null,[[[args.mediaKey]]],null,null,null,[1],0,null,null,null,null,null,0],null,null,null,null,[1,2,3,5,6]]);
+   const url=data?.[1],albumKey=data?.[0];
+   if(typeof url!=='string'||!/^https:\/\/photos\.app\.goo\.gl\/[A-Za-z0-9_-]{4,64}$/.test(url)||!validKey(albumKey))throw Error('Google did not return a share link. Try again in Google Photos.');
+   return {ok:true,data:{url,albumKey}};
   }
   if(operation==='video'||operation==='mediaURL') {
    if(!validKey(args.mediaKey))throw Error('Invalid media identifier.');const data=await rpc('VrseUb',[args.mediaKey,null,null,null,null]);
@@ -2371,14 +2378,14 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   return closingPromise;
  }
  function decide(decision){
-  if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;
+  if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden||(typeof shareSheet==='object'&&!shareSheet.hidden))return;
   if(inspected&&decision==='remove'){inspected=null;render();return;}
   const item=current();if(!item)return;
   try{
   swipeFeedback.dismiss(decision);window.performance?.mark('swipe');swipeAt=window.performance?.now()??null;const previous=item.decision,next=decideWithHistory(state,item,decision);if($('sort').value==='flashbacks'){const memory=resume.flashbacks||={};memory.seen=[...(memory.seen||[]),item.mediaKey];}inspected=null;focused=null;previousKey=item.mediaKey;if(decision==='remove'&&previous!=='remove')storageCapsule.update(storageSession.total(next.items),{animate:true,delta:reviewStorage([item]).bytes,free:item.takesUpSpace===false});apply(next,item.mediaKey);message([decision==='remove'?`Marked ${item.name} for deletion.`:`Kept ${item.name}.`,readyMessage()].filter(Boolean).join(' '));
   }catch(error){message(error.message);}
  }
- async function undo(){if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden)return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}if(resume.flashbacks){resume.flashbacks.seen=(resume.flashbacks.seen||[]).filter(key=>key!==last.key);}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);if(last.cooldown)next.items=next.items.map(item=>item.mediaKey===last.key?{...item,...last.cooldown}:item);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
+ async function undo(){if(busy||otherTab||!identity||leaseError||$('overlay').hidden||!reviewPanel.hidden||!sheet.hidden||(typeof shareSheet==='object'&&!shareSheet.hidden))return;try{const history=structuredClone(state.history||[]);while(history.length&&!canUndoReview(state,history.at(-1)))history.pop();const last=history.pop();if(!last){message('No previous decisions can be undone.');return;}if(resume.flashbacks){resume.flashbacks.seen=(resume.flashbacks.seen||[]).filter(key=>key!==last.key);}const next=decideReview(state,last.key,last.previous,last.decision,last.revision);if(last.cooldown)next.items=next.items.map(item=>item.mediaKey===last.key?{...item,...last.cooldown}:item);const previous=[...history].reverse().find(entry=>entry.key===last.key);const restored=next.items.find(item=>item.mediaKey===last.key);if(previous&&previous.revision===last.revision-1){const revisionOffset=restored.revision-previous.revision;for(const entry of history)if(entry.key===last.key)entry.revision+=revisionOffset;}inspected=null;focused=restored.decision===null?last.key:null;apply({...next,history});await animateCard(last.decision);clearCardAnimation();message([`Last swipe undone for ${restored.name}.`,readyMessage()].filter(Boolean).join(' '));}catch(error){message(error.message);}}
  async function loadRequested(refresh=false){
   let cancel;
   const cancelled=new Promise((resolve,reject)=>{cancel=()=>reject(Error('Library loading session changed.'));});
@@ -2408,27 +2415,48 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  window.addEventListener('resize',refreshPreviews);
  $('sync-local').onclick=()=>run(async()=>{const settings=await (await pairingPromise).settings();await (await pairingPromise).saveSettings({...settings,onboardingDismissed:true});onboarding.hidden=true;closeSettings();message(idleMessage());});
 
- let sharePrepared=null;
+ const shareScrim=document.createElement('div'),shareSheet=document.createElement('section'),shareHead=document.createElement('div'),shareThumb=document.createElement('img'),shareTitle=document.createElement('p'),shareSub=document.createElement('p'),shareClose=document.createElement('button'),shareSend=document.createElement('button'),shareLink=document.createElement('button'),shareLinkRow=document.createElement('div'),shareLinkField=document.createElement('input'),shareCopy=document.createElement('button'),shareLinkShare=document.createElement('button'),shareNote=document.createElement('p');
+ shareScrim.setAttribute('class','share-scrim');shareSheet.setAttribute('class','share-sheet');shareSheet.setAttribute('role','dialog');shareSheet.setAttribute('aria-modal','true');shareSheet.setAttribute('aria-label','Share');shareScrim.hidden=shareSheet.hidden=true;
+ shareHead.setAttribute('class','share-head');shareThumb.setAttribute('class','share-thumb');shareThumb.alt='';const shareText=document.createElement('div');shareTitle.setAttribute('class','share-title');shareSub.setAttribute('class','share-sub');shareText.append(shareTitle,shareSub);icon(shareClose,'Close share',['M6 6l12 12M18 6L6 18']);shareClose.setAttribute('class','share-close');shareHead.append(shareThumb,shareText,shareClose);
+ const shareAction=(button,id,paths)=>{button.setAttribute('id',id);button.setAttribute('class','share-action');const glyph=document.createElement('span');glyph.setAttribute('class','share-glyph');icon(glyph,'',paths);glyph.removeAttribute('aria-label');const label=document.createElement('span'),detail=document.createElement('small');label.setAttribute('class','share-label');detail.setAttribute('class','share-detail');const words=document.createElement('span');words.setAttribute('class','share-words');words.append(label,detail);button.append(glyph,words);return {label,detail};};
+ const sendParts=shareAction(shareSend,'share-send',['M12 3v12','M8 7l4-4 4 4','M6 11v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-8']),linkParts=shareAction(shareLink,'share-link',['M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1','M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1']);
+ shareLinkRow.setAttribute('class','share-link-row');shareLinkRow.hidden=true;shareLinkField.readOnly=true;shareLinkField.setAttribute('aria-label','Public link');shareCopy.textContent='Copy';shareLinkShare.textContent='Share';shareLinkRow.append(shareLinkField,shareCopy,shareLinkShare);
+ shareNote.setAttribute('class','share-note');shareNote.textContent='A public link lets anyone who has it see this item. Manage or delete links in Google Photos under Sharing.';
+ shareSheet.append(shareHead,shareSend,shareLink,shareLinkRow,shareNote);divElement4.append(shareScrim,shareSheet);
+ const shareStyle=document.createElement('style');shareStyle.textContent='.share-scrim{position:absolute;inset:0;z-index:9;background:rgba(0,0,0,.45);animation:ps-share-fade .2s ease}.share-sheet{position:absolute;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:10;max-width:440px;margin:0 auto;padding:16px;border-radius:24px;background:var(--ps-surface-solid);color:var(--ps-label);box-shadow:0 20px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;gap:8px;animation:ps-share-up .28s cubic-bezier(.2,.8,.2,1)}.share-head{display:flex;align-items:center;gap:12px;padding-bottom:8px}.share-thumb{width:52px;height:52px;flex:none;border-radius:12px;object-fit:cover;background:var(--ps-fill)}.share-head>div{flex:1;min-width:0}.share-title{margin:0;font:600 16px/20px var(--ps-font);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.share-sub{margin:2px 0 0;font:400 13px/16px var(--ps-font);color:var(--ps-label2)}.share-close{width:36px;height:36px;min-height:36px;padding:9px;border-radius:50%;flex:none;position:relative}.share-close::before{content:"";position:absolute;inset:-4px}.share-action{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:10px 14px;border-radius:16px;background:var(--ps-fill);text-align:left}.share-action:disabled{cursor:progress}.share-glyph{display:flex;width:36px;height:36px;flex:none;align-items:center;justify-content:center;border-radius:50%;background:var(--ps-accent);color:#fff}.share-glyph svg{width:18px;height:18px}.share-words{display:flex;flex-direction:column;min-width:0}.share-label{font:600 15px/20px var(--ps-font)}.share-detail{font:400 12px/16px var(--ps-font);color:var(--ps-label2)}.share-link-row{display:flex;gap:6px;align-items:center}.share-link-row input{flex:1;min-width:0;height:44px;font:500 14px var(--ps-font)}.share-link-row button{min-width:64px;font-weight:600}.share-note{margin:4px 2px 0;font:400 12px/16px var(--ps-font);color:var(--ps-label2)}.content>.share-scrim,.content>.share-sheet{grid-column:1 / -1;grid-row:1 / -1}@keyframes ps-share-up{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}@keyframes ps-share-fade{from{opacity:0}}@media (prefers-reduced-motion:reduce){.share-sheet,.share-scrim{animation:none}}';root.append(shareStyle);
+ const shareLinks=new Map();let sharePrepared=null,shareItem=null;
  async function prepareShare(item){
-  const link=`https://photos.google.com/u/${location.pathname.match(/^\/u\/(\d+)/)?.[1]||'0'}/photo/${encodeURIComponent(item.mediaKey)}`;let file=null;
+  let file=null;
   try{
    const source=item.type==='video'?smallerVideoURL(await videoURL(item)):`${item.thumbUrl}=w4096-h4096`;
-   const response=await environment.fetch(source,{credentials:'include'});if(!response.ok)throw Error('Unavailable');
+   let response;try{response=await environment.fetch(source,{credentials:'include'});}catch{response=await environment.fetch(source,{credentials:'omit'});}
+   if(!response.ok)throw Error('Unavailable');
    const blob=await response.blob();if(!blob.size||blob.size>300e6)throw Error('Unavailable');
    const type=blob.type||(item.type==='video'?'video/mp4':'image/jpeg'),extension={'image/png':'png','image/webp':'webp','image/heic':'heic','video/quicktime':'mov','video/webm':'webm','video/mp4':'mp4'}[type]||(item.type==='video'?'mp4':'jpg');
    file=new window.File([blob],`${String(item.name||'photo').replace(/\.[^.]+$/,'')}.${extension}`,{type});
+   if(window.navigator.canShare&&!window.navigator.canShare({files:[file]}))file=null;
   }catch{}
-  return {key:item.mediaKey,file,link};
+  return {key:item.mediaKey,file};
  }
- async function share(){
-  const item=current();if(!item||shareElement.getAttribute('aria-busy')==='true')return;
-  const navigator=window.navigator;
-  if(sharePrepared?.key!==item.mediaKey){shareElement.setAttribute('aria-busy','true');message('Preparing to share\u2026');try{sharePrepared=await prepareShare(item);}finally{shareElement.removeAttribute('aria-busy');}if(current()?.mediaKey!==item.mediaKey)return;}
-  const {file,link}=sharePrepared,data=file&&navigator.canShare?.({files:[file]})?{files:[file],title:item.name}:{url:link,title:item.name};
-  if(navigator.share){try{await navigator.share(data);message('');return;}catch(error){if(error?.name==='AbortError'){message('');return;}if(error?.name==='NotAllowedError'){message('Ready to share. Tap Share again.');return;}}}
-  try{await navigator.clipboard.writeText(link);message('Link copied. It opens for your Google account.');}catch{message(link);}
+ function renderShareLink(){const url=shareLinks.get(shareItem?.mediaKey);shareLinkRow.hidden=!url;shareLink.hidden=!!url;if(url)shareLinkField.value=url;shareLinkShare.hidden=!window.navigator.share;shareCopy.textContent='Copy';}
+ function openShare(){
+  const item=current();if(!item)return;swipeFeedback.reset();shareItem=item;
+  shareTitle.textContent=item.name||'Untitled';shareSub.textContent=[item.type==='video'?'Video':'Photo',item.date?new Date(item.date).toLocaleDateString():null,itemSize(item)].filter(Boolean).join(' \u00b7 ');
+  try{shareThumb.src=queueThumbnailSource(item);}catch{shareThumb.removeAttribute('src');}
+  sendParts.label.textContent=item.type==='video'?'Send video':'Send photo';linkParts.label.textContent='Create public link';linkParts.detail.textContent='Anyone with the link can view it';shareLink.disabled=false;
+  const ready=sharePrepared?.key===item.mediaKey&&sharePrepared.file;
+  shareSend.hidden=!window.navigator.share;shareSend.disabled=!ready;sendParts.detail.textContent=ready?bytes(sharePrepared.file.size):'Preparing\u2026';
+  renderShareLink();shareScrim.hidden=shareSheet.hidden=false;shareClose.focus?.();
+  if(sharePrepared?.key!==item.mediaKey&&window.navigator.share){const token=item.mediaKey;sharePrepared={key:token,file:null,pending:true};prepareShare(item).then(result=>{if(sharePrepared?.key!==token)return;sharePrepared=result;if(shareItem?.mediaKey!==token||shareSheet.hidden)return;shareSend.disabled=!result.file;sendParts.detail.textContent=result.file?bytes(result.file.size):'Unavailable here. Create a public link instead.';});}
  }
- shareElement.addEventListener('pointerdown',event=>event.stopPropagation());openElement.addEventListener('pointerdown',event=>event.stopPropagation());shareElement.onclick=()=>share();
+ function closeShare(){shareScrim.hidden=shareSheet.hidden=true;shareItem=null;}
+ shareSend.onclick=()=>{const file=sharePrepared?.key===shareItem?.mediaKey?sharePrepared.file:null;if(!file)return;window.navigator.share({files:[file],title:shareItem.name}).then(()=>closeShare(),error=>{if(error?.name!=='AbortError')message(`Couldn\u2019t open the share sheet: ${error?.message||'unknown error'}`);});};
+ shareLink.onclick=async()=>{const item=shareItem;if(!item||shareLink.disabled)return;shareLink.disabled=true;linkParts.label.textContent='Creating link\u2026';try{const result=await call('createShareLink',{mediaKey:item.mediaKey});shareLinks.set(item.mediaKey,result.url);if(shareItem?.mediaKey===item.mediaKey){renderShareLink();shareLinkField.select?.();}}catch(error){shareLink.disabled=false;linkParts.label.textContent='Create public link';linkParts.detail.textContent=error.message;}};
+ shareCopy.onclick=()=>{const url=shareLinkField.value;Promise.resolve(window.navigator.clipboard?.writeText(url)).then(()=>{shareCopy.textContent='Copied';},()=>{shareLinkField.select?.();shareCopy.textContent='Select';});};
+ shareLinkShare.onclick=()=>{const url=shareLinkField.value;window.navigator.share?.({url,title:shareItem?.name}).catch(error=>{if(error?.name!=='AbortError')message(`Couldn\u2019t open the share sheet: ${error?.message||'unknown error'}`);});};
+ shareClose.onclick=closeShare;shareScrim.onclick=closeShare;
+ for(const element of [shareSheet,shareScrim,shareElement,openElement])element.addEventListener('pointerdown',event=>event.stopPropagation());shareElement.onclick=()=>openShare();
+
  $('launcher').onclick=()=>openLatest();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>loadRequested());$('refresh').onclick=()=>run(()=>loadRequested(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=()=>{inspected=null;focused=null;deckItems=null;buffer.clear();render();};
@@ -2441,7 +2469,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  for(const target of [launcherElement,overlayElement])for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture','touchstart','touchmove','touchend','touchcancel','wheel','mousedown','mouseup'])target.addEventListener(type,event=>event.stopPropagation());
  for(const type of ['keydown','keyup','keypress'])overlayElement.addEventListener(type,event=>event.stopPropagation());
  launcherElement.addEventListener('click',event=>event.stopPropagation());
- const swipeFeedback=createSwipeFeedback({window,targets:[$('media'),$('swipe')],card:topCard,under:underCard,keep:stamps[0],remove:stamps[1],canSwipe:()=>!!current()&&!busy&&!otherTab&&!leaseError&&reviewPanel.hidden&&sheet.hidden&&!inspected&&!$('overlay').hidden&&Number($('zoom').value)<=1,onDecide:decide,playbackOnClick:true});
+ const swipeFeedback=createSwipeFeedback({window,targets:[$('media'),$('swipe')],card:topCard,under:underCard,keep:stamps[0],remove:stamps[1],canSwipe:()=>!!current()&&!busy&&!otherTab&&!leaseError&&reviewPanel.hidden&&sheet.hidden&&(typeof shareSheet!=='object'||shareSheet.hidden)&&!inspected&&!$('overlay').hidden&&Number($('zoom').value)<=1,onDecide:decide,playbackOnClick:true});
  $('overlay').addEventListener('dragstart',event=>event.preventDefault());
  $('media').addEventListener('dblclick',event=>{if(event.target.tagName!=='VIDEO')toggleEnlarge();});
  function suspendPage(){
@@ -2478,7 +2506,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   return [...focused,event.target,...(event.composedPath?.()||[])].some(editable);
  }
  function handleViewerSpace(event){
-  if(!sheet.hidden||!reviewPanel.hidden)return false;
+  if(!sheet.hidden||!reviewPanel.hidden||(typeof shareSheet==='object'&&!shareSheet.hidden))return false;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.key!==' ')return false;
   if(editingFieldFocused(event))return false;
   event.preventDefault();event.stopImmediatePropagation();
@@ -2489,8 +2517,8 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  }
  window.addEventListener('keyup',handleViewerSpace,true);
  window.addEventListener('keydown',event=>{
-  if(event.key==='Escape'&&!$('overlay').hidden){event.preventDefault();event.stopImmediatePropagation();if(!sheet.hidden)closeSettings();else if(!reviewPanel.hidden){if(previewKey){previewKey=null;renderTrashReview();}else{reviewPanel.hidden=true;renderTrashReview();reviewButton.focus();}}else if($('card').classList.contains('expanded'))toggleEnlarge();else close();return;}
-  if((!sheet.hidden||!reviewPanel.hidden)&&event.key!=='Tab'){event.stopImmediatePropagation();return;}
+  if(event.key==='Escape'&&!$('overlay').hidden){event.preventDefault();event.stopImmediatePropagation();if(typeof shareSheet==='object'&&!shareSheet.hidden)closeShare();else if(!sheet.hidden)closeSettings();else if(!reviewPanel.hidden){if(previewKey){previewKey=null;renderTrashReview();}else{reviewPanel.hidden=true;renderTrashReview();reviewButton.focus();}}else if($('card').classList.contains('expanded'))toggleEnlarge();else close();return;}
+  if((!sheet.hidden||!reviewPanel.hidden||(typeof shareSheet==='object'&&!shareSheet.hidden))&&event.key!=='Tab'){event.stopImmediatePropagation();return;}
   if(handleViewerSpace(event))return;
   if($('overlay').hidden||event.altKey||event.ctrlKey||event.metaKey||event.isComposing)return;
   if(event.key==='Tab'){
@@ -2505,7 +2533,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.128":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.129":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
