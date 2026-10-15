@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.134
+// @version 1.2.135
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -2454,7 +2454,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   renderShareLink();shareScrim.hidden=shareSheet.hidden=false;shareClose.focus?.();
   if(sharePrepared?.key!==item.mediaKey&&window.navigator.share){const token=item.mediaKey;sharePrepared={key:token,file:null,pending:true};prepareShare(item).then(result=>{if(sharePrepared?.key!==token)return;sharePrepared=result;if(shareItem?.mediaKey!==token||shareSheet.hidden)return;shareSend.disabled=!result.file;sendParts.detail.textContent=result.file?bytes(result.file.size):'Unavailable here. Create a public link instead.';});}
  }
- function closeShare(){shareScrim.hidden=shareSheet.hidden=true;shareItem=null;}
+ function closeShare(){const wasOpen=!shareSheet.hidden;shareScrim.hidden=shareSheet.hidden=true;shareItem=null;if(wasOpen&&!overlayElement.hidden&&shareElement.getClientRects().length)shareElement.focus();}
  shareSend.onclick=()=>{const file=sharePrepared?.key===shareItem?.mediaKey?sharePrepared.file:null;if(!file)return;window.navigator.share({files:[file],title:shareItem.name}).then(()=>closeShare(),error=>{if(error?.name!=='AbortError')message(`Couldn\u2019t open the share sheet: ${error?.message||'unknown error'}`);});};
  shareLink.onclick=async()=>{const item=shareItem;if(!item||shareLink.disabled)return;shareLink.disabled=true;linkParts.label.textContent='Creating link\u2026';try{const result=await call('createShareLink',{mediaKey:item.mediaKey});shareLinks.set(item.mediaKey,result.url);if(shareItem?.mediaKey===item.mediaKey){renderShareLink();shareLinkField.select?.();}}catch(error){shareLink.disabled=false;linkParts.label.textContent='Create public link';linkParts.detail.textContent=error.message;}};
  shareCopy.onclick=()=>{const url=shareLinkField.value;Promise.resolve(window.navigator.clipboard?.writeText(url)).then(()=>{shareCopy.textContent='Copied';},()=>{shareLinkField.select?.();shareCopy.textContent='Select';});};
@@ -2538,7 +2538,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.134":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.135":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
