@@ -79,7 +79,8 @@ export async function photosOperation(operation,args={},environment=globalThis) 
   }
   if(operation==='video'||operation==='mediaURL') {
    if(!validKey(args.mediaKey))throw Error('Invalid media identifier.');const data=await rpc('VrseUb',[args.mediaKey,null,null,null,null]);
-   const url=operation==='mediaURL'?data?.[0]?.[1]?.[0]:data?.[1];
+   const preview=data?.[0]?.[1]?.[0],stream=typeof preview==='string'&&safeMediaUrl(preview)?(()=>{const value=new URL(preview);value.pathname=value.pathname.replace(/=.+$/,'')+'=dv';return value.href;})():null;
+   const url=operation==='mediaURL'?preview:stream||data?.[1];
    if(data?.[0]?.[0]!==args.mediaKey||!safeMediaUrl(url))throw Error('Media preview unavailable. Open it in Google Photos.');return {ok:true,data:{url}};
   }
   throw Error('Unsupported Google Photos operation.');

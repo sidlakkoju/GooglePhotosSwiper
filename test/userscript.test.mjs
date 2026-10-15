@@ -84,11 +84,13 @@ test('video and Trash reads use page-session RPCs and refuse direct deletion com
  const count=f.calls.length;assert.equal((await f.api('trash',{mediaKeys:['photo']})).ok,false);assert.equal(f.calls.length,count);
  const bad=fixture(()=>[['video'],'https://invalid.test/video']);assert.equal((await bad.api('video',{mediaKey:'video'})).ok,false);
 });
-test('media URL refresh selects the preview tuple while video keeps the playback URL',async()=>{
+test('media URL refresh selects the preview tuple while video streams from the preview host, falling back to the playback URL',async()=>{
  const preview='https://photos.fife.usercontent.google.com/preview',playback='https://lh3.googleusercontent.com/playback';
  const f=fixture(()=>[['photo',[preview,800,600]],playback]);
  assert.deepEqual(await call(f,'mediaURL',{mediaKey:'photo'}),{url:preview});
- assert.deepEqual(await call(f,'video',{mediaKey:'photo'}),{url:playback});
+ assert.deepEqual(await call(f,'video',{mediaKey:'photo'}),{url:preview+'=dv'});
+ assert.deepEqual(await call(fixture(()=>[['photo',['https://photos.fife.usercontent.google.com/preview=w800-h600',800,600]],playback]),'video',{mediaKey:'photo'}),{url:preview+'=dv'});
+ assert.deepEqual(await call(fixture(()=>[['photo'],playback]),'video',{mediaKey:'photo'}),{url:playback});
  assert.deepEqual(f.calls[0].args,['photo',null,null,null,null]);
  const download=fixture(()=>[['photo',[preview,800,600]],'https://video-downloads.google.com/download']);
  assert.deepEqual(await call(download,'mediaURL',{mediaKey:'photo'}),{url:preview});
@@ -964,9 +966,9 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     const playback=Array.from(media.querySelectorAll('[data-video-control]'));
     const opaque=doc.defaultView.getComputedStyle(top).backgroundColor===background&&doc.defaultView.getComputedStyle(media).backgroundColor===background;
     const covered=doc.defaultView.getComputedStyle(top).opacity==='1'&&doc.defaultView.getComputedStyle(top).visibility==='visible'&&front.left<=behind.left&&front.right>=behind.right&&front.top<=behind.top&&front.bottom>=behind.bottom&&doc.defaultView.getComputedStyle(top).zIndex>doc.defaultView.getComputedStyle(under).zIndex;
-    const captionVisible=caption.parentElement===content&&filename.height>0&&filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
+    const captionVisible=caption.parentElement===content&&filename.height>0&&(filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top||filename.left>=bounds(root.getElementById('card')).right)&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
     const mediaAboveControls=playback.filter(button=>!button.hidden).every(button=>bounds(loading?poster:media.querySelector('video')).bottom<=bounds(button).top);
-    const clearOfControls=playback.every(button=>bounds(button).bottom<=filename.top&&bounds(button).left>=box.left&&bounds(button).right<=box.right);
+    const clearOfControls=playback.every(button=>{const control=bounds(button);return control.left>=box.left&&control.right<=box.right&&(control.bottom<=filename.top||control.right<=filename.left||control.top>=filename.bottom);});
     videoChecks.push({expanded,captionHidden:doc.defaultView.getComputedStyle(caption).display==='none',loading,background,opaque,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
    }
    sheet.hidden=false;
@@ -990,7 +992,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
    for(const check of measurement.videoChecks)for(const key of check.expanded?['opaque','covered','captionHidden','mediaAboveControls','posterFits']:['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['absent'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved'])assert.equal(measurement[key],true,JSON.stringify(measurement));
-   assert.equal(measurement.modalWidth,Math.min(440,measurement.width),JSON.stringify(measurement));
+   assert.equal(measurement.modalWidth,measurement.width>=900&&measurement.height>=700?Math.min(1680,measurement.width-48):Math.min(440,measurement.width),JSON.stringify(measurement));
   }
  }finally{await rm(directory,{recursive:true,force:true});}
 });
@@ -2522,7 +2524,7 @@ test('photo and video errors refresh once then replace failed media with an expl
   await settlePreviews();calls.length=0;
   const container=mounted.nodes.get('media'),tag=type==='video'?'video':'img',first=container.querySelector(tag);
   await first.onerror();if(type==='video'){assert.equal(container.querySelector(tag),first);await first.onerror();}await settlePreviews();
-  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-playback-/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
+  const retried=container.querySelector(tag);assert.ok(retried);assert.notEqual(retried,first);assert.match(retried.src,type==='video'?/fresh-preview-\d+=m22$/:/^https:\/\/photos\.fife\.usercontent\.google\.com\/fresh-preview-.*=w\d+-h\d+-k-no\?authuser=2$/);
   assert.equal(calls.length,type==='video'?2:1);
   await retried.onerror();if(type==='video'){assert.equal(container.querySelector(tag),retried);await retried.onerror();}assert.equal(container.querySelector(tag),null);
   const retry=container.querySelector('button');assert.equal(retry.textContent,'Retry');
@@ -4170,7 +4172,7 @@ test('a completed Move to Trash shows Done with the space freed, then Keep swipi
 
 test('a Move to Trash that fails after a verified batch reports how many moved and how many remain queued',async()=>{
  const trashed=new Set();let moves=0;
- const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf'){if(++moves>1)throw Error('Synthetic network failure');for(const key of args[2])trashed.add(key);}return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
+ const fetch=async(url,options)=>{const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);if(entry[0]==='XwAOJf'){moves++;if(args[2].length<25)throw Error('Synthetic network failure');for(const key of args[2])trashed.add(key);}return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:[[...trashed].map(key=>[key.slice(7),null,null,key]),null])};};
  const items=Array.from({length:30},(_,index)=>item(`t${index}`,{decision:'remove',dedupKey:`stable-t${index}`,size:1e6}));
  const mounted=await mountedReview(items,{fetch,confirm:()=>true});
  await mounted.click('move-trash');
