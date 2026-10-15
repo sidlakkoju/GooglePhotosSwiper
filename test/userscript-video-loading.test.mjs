@@ -26,7 +26,7 @@ test('stopping a passed card pauses and aborts its active video before removing 
 test('quality swap and fallback clear the active loading label',()=>{
  let busy='true',options;
  const media={readyState:0,currentTime:0,addEventListener(){}},container={setAttribute(name,value){if(name==='aria-busy')busy=value;},replaceChildren(){}};
- const context=vm.createContext({media,token:1,generation:1,handlingError:false,$:()=>container,watchVideoLoading(){},window:{},videoURL:async()=> 'video:original',item:{mediaKey:'v'},retried:false,forceRefresh:false,previewSize:()=>({compact:false}),document:{},captureVideo(){},failed(){},startProgressiveVideo(value){options=value;},loopOnEnd,addVideoControls(){},painted(){},warmed:false,setVideoLoading(){},trackVideoLoading(){}});
+ const context=vm.createContext({media,token:1,generation:1,handlingError:false,$:()=>container,watchVideoLoading(){},window:{},videoURL:async()=> 'video:original',item:{mediaKey:'v'},retried:false,forceRefresh:false,previewSize:()=>({compact:false}),document:{},captureVideo(){},failed(){},startProgressiveVideo(value){options=value;},loopOnEnd,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,addVideoControls(){},painted(){},warmed:false,setVideoLoading(){},trackVideoLoading(){}});
  const start=source.indexOf('    const clearLoading=');
  const end=source.indexOf('\n   }\n   else',start);
  return vm.runInContext(`(async()=>{${source.slice(start,end)}})()`,context).then(()=>{

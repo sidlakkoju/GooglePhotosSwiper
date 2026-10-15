@@ -139,3 +139,18 @@ test('taking the poster and resizing preserves the playback URL warm cache',asyn
  assert.deepEqual(f.calls,['v']);assert.equal(f.videos.length,1);assert.equal(warmed.loads,1);
  assert.equal(f.buffer.takeVideo('v'),warmed);
 });
+test('held videos are not warmed until the hold is released, then the next video warms at once',async()=>{
+ const f=fixture(),items=[photo('current'),video('v1'),photo('p1')],size={width:820,height:440};
+ f.buffer.holdVideos(true);
+ f.buffer.update(items,items[0],size);await tick();
+ assert.deepEqual(f.calls,['v1']);assert.equal(f.videos.length,0);
+ f.buffer.update(items,items[0],size);await tick();assert.equal(f.videos.length,0);
+ f.buffer.holdVideos(false);
+ assert.equal(f.videos.length,1);assert.equal(f.videos[0].src,'video:v1');assert.equal(f.videos[0].loads,1);
+ assert.equal(f.buffer.takeVideo('v1'),f.videos[0]);
+});
+test('releasing a hold with nothing waiting does not create a video',async()=>{
+ const f=fixture(),items=[photo('current'),photo('p1')],size={width:820,height:440};
+ f.buffer.holdVideos(true);f.buffer.update(items,items[0],size);await tick();
+ f.buffer.holdVideos(false);assert.equal(f.videos.length,0);
+});
