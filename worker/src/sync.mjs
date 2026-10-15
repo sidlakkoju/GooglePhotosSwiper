@@ -5,6 +5,7 @@ const methods = 'GET, PUT, DELETE, POST, PATCH, OPTIONS';
 const identifier = value => typeof value==='string' && /^[A-Za-z0-9_-]{1,256}$/.test(value);
 const decision = value => value===null || value==='keep' || value==='remove';
 const now="CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
+const kept="(COALESCE(json_extract(data, '$.revision'), 0) > 0 OR COALESCE(json_extract(data, '$.state'), 'active') != 'active' OR COALESCE(json_extract(data, '$.queueSent'), 0) OR COALESCE(json_extract(data, '$.lastDecisionAt'), 0) > 0 OR COALESCE(json_extract(data, '$.keepCount'), 0) > 0)";
 export function digest(text){let hash=0x811c9dc5;for(let index=0;index<text.length;index++){hash^=text.charCodeAt(index);hash=Math.imul(hash,0x01000193)>>>0;}return hash.toString(36);}
 function progressItemsValid(items) {
  return Array.isArray(items)&&items.length<=2000&&new Set(items.map(item=>item?.mediaKey)).size===items.length&&items.every(item=>item&&Object.keys(item).every(key=>['mediaKey','type','size','spaceTaken','takesUpSpace','state','revision','queueSent','lastDecisionAt','lastDecisionSwipe','keepCount'].includes(key))&&identifier(item.mediaKey)&&(!Object.hasOwn(item,'type')||['photo','video'].includes(item.type))&&['size','spaceTaken','lastDecisionAt','lastDecisionSwipe','keepCount'].every(key=>item[key]==null||Number.isSafeInteger(item[key])&&item[key]>=0)&&['takesUpSpace','queueSent'].every(key=>item[key]==null||typeof item[key]==='boolean')&&(!Object.hasOwn(item,'state')||['active','in_trash'].includes(item.state))&&(!Object.hasOwn(item,'revision')||Number.isSafeInteger(item.revision)&&item.revision>=0));
@@ -40,7 +41,7 @@ export async function syncRequest(request,env={}) {
   const paired=await pairingRequest(request,env,device,body,respond);
   if(paired)return paired;
   if(!identifier(scope))return respond({error:'Invalid scope'},400);
-  const mapping=await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(device.id).first();
+  const mapping=Object.hasOwn(device,'mapped_space')?device.mapped_space==null?null:{space:device.mapped_space}:await db.prepare('SELECT space FROM device_spaces WHERE device_id = ?').bind(device.id).first();
   if(mapping&&mapping.space!=='legacy')scope=mapping.space+':shared';
   const historyScope=scope+':device:'+device.id;
   const decisionStatements=(id,value,updatedAt=Date.now(),undo=false)=>{
@@ -72,7 +73,7 @@ export async function syncRequest(request,env={}) {
    const progress=record?JSON.parse(record.progress):{};
    if(includeItems){
     if(Object.hasOwn(progress,'items')){
-     const items=since===undefined?await db.prepare('SELECT data FROM review_items WHERE scope = ? ORDER BY rowid').bind(scope).all():await db.prepare('SELECT data FROM review_items WHERE scope = ? AND updated_at >= ? ORDER BY updated_at').bind(scope,Math.max(0,since-1000)).all();
+     const items=since===undefined?await db.prepare(`SELECT data FROM review_items WHERE scope = ? AND ${kept} ORDER BY rowid`).bind(scope).all():await db.prepare('SELECT data FROM review_items WHERE scope = ? AND updated_at >= ? ORDER BY updated_at').bind(scope,Math.max(0,since-1000)).all();
      progress.items=items.results.map(item=>JSON.parse(item.data));
     }
    }else delete progress.items;
