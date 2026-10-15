@@ -71,3 +71,10 @@ test('reset returns to zero at once and reduced motion skips the caption swap',(
  assert.equal(shown(),'38.2 MB');assert.equal(note.classList.contains('sv-go'),false);assert.match(element.attributes['aria-label'],/^38.2 MB/);
  capsule.reset();assert.equal(shown(),'0.00 MB');assert.equal(element.classList.contains('sv-noting'),false);assert.match(element.attributes['aria-label'],/^0.00 MB/);
 });
+
+test('sizes just under a unit boundary round into the next format instead of showing an extra digit',()=>{
+ assert.equal(formatStorageBytes(9.994e6),'9.99 MB');assert.equal(formatStorageBytes(9.996e6),'10.0 MB');
+ assert.equal(formatStorageBytes(99.94e6),'99.9 MB');assert.equal(formatStorageBytes(99.96e6),'100 MB');
+ assert.equal(formatStorageBytes(999.4e6),'999 MB');assert.equal(formatStorageBytes(999.5e6),'1.00 GB');assert.equal(formatStorageBytes(999.99e6),'1.00 GB');
+ assert.equal(formatStorageBytes(9.996e9),'10.0 GB');assert.equal(formatStorageBytes(99.96e9),'100 GB');
+});
