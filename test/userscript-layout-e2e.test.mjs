@@ -267,6 +267,16 @@ for(const [free,sentence] of [[1,'1 stored free, so it doesn\u2019t use storage'
  assert.ok(subtitle.endsWith(` · ${sentence}`),subtitle);
 });
 
+for(const [marked,trashName] of [[0,'Going to Trash'],[1,'Going to Trash, 1 item'],[3,'Going to Trash, 3 items']])test(`controls are named after what they show, with ${marked} marked for deletion`,async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:5},(_,index)=>item(index,index<marked?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
+ assert.equal(await page.getByRole('button',{name:trashName,exact:true}).count(),1);
+ const order=page.locator('#order-switcher');
+ assert.equal(await order.getAttribute('aria-label'),`Review order: ${(await order.innerText()).replace(/^\S+\s+/,'')}`);
+ await measure(page,`root.getElementById('settings').click();`);await page.waitForTimeout(300);
+ assert.equal(await page.getByRole('button',{name:'Done',exact:true}).count(),1);
+ assert.equal(await page.getByRole('button',{name:'Close settings',exact:true}).count(),0);
+});
+
 test('a phone held sideways puts the photo beside the controls instead of squeezing it',async t=>{
  const page=await mount(t,{width:852,height:393,touch:true,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const layout=await measure(page,`return {card:box('#card'),keep:box('#keep'),remove:box('#remove'),close:box('#close'),scroll:document.scrollingElement.scrollHeight<=innerHeight};`);
