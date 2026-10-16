@@ -127,6 +127,56 @@ test('a demo that loads while its page is hidden opens once the page becomes vis
  await page.waitForFunction(()=>/to review/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('stats').textContent||''),null,{timeout:15000});
 });
 
+test('Escape inside the demo closes its panels first and only then asks the page to close it',{timeout:60000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const page=await browser.newPage({viewport:{width:1000,height:900}});
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ await page.route('**/*',async route=>{
+  const url=new URL(route.request().url());
+  if(url.hostname==='site.test')return route.fulfill({contentType:'text/html',body:'<!doctype html><body style="margin:0"><script>window.events=[];addEventListener("message",e=>{if(e.data?.type==="photos-swipe-demo")events.push(e.data.event);});</script><iframe id="demo" src="https://demo.test/photos-swipe/demo/" style="width:390px;height:844px;border:0"></iframe></body>'});
+  if(url.hostname!=='demo.test')return route.abort();
+  const path=url.pathname.replace(/^\/photos-swipe\/demo\//,'')||'index.html';
+  try{return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}
+ });
+ await page.goto('https://site.test/');
+ await page.waitForFunction(()=>window.events.includes('ready'));
+ const frame=page.frame({url:/demo\.test/});
+ const escape=()=>frame.evaluate(()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
+ const q=code=>frame.evaluate(source=>Function('const root=document.getElementById("photos-swipe-userscript-host").shadowRoot;const q=s=>root.querySelector(s);'+source)(),code);
+ await q(`q('#settings').click();`);await frame.waitForTimeout(300);
+ await escape();await frame.waitForTimeout(200);
+ assert.equal(await q(`return q('#settings-sheet').hidden;`),true);
+ assert.deepEqual(await page.evaluate(()=>window.events.filter(event=>event==='escape')),[]);
+ await escape();
+ await page.waitForFunction(()=>window.events.includes('escape'));
+ assert.equal(await q(`return q('#overlay').hidden;`),false);
+});
+
+test('Move to Trash keeps its whole label inside the button on narrow phones',{timeout:60000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ for(const [width,height,marked] of [[320,568,2],[320,568,12],[375,812,12],[390,844,12]]){
+  const page=await browser.newPage({viewport:{width,height}});
+  await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.hostname!=='demo.test')return route.abort();const path=url.pathname.slice(1)||'index.html';try{return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}});
+  await page.goto('https://demo.test/');
+  await page.waitForFunction(()=>/to review/.test(document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('stats')?.textContent||''),null,{timeout:15000});
+  const q=code=>page.evaluate(source=>Function('const root=document.getElementById("photos-swipe-userscript-host").shadowRoot;const q=s=>root.querySelector(s);'+source)(),code);
+  for(let i=0;i<marked;i++){await q(`q('#remove').click();`);await page.waitForTimeout(200);}
+  await q(`q('#review').click();`);await page.waitForTimeout(600);
+  const button=await q(`const b=q('#move-trash');return {text:b.textContent,label:b.getAttribute('aria-label')||b.textContent,scroll:b.scrollWidth,client:b.clientWidth,height:b.scrollHeight,box:b.clientHeight};`);
+  assert.ok(button.scroll<=button.client+1,`${width}px ${marked}: ${JSON.stringify(button)}`);
+  assert.ok(button.height<=button.box,`${width}px ${marked}: ${JSON.stringify(button)}`);
+  assert.equal(button.label,`Move ${marked} to Trash`);
+  assert.match(button.text,new RegExp(`\\b${marked}\\b`));
+  assert.doesNotMatch(button.text,/\u2026|\.\.\./);
+  await page.close();
+ }
+});
+
 test('the userscript still refuses to mount off photos.google.com unless the environment is a demo',{timeout:30000},async t=>{
  if(!chromium){t.skip('Playwright is unavailable');return;}
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
