@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.157
+// @version 1.2.158
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -2354,7 +2354,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
   let result;const pass=libraryPass=refresh||!state.cursor||!libraryPass?{added:0,scanned:0}:libraryPass;
   try{result=await loadReviewPages({read:async()=>state,save:savePage,call:loadCall,refresh,maxPages,target:$('sort').value==='flashbacks'?Infinity:50,progress:scanned=>message(`Loading library \u00b7 ${pass.scanned+scanned} rows checked\u2026`)});}catch(error){if(!error?.paused&&token===leaseGeneration&&!sessionClosing&&pageVisible()){if($('sort').value==='flashbacks'&&!inspected)focused=shown||focused;libraryFailure=error;deckItems=null;}throw error;}
   assertLoadSession();pass.added+=result.added;pass.scanned+=result.scanned;
-  message(`${pass.added} new items to review \u00b7 ${pass.scanned} library rows checked${result.exhausted?' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
+  message(`${pass.added} new items to review \u00b7 ${pass.scanned} library rows checked${result.exhausted?refresh?' \u00b7 Up to date':' \u00b7 End of library':''}${result.warning?'. '+result.warning:''}`);
  }
 
  mediaElement.addEventListener('wheel',event=>{if(!$('card').classList.contains('expanded'))return;if(Number($('zoom').value)>1&&!event.ctrlKey&&(event.shiftKey||Math.abs(event.deltaX)>Math.abs(event.deltaY)))return;event.preventDefault();$('zoom').value=String(Math.max(1,Math.min(3,Number($('zoom').value)+(event.deltaY<0?.25:-.25))));$('zoom').oninput();},{passive:false});
@@ -2496,7 +2496,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.157":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.158":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

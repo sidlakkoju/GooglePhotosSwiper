@@ -577,3 +577,18 @@ for(const [width,height] of [[844,390],[320,568]])test(`the storage-full error f
  const fit=await measure(page,`const status=q('#status');status.textContent=${JSON.stringify(text)};return {scroll:status.scrollWidth,client:status.clientWidth};`);
  assert.ok(fit.scroll<=fit.client+1,`${text} needs ${fit.scroll}px, has ${fit.client}px`);
 });
+
+test('Refresh, which re-reads only the newest photos, says Up to date instead of End of library',async t=>{
+ const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr',id,JSON.stringify(data)]])}\n`;
+ const page=await mount(t,{width:1280,height:900,items:[item(1,{mediaKey:'AF1QipKnownx',decision:'keep'})],state:{started:true,exhausted:true,cursor:null},routes:(route,url)=>{
+  if(url.hostname!=='photos.google.com'||!url.pathname.endsWith('/data/batchexecute'))return null;
+  const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];
+  if(call[0]==='lcxiM')return route.fulfill({contentType:'text/plain',body:envelope(call[0],[['AF1QipNewx','AF1QipKnownx'].map((key,index)=>[key,[`https://lh3.googleusercontent.com/${key}`,800,600],Date.UTC(2026,0,2)-index*864e5,`dedup-${key}`,0,{}]),'c50'])});
+  return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[],null])});
+ }});if(!page)return;
+ assert.equal(await measure(page,`return q('.empty-action')?.textContent;`),'Refresh');
+ await measure(page,`q('.empty-action').click();`);
+ await page.waitForFunction(()=>/library rows checked/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('status').textContent),null,{timeout:10000});
+ const status=await measure(page,`return q('#status').textContent;`);
+ assert.match(status,/^1 new items to review · 2 library rows checked · Up to date/);assert.doesNotMatch(status,/End of library/);
+});
