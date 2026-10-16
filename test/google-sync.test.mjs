@@ -719,3 +719,11 @@ test('a successful same-tab Google sign-in still returns to Google Photos in a r
  assert.match(await page.locator('h1').textContent(),/This sign-in link has expired/);
  assert.equal(await page.locator('a').getAttribute('href'),target);
 });
+
+test('the normal Google sign-in page follows dark mode',async()=>{
+ const env={DB:new D1()},state='d'.repeat(43);
+ await request(env,'/auth/session',{state,name:'Test',platform:'test'});
+ const response=await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env),html=await response.text();
+ assert.equal(response.status,200);assert.match(html,/<meta name="color-scheme" content="light dark">/);
+ const style=html.match(/<style>([\s\S]*?)<\/style>/)[1];assert.match(style,/@media\(prefers-color-scheme:dark\)\{body\{color:#e8eaed;background:#202124\}\}/);
+});

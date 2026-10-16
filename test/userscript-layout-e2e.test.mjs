@@ -592,3 +592,18 @@ test('Refresh, which re-reads only the newest photos, says Up to date instead of
  const status=await measure(page,`return q('#status').textContent;`);
  assert.match(status,/^1 new items to review · 2 library rows checked · Up to date/);assert.doesNotMatch(status,/End of library/);
 });
+
+test('after a successful Retry the photo card keeps keyboard focus instead of losing it',async t=>{
+ const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr',id,JSON.stringify(data)]])}\n`;let failing=true;
+ const page=await mount(t,{width:1280,height:900,items:[],state:{started:false,exhausted:false,cursor:null},routes:(route,url)=>{
+  if(url.hostname!=='photos.google.com'||!url.pathname.endsWith('/data/batchexecute'))return null;
+  const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];
+  if(call[0]==='lcxiM'){if(failing)return route.fulfill({status:500,contentType:'text/plain',body:'synthetic outage'});return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[['AF1QipFocusx',['https://lh3.googleusercontent.com/AF1QipFocusx',800,600],Date.UTC(2026,0,1),'dedup-focus',0,{}]],null])});}
+  return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[],null])});
+ }});if(!page)return;
+ await measure(page,`q('.empty-action').click();`);
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.activeElement?.id==='retry',null,{timeout:10000});
+ failing=false;await page.keyboard.press('Enter');
+ await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.empty-deck'),null,{timeout:10000});
+ assert.equal(await measure(page,`return root.activeElement?.id||null;`),'card');
+});
