@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.152
+// @version 1.2.153
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -446,11 +446,13 @@ async function createLeaseOwner(window,crypto) {
  return owner;
 }
 async function openReviewDatabase(indexedDB) {
+ const unavailable=()=>Error('Photos Swipe couldn\u2019t open its storage in this browser. Use a normal window or allow site data for photos.google.com, then reload.');
  const db=await new Promise((resolve,reject)=>{
-  const request=indexedDB.open('photos-swipe-userscript',2);
+  let request;
+  try{request=indexedDB.open('photos-swipe-userscript',2);}catch{reject(unavailable());return;}
   request.onupgradeneeded=()=>{for(const name of ['accounts','leases','settings'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};
   request.onsuccess=()=>resolve(request.result);
-  request.onerror=()=>reject(request.error);
+  request.onerror=()=>reject(request.error?.name==='VersionError'?request.error:unavailable());
   request.onblocked=()=>reject(Error('Close other Photos Swipe tabs to open local storage.'));
  });
  db.onversionchange=()=>db.close();
@@ -1871,7 +1873,7 @@ function mountPhotosSwipe(environment) {
   assertLockedAccount();
  }
  async function save(next){await syncRunning;await assertSaveAccount();state=markSyncChanges(state,typeof next==='function'?next(state):next);memoryVersion++;await writes.enqueue();if(writes.pending)throw leaseError||Error('Local changes have not been saved.');return state;}
- function controls(){let hasCard;const cardPresent=()=>hasCard??=!!current();for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','google-sign-in','google-settings','google-sign-in-cancel'].includes(button.id))button.disabled=busy||!identity||(['keep','remove','enlarge'].includes(button.id)&&!cardPresent())||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
+ function controls(){let hasCard;const cardPresent=()=>hasCard??=!!current();for(const button of root.querySelectorAll('button,select'))if(!['close','launcher','google-sign-in','google-settings','google-sign-in-cancel','retry'].includes(button.id))button.disabled=busy||!identity||(['keep','remove','enlarge'].includes(button.id)&&!cardPresent())||(otherTab&&button!==useHere)||(button.id==='undo'&&!historyView().nextUndo)||(button.id==='move-trash'&&!reviewRows().some(item=>item.decision==='remove'))||(!syncEnabled&&['refresh-devices','revoke-other-devices'].includes(button.id));$('overlay').setAttribute('aria-busy',String(busy));}
  function startRenewal(){
   if(leaseTimer||sessionClosing||!pageVisible()||$('overlay').hidden)return;
   leaseTimer=setInterval(()=>refreshLease(),LEASE_HEARTBEAT_MS);
@@ -2044,7 +2046,7 @@ function mountPhotosSwipe(environment) {
  function canFillLibrary(){return !(libraryFailure||sessionClosing||closingPromise||busy||leaseError||leaseRecoveryPending||!pageVisible()||!lockedAccount||!identity||!state.started||state.exhausted||($('sort').value!=='flashbacks'&&reviewDeck(state).length>10)||$('overlay').hidden);}
  function emptyDeck(){
   const flashbacks=$('sort').value==='flashbacks';
-  if(libraryFailure)return {kind:'failed',title:'Couldn\u2019t load your library',detail:libraryFailure.message,caption:'Library loading failed.',action:'Retry',run:()=>run(()=>loadRequested())};
+  if(libraryFailure)return {kind:'failed',title:'Couldn\u2019t load your library',detail:libraryFailure.message,caption:'Library loading failed.',action:'Retry',run:()=>identity?run(()=>loadRequested()):open()};
   if(reviewDeck(state).length&&(!state.started||state.exhausted||!flashbacks))return {kind:'filtered',title:'No items match this filter.',caption:'No items match this filter.'};
   if(libraryLoading||canFillLibrary()||(flashbacks&&state.started&&!state.exhausted))return {kind:'loading',title:'Loading more items\u2026',caption:'Loading more items\u2026'};
   const returning=resume.bringBackKept!==false?nextKeptReturn(state):null;
@@ -2058,7 +2060,7 @@ function mountPhotosSwipe(environment) {
   const card=document.createElement('div'),title=document.createElement('p');
   card.setAttribute('class','empty-deck');card.dataset.kind=next.kind;card.dataset.detail=next.detail||'';title.setAttribute('class','empty-title');title.textContent=next.title;card.append(title);
   if(next.detail){const detail=document.createElement('p');detail.setAttribute('class','empty-detail');detail.textContent=next.detail;card.append(detail);}
-  if(next.action){const action=document.createElement('button');action.setAttribute('class','empty-action');action.textContent=next.action;action.onclick=next.run;action.disabled=busy||!identity;card.append(action);}
+  if(next.action){const action=document.createElement('button');action.setAttribute('class','empty-action');action.textContent=next.action;action.onclick=next.run;action.id=next.kind==='failed'?'retry':'';action.disabled=busy||!identity&&!action.id;card.append(action);}
   $('media').replaceChildren(card);
  }
  function fillLibrary(){
@@ -2314,7 +2316,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    leaseRecoveryPending=false;takeoverPending=false;
    message(missing?'Saved item is unavailable. Continuing with the next unreviewed item.':idleMessage());
   }catch(error){
-   await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();message(error.message);
+   await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();libraryFailure=error;message(error.message);
   }finally{busy=false;render();controls();}
  }
  function open(claim=false){
@@ -2534,7 +2536,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.152":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.153":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();

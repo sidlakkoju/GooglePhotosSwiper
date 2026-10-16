@@ -560,3 +560,10 @@ test('the end-of-library message counts every page of a multi-page library, not 
  assert.match(result.stats,/^151 to review/);
  assert.match(result.status,/^151 new items to review · 151 library rows checked · End of library/);
 });
+
+test('when Photos Swipe cannot open, the card explains why and offers an enabled Retry instead of a dead Load library',async t=>{
+ const page=await mount(t,{width:1280,height:900,items:[item(1)],init:()=>{delete window.WIZ_global_data.SNlM0e;delete window.WIZ_global_data.oPEP7c;}});if(!page)return;
+ const result=await measure(page,`const action=q('.empty-action');return {card:q('.empty-deck')?.innerText.replace(/\\s+/g,' '),disabled:action?.disabled,label:action?.textContent};`);
+ assert.match(result.card,/^Couldn’t load your library \S.+ Retry$/);assert.doesNotMatch(result.card,/Ready when you are/);
+ assert.equal(result.label,'Retry');assert.equal(result.disabled,false);
+});

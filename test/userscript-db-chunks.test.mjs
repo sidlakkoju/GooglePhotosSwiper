@@ -82,3 +82,13 @@ test('a resume saved by an older release keeps its inline Flashbacks lists',asyn
  stores.get('settings').set('resume:account',{currentId:'a',flashbacks:{keys:['a','b'],starts:['a'],seen:[]}});
  assert.deepEqual(await db.resume('account'),{currentId:'a',flashbacks:{keys:['a','b'],starts:['a'],seen:[]}});
 });
+
+test('blocked browser storage gives one clear message, while a newer database version keeps its own error',async()=>{
+ const message=/^Error: Photos Swipe couldn’t open its storage in this browser\. Use a normal window or allow site data for photos\.google\.com, then reload\.$/;
+ const failing=error=>({open(){const request={};queueMicrotask(()=>{request.error=error;request.onerror?.();});return request;}});
+ await assert.rejects(openReviewDatabase(undefined),message);
+ await assert.rejects(openReviewDatabase({open(){throw new DOMException('A mutation operation was attempted on a database that did not allow mutations.','InvalidStateError');}}),message);
+ await assert.rejects(openReviewDatabase(failing(new DOMException('The user denied permission to access the database.','SecurityError'))),message);
+ const newer=new DOMException('The requested version (2) is less than the existing version (3).','VersionError');
+ await assert.rejects(openReviewDatabase(failing(newer)),error=>error===newer);
+});
