@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.167
+// @version 1.2.168
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -119,11 +119,14 @@ async function startAutoLoader(environment){
  const get=gm?.getValue?.bind(gm)||environment.GM_getValue,set=gm?.setValue?.bind(gm)||environment.GM_setValue;
  const request=gm?.xmlHttpRequest?.bind(gm)||environment.GM_xmlhttpRequest;
  const runnable=app=>{try{return Boolean(app&&typeof app.code==='string'&&typeof app.version==='string'&&compareVersions(app.version,app.version)===0);}catch{return false;}};
+ const liveVersion=requestVersion(environment,request);
  let cached=null;
  try{cached=await get('photoswiper-app',null);}catch{}
  if(!runnable(cached))cached=null;
  if(started())return false;
- const live=await requestVersion(environment,request);
+ let waited;
+ const live=cached?await Promise.race([liveVersion,new Promise(resolve=>{waited=environment.setTimeout(()=>resolve(null),1000);})]):await liveVersion;
+ environment.clearTimeout(waited);
  if(started())return false;
  let app=cached,required=live?.requiredLoaderVersion;
  if(!cached||(live&&compareVersions(live.version,cached.version)!==0)){

@@ -23,9 +23,9 @@ test('screen sized lookahead decodes three photos and fetches two video links an
 test('compact windows use two photos and two video links and evict on advance, resize and clear',async()=>{
  const f=fixture(),items=[photo('a'),photo('b'),video('v'),photo('c'),photo('d'),video('w')],size={width:360,height:260,compact:true};
  f.buffer.update(items,items[0],size);await tick();assert.equal(f.images.length,4);assert.deepEqual(f.calls,['v','w']);
- f.buffer.update(items,items[2],size);await tick();assert.ok(f.images[0].removed.includes('src'));assert.equal(f.buffer.videoSource('v'),'video:v');
+ f.buffer.update(items,items[2],size);await tick();assert.equal(f.images[0].src,'');assert.equal(f.buffer.videoSource('v'),'video:v');
  f.buffer.update(items,items[2],{...size,width:400});await tick();assert.equal(f.videos[0].paused,undefined);assert.deepEqual(f.videos[0].removed,[]);assert.equal(f.videos[0].loads,1);assert.equal(f.calls.length,2);
- f.buffer.clear();assert.ok(f.images.every(image=>image.removed.includes('src')));assert.ok(f.videos.every(media=>media.paused));assert.equal(f.buffer.videoSource('w'),undefined);
+ f.buffer.clear();assert.ok(f.images.every(image=>image.src===''));assert.ok(f.videos.every(media=>media.paused));assert.equal(f.buffer.videoSource('w'),undefined);
 });
 test('queued work is skipped and late video responses cannot populate an evicted window',async()=>{
  let resolve;
@@ -46,7 +46,7 @@ test('failed decode and video requests are swallowed and may be retried on later
  let decodeFails=true;
  const photos=fixture(undefined,()=>decodeFails?Promise.reject(Error('decode failed')):Promise.resolve());
  photos.buffer.update([photo('a'),photo('b')],photo('a'),size);await tick();
- assert.ok(photos.images[0].removed.includes('src'));
+ assert.equal(photos.images[0].src,'');
  decodeFails=false;photos.buffer.update([photo('a'),photo('b')],photo('a'),size);await tick();
  assert.equal(photos.images.length,2);assert.equal(photos.images[1].decodeCalls,1);
 });
@@ -78,7 +78,7 @@ test('clear disposes previews even when a preserved item has an invalid URL',asy
  const f=fixture(),items=[photo('a'),photo('b')];
  f.buffer.update(items,items[0],{width:100,height:100});await tick();
  assert.doesNotThrow(()=>f.buffer.clear([{mediaKey:'b',thumbUrl:'invalid'}],{width:100,height:100}));
- assert.ok(f.images[0].removed.includes('src'));
+ assert.equal(f.images[0].src,'');
 });
 
 test('compact lookahead starts both links concurrently and transfers only the next original video',async()=>{
@@ -109,7 +109,7 @@ test('poster resize preserves the playback URL warm and transfers the same video
  const warmed=f.videos[0],poster=f.images[0];
  const resized={...size,height:420};
  f.buffer.clear(items,resized);f.buffer.update(items,items[0],resized);await tick();
- assert.ok(poster.removed.includes('src'));
+ assert.equal(poster.src,'');
  assert.deepEqual(f.calls,['v','w']);assert.equal(f.videos.length,1);
  assert.equal(warmed.poster,'https://fixture.invalid/v=w360-h420');
  assert.equal(warmed.src,'video:v');assert.equal(warmed.loads,1);
