@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.150
+// @version 1.2.151
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -137,7 +137,13 @@ async function startAutoLoader(environment){
  }
  if(required)showUpdateBanner(environment,required);
  if(!app){showUpdateBanner(environment);return false;}
- try{const executed=executeApp(environment,app);if(!executed)showUpdateBanner(environment);return executed;}catch{showUpdateBanner(environment);return false;}
+ const run=candidate=>{try{return executeApp(environment,candidate);}catch{return false;}};
+ if(run(app))return true;
+ if(started())return false;
+ const fallback=app===cached?await requestApp(environment,request):cached;
+ if(started())return false;
+ if(fallback&&run(fallback)){try{await set('photoswiper-app',fallback);}catch{}return true;}
+ showUpdateBanner(environment);return false;
 }
 await startAutoLoader({document,window,location,GM_info:typeof GM_info==='undefined'?undefined:GM_info,crypto:window.crypto,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window),fetch:fetch.bind(globalThis),unsafeWindow:typeof unsafeWindow==='undefined'?window:unsafeWindow,GM:typeof GM==='undefined'?undefined:GM,GM_getValue:typeof GM_getValue==='undefined'?undefined:GM_getValue,GM_setValue:typeof GM_setValue==='undefined'?undefined:GM_setValue,GM_deleteValue:typeof GM_deleteValue==='undefined'?undefined:GM_deleteValue,GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='undefined'?undefined:GM_xmlhttpRequest,GM_openInTab:typeof GM_openInTab==='undefined'?undefined:GM_openInTab});
 })();

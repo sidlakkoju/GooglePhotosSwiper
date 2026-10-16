@@ -129,3 +129,21 @@ test('install artifacts use ASCII and unique grants and connect entries',async()
   assert.equal(new Set(entries).size,entries.length);
  }
 });
+test('a new app that fails to start falls back to the cached app and keeps it cached',async()=>{
+ const {env,nodes,writes,requests}=fixture({version:'1.2.11',code:'invalid syntax {'},app);
+ assert.equal(await startAutoLoader(env),true);
+ assert.equal(env.window.version,app.version);assert.equal(env.window.runs,1);assert.equal(nodes.length,0);
+ assert.deepEqual(requests,['/version','/app.js']);
+ assert.deepEqual(writes.map(write=>write.value.version),['1.2.11','1.2.10']);assert.equal(writes[1].value.code,app.code);
+});
+test('a cached app that fails to start is downloaded again once instead of staying broken',async()=>{
+ const {env,nodes,writes,requests}=fixture(app,{...app,code:'invalid syntax {'});
+ assert.equal(await startAutoLoader(env),true);
+ assert.deepEqual(requests,['/version','/app.js']);assert.equal(env.window.version,app.version);assert.equal(env.window.runs,1);
+ assert.deepEqual(writes,[{key:'photoswiper-app',value:app}]);assert.equal(nodes.length,0);
+});
+test('when the new and the cached app both fail to start, the update banner shows',async()=>{
+ const {env,nodes,requests}=fixture({version:'1.2.11',code:'invalid syntax {'},{...app,code:'throw Error("Synthetic runtime failure");'});
+ assert.equal(await startAutoLoader(env),false);
+ assert.deepEqual(requests,['/version','/app.js']);assert.equal(nodes.length,1);assert.equal(env.document.documentElement.dataset.psLoaderInjected,undefined);
+});
