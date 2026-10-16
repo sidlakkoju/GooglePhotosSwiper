@@ -104,6 +104,28 @@ test('the embedded demo swipes, simulates Trash, posts to its parent and resets 
  assert.deepEqual(outside,[]);
 });
 
+test('a demo that loads while its page is hidden opens once the page becomes visible',{timeout:30000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const page=await browser.newPage({viewport:{width:390,height:844}});
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ await page.route('**/*',async route=>{
+  const url=new URL(route.request().url());
+  if(url.hostname!=='demo.test')return route.abort();
+  const path=url.pathname.replace(/^\/photos-swipe\/demo\//,'')||'index.html';
+  try{return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}
+ });
+ await page.addInitScript(()=>{let hidden=true;Object.defineProperty(document,'hidden',{configurable:true,get:()=>hidden});Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>hidden?'hidden':'visible'});window.showPage=()=>{hidden=false;document.dispatchEvent(new Event('visibilitychange'));};});
+ await page.goto('https://demo.test/photos-swipe/demo/?embed=1');
+ const overlayHidden=()=>page.evaluate(()=>document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('overlay').hidden);
+ await page.waitForTimeout(400);
+ assert.equal(await overlayHidden(),true);
+ await page.evaluate(()=>window.showPage());
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').hidden===false,null,{timeout:10000});
+ await page.waitForFunction(()=>/to review/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('stats').textContent||''),null,{timeout:15000});
+});
+
 test('the userscript still refuses to mount off photos.google.com unless the environment is a demo',{timeout:30000},async t=>{
  if(!chromium){t.skip('Playwright is unavailable');return;}
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());

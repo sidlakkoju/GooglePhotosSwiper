@@ -2564,7 +2564,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
  shareClose.onclick=closeShare;shareScrim.onclick=closeShare;
  for(const element of [shareSheet,shareScrim,shareElement,openElement])element.addEventListener('pointerdown',event=>event.stopPropagation());shareElement.onclick=()=>{if(demo)message('Demo: sharing is off, so nothing leaves this page.');else openShare();};if(demo)openElement.addEventListener('click',event=>{event.preventDefault();message('Demo: in Google Photos this opens the photo with everything taken around it.');});
 
- if(demo)window.setTimeout(()=>open(),0);
+ if(demo){window.setTimeout(()=>open(),0);document.addEventListener?.('visibilitychange',()=>{if(!document.hidden&&$('overlay').hidden&&!openingPromise&&!closingPromise)open();});}
  $('launcher').onclick=()=>openLatest();$('close').onclick=close;$('keep').onclick=()=>decide('keep');$('remove').onclick=()=>decide('remove');$('undo').onclick=undo;$('load').onclick=()=>run(()=>loadRequested());$('refresh').onclick=()=>run(()=>loadRequested(true));$('enlarge').onclick=toggleEnlarge;
  reviewEvery.onchange=deleteMethod.onchange=()=>{trashOptIn.checked=deleteMethod.value==='trash';persistResume();render();};
  $('filter').onchange=()=>{inspected=null;focused=null;deckItems=null;buffer.clear();render();};
