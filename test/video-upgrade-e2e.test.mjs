@@ -36,7 +36,7 @@ for(const device of [{name:'desktop',viewport:{width:1280,height:800},small:'=m2
   await new Promise((resolve,reject)=>{const tx=db.transaction(['accounts','settings'],'readwrite');tx.objectStore('accounts').put(review,account);tx.objectStore('settings').put({onboardingDismissed:true},'sync');tx.objectStore('settings').put({sort:'original'},'resume:'+account);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
  },{...emptyReview(),revision:1,started:true,exhausted:true,swipeCount:3,items});
  const source=(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8')).replace('document,location,GM:',"document,location:{origin:'https://photos.google.com',pathname:'/u/0/'},GM:");
- await page.evaluate(()=>{window.videosCreated=0;const create=document.createElement.bind(document);document.createElement=(tag,...rest)=>{if(String(tag).toLowerCase()==='video')window.videosCreated++;return create(tag,...rest);};});
+ await page.evaluate(()=>{window.videosCreated=[];const create=document.createElement.bind(document);document.createElement=(tag,...rest)=>{const element=create(tag,...rest);if(String(tag).toLowerCase()==='video')window.videosCreated.push(element);return element;};});
  await page.addScriptTag({content:source});
  await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick());
  await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('caption').textContent.startsWith('first.jpg'));
@@ -48,7 +48,7 @@ for(const device of [{name:'desktop',viewport:{width:1280,height:800},small:'=m2
  await page.waitForFunction(full=>{const video=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelector('video');return !!video&&video.currentSrc.includes(full)&&!video.paused&&video.style.opacity==='';},device.full,{timeout:20000});
  
  assert.ok(requests.includes(`/clip-video${device.full}`),'full quality is requested');
- assert.equal(await page.evaluate(()=>window.videosCreated),2,'the preloaded video is shown, then replaced once by the full-quality one');
+ assert.equal(await page.evaluate(()=>window.videosCreated.filter(video=>video.playsInline).length),2,'the preloaded video is shown, then replaced once by the full-quality one; spare elements prepared during key presses never play');
  const shown=await page.evaluate(()=>{const videos=[...document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelectorAll('video')];return {count:videos.length,time:videos[0].currentTime,hidden:videos[0].hidden};});
  assert.equal(shown.count,1);assert.equal(shown.hidden,false);assert.ok(shown.time>0);
 });
