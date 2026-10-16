@@ -6,7 +6,7 @@ const root=new URL('../',import.meta.url);
 const output=resolve(process.argv[2]||fileURLToPath(new URL('demo-dist',root)));
 const builder=await readFile(new URL('scripts/build-userscript.mjs',root),'utf8');
 const version=/^\/\/ @version (\S+)$/m.exec(builder)[1];
-const modules=['userscript-core','userscript-order','userscript-db','userscript-sync','userscript-settings','userscript-swipe','userscript-preload','userscript-video','userscript-performance','userscript-thumbnails','userscript-counter','userscript-update','userscript-demo','userscript-ui'];
+const modules=['userscript-core','userscript-order','userscript-db','userscript-sync','userscript-settings','userscript-swipe','userscript-preload','userscript-video','userscript-performance','userscript-thumbnails','userscript-counter','userscript-stats','userscript-update','userscript-demo','userscript-ui'];
 const sources=await Promise.all(modules.map(name=>readFile(new URL(`lib/${name}.mjs`,root),'utf8')));
 const swipeSource=await readFile(new URL('lib/swipe.mjs',root),'utf8');
 const stillStart=swipeSource.indexOf('export function stillClonedVideos(');
