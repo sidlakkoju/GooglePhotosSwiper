@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.153
+// @version 1.2.154
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -446,7 +446,7 @@ async function createLeaseOwner(window,crypto) {
  return owner;
 }
 async function openReviewDatabase(indexedDB) {
- const unavailable=()=>Error('Photos Swipe couldn\u2019t open its storage in this browser. Use a normal window or allow site data for photos.google.com, then reload.');
+ const unavailable=()=>Error('Photos Swipe can\u2019t use storage in this browser. Use a normal window or allow site data for photos.google.com, then reload.');
  const db=await new Promise((resolve,reject)=>{
   let request;
   try{request=indexedDB.open('photos-swipe-userscript',2);}catch{reject(unavailable());return;}
@@ -2055,7 +2055,7 @@ function mountPhotosSwipe(environment) {
   return {kind:'empty',title:'No items to review.',caption:'No items to review.',action:'Load more',run:()=>run(()=>loadRequested())};
  }
  function renderEmpty(){
-  const next=emptyDeck(),existing=$('media').querySelector?.('.empty-deck');
+  const next=emptyDeck(),existing=$('media').querySelector?.('.empty-deck');if(next.kind==='failed')message('');
   if(existing&&existing.dataset.kind===next.kind&&existing.dataset.detail===(next.detail||''))return;
   const card=document.createElement('div'),title=document.createElement('p');
   card.setAttribute('class','empty-deck');card.dataset.kind=next.kind;card.dataset.detail=next.detail||'';title.setAttribute('class','empty-title');title.textContent=next.title;card.append(title);
@@ -2316,7 +2316,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
    leaseRecoveryPending=false;takeoverPending=false;
    message(missing?'Saved item is unavailable. Continuing with the next unreviewed item.':idleMessage());
   }catch(error){
-   await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();libraryFailure=error;message(error.message);
+   await releaseLease();identity=null;state=emptyReview();stopMedia();buffer.clear();libraryFailure=error;
   }finally{busy=false;render();controls();}
  }
  function open(claim=false){
@@ -2536,7 +2536,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.153":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.154":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
