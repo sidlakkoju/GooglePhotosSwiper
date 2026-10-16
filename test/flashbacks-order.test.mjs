@@ -247,3 +247,16 @@ test('a first Flashbacks build over 30,000 items spread across thousands of memo
  const started=performance.now(),deck=flashbackDeck({items:large,started:true,exhausted:true},{},random(),Date.UTC(2026,9,14),null,true),elapsed=performance.now()-started;
  assert.equal(deck.length,30000);assert.ok(elapsed<1500,`first build ${elapsed.toFixed(0)} ms`);
 });
+
+test('a decision copies the item list once and keeps the local history bounded',async()=>{
+ const {recordReviewDecision,reviewSwipeCount,REVIEW_HISTORY_LIMIT}=await import('../lib/userscript-core.mjs');
+ const items=Array.from({length:5000},(_,index)=>({mediaKey:`bounded-${index}`,decision:null,revision:0}));
+ let state={items,history:[],swipeCount:0};
+ for(let index=0;index<REVIEW_HISTORY_LIMIT+25;index++)state=recordReviewDecision(state,state.items[index],index%2?'keep':'remove',1000+index);
+ assert.equal(state.history.length,REVIEW_HISTORY_LIMIT);
+ assert.equal(state.history.at(-1).key,`bounded-${REVIEW_HISTORY_LIMIT+24}`);
+ assert.equal(reviewSwipeCount(state),REVIEW_HISTORY_LIMIT+25);
+ assert.equal(state.items[REVIEW_HISTORY_LIMIT+24].lastDecisionSwipe,REVIEW_HISTORY_LIMIT+25);
+ assert.equal(state.items[REVIEW_HISTORY_LIMIT+25],items[REVIEW_HISTORY_LIMIT+25]);
+ assert.throws(()=>recordReviewDecision(state,{...state.items[0],decision:null},'keep'),/changed/);
+});

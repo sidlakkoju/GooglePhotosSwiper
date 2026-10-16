@@ -127,3 +127,14 @@ test('the demo’s past decisions are synthetic, spread over earlier days and le
  assert.ok(stats.days.filter(row=>row.keep||row.remove).length>=10);
  assert.equal(stats.days.at(-1).keep+stats.days.at(-1).remove,0);
 });
+
+test('Stats over 30,000 decided items format each quarter hour once and stay within a time budget',()=>{
+ const now=Date.UTC(2026,9,16,12),items=Array.from({length:30000},(_,index)=>({mediaKey:`synthetic-${index}`,size:2e6+index,decision:index%3===0?null:index%3===1?'keep':'remove',state:index%9===2?'in_trash':'active',lastDecisionAt:now-(index%45)*day-(index*7919)%day}));
+ const formatToParts=Intl.DateTimeFormat.prototype.formatToParts;let calls=0;
+ Intl.DateTimeFormat.prototype.formatToParts=function(...values){calls++;return formatToParts.apply(this,values);};
+ let stats,elapsed;
+ try{const started=performance.now();stats=reviewStatistics({items},{now,timeZone:'America/Los_Angeles'});elapsed=performance.now()-started;}finally{Intl.DateTimeFormat.prototype.formatToParts=formatToParts;}
+ assert.equal(stats.reviewed,20000);assert.equal(stats.days.length,30);
+ assert.ok(calls<=5000,`${calls} date formats for 20,000 decisions`);
+ assert.ok(elapsed<250,`${elapsed.toFixed(1)}ms`);
+});

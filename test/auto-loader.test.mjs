@@ -154,3 +154,22 @@ test('when no app can start, the banner says Photos Swipe could not load instead
  const required=fixture(null);assert.equal(showUpdateBanner(required.env,'1.0.1'),true);
  assert.equal(required.nodes[0].textContent,'Update available - tap to update Photos Swipe');assert.match(required.nodes[0].href,/\/photoswiper\.user\.js$/);
 });
+
+test('the version check starts while the cached app is still being read',async()=>{
+ const {env,requests}=fixture(app,null);let release;
+ env.GM.getValue=()=>new Promise(resolve=>{release=()=>resolve(app);});
+ const started=startAutoLoader(env);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(requests,['/version']);
+ release();
+ assert.equal(await started,true);assert.deepEqual(requests,['/version']);assert.equal(env.window.version,app.version);
+});
+
+test('a slow version check runs the cached app after a second instead of waiting for the timeout',async()=>{
+ const {env,requests,writes}=fixture(app,app),waits=[];
+ env.GM.xmlHttpRequest=options=>{requests.push(new URL(options.url).pathname);};
+ env.setTimeout=(callback,ms)=>{waits.push(ms);return setTimeout(callback,ms/100);};
+ assert.equal(await startAutoLoader(env),true);
+ assert.deepEqual(requests,['/version']);assert.equal(writes.length,0);assert.equal(env.window.version,app.version);
+ assert.ok(waits.includes(1000));
+});
