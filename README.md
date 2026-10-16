@@ -12,7 +12,7 @@ It's a userscript that runs inside your signed-in [photos.google.com](https://ph
 - **Flashbacks.** The default order shuffles whole memories (photos taken around the same time and place) across your timeline. Timeline, Oldest first and Largest first are also available.
 - **Storage freed, live.** The counter at the top rolls up as you mark items. Items Google stores for free (most photos backed up before June 2021) are labelled *stored free* and add nothing, so the number matches what Google actually counts.
 - **Review before anything is deleted.** Going to Trash shows every marked item in a grid. Tap ✓ to rescue one, then move the rest to Google Photos Trash. Every batch is verified in Trash, and items stay restorable there for 60 days.
-- **Big-screen layout.** On a computer the photo takes most of the window with the controls beside it; on a phone it adapts to portrait or landscape.
+- **The photo comes first.** A blurred copy of the current photo fills the background and every control floats on glass above it, in dark or light mode. On a computer the photo takes most of the window with the controls beside it; on a phone it adapts to portrait or landscape.
 - **Look closer.** Open the item in Google Photos to see what else is around it, share the photo or video itself, or go fullscreen. Fullscreen follows your device as you rotate it.
 - **Fast on big libraries.** Upcoming photos are preloaded, so swipes are instant. It's tested against a 34,000-item library.
 - **Sync across devices (optional).** Sign in with Google in Settings to carry decisions and progress between your phone and computer.
@@ -22,6 +22,7 @@ It's a userscript that runs inside your signed-in [photos.google.com](https://ph
   &nbsp;
   <img src="docs/images/landscape.png" width="470" alt="Photos Swipe on a phone held sideways">
 </p>
+<p align="center"><img src="docs/images/desktop.png" width="700" alt="Photos Swipe on a computer, with the photo on a glass stage and the controls beside it"></p>
 
 ## How it works
 
@@ -30,10 +31,11 @@ photos.google.com tab
  └─ Photos Swipe userscript
      ├─ reads your library and moves items to Trash through the same web API the Photos site uses
      ├─ keeps decisions and progress in the browser (IndexedDB)
-     └─ optional: syncs decisions to a small Cloudflare Worker (item IDs and decisions only)
+     └─ optional: syncs item IDs, decisions and review progress to a small Cloudflare Worker
+        (never photos, names, locations or preview links)
 ```
 
-Swiping only records a decision. Nothing leaves your library until you confirm **Move N to Trash**, and there's no permanent delete. Photos and videos are never uploaded anywhere. See [privacy](docs/privacy.md).
+Swiping only records a decision. Nothing leaves your library until you confirm **Move N to Trash**, and there's no permanent delete. Photos and videos are never uploaded anywhere. Sync, if you turn it on, also stores your Google account ID and email for sign-in. See [privacy](docs/privacy.md).
 
 ## Install
 
@@ -57,9 +59,10 @@ The script updates itself. Step-by-step setup for each browser is in [docs/users
 
 ```sh
 npm test                  # ~950 tests, including headless Chromium and WebKit runs of the built userscript
+npm run build:demo        # static, self-contained demo with sample photos in demo-dist/
 ./scripts/deploy-worker.sh  # rebuild, sign and publish the userscript and sync Worker
 ```
 
-The userscript source lives in `lib/` and builds to `userscript/`. Browser tests need Playwright (`npm i --no-save --no-package-lock playwright && npx playwright install chromium webkit`). More in [development](docs/development.md), [architecture](docs/architecture.md), [sync](docs/sync.md) and [performance](docs/performance.md). The original local desktop app (Node server + Chrome extension) is still in the repo; see [setup](docs/setup.md).
+The userscript source lives in `lib/` and builds to `userscript/`. Browser tests need Playwright (`npm i --no-save --no-package-lock playwright && npx playwright install chromium webkit`). The demo build and its iframe API are in [demo](docs/demo.md). More in [development](docs/development.md), [architecture](docs/architecture.md), [sync](docs/sync.md) and [performance](docs/performance.md). The original local desktop app (Node server + Chrome extension) is still in the repo; see [setup](docs/setup.md).
 
 Google Photos access uses an undocumented web API, so it can need maintenance when Google changes its site. The request formats are adapted from [Google Photos Toolkit](https://github.com/xob0t/Google-Photos-Toolkit) (MIT; see [third-party notices](extension/THIRD_PARTY_NOTICES.md)).
