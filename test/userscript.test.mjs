@@ -1084,6 +1084,26 @@ test('Going to Trash, stats and captions round sizes like the Freed counter inst
  }finally{await mounted.nodes.get('close').onclick();}
 });
 
+test('a photo Google cannot find after Move to Trash is named, with how to clear it, instead of pointing at a hidden button',async()=>{
+ const candidates=[item('moved',{name:'moved.jpg',decision:'remove',dedupKey:'stable-moved'}),item('gone',{name:'gone.jpg',decision:'remove',dedupKey:'stable-gone'})];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0];
+  return {ok:true,text:async()=>envelope(entry[0],entry[0]==='XwAOJf'?[]:entry[0]==='zy0IHe'?[[['moved',null,null,'stable-moved']],null]:[[null]])};
+ };
+ const mounted=await mountedReview(candidates,{fetch,confirm:()=>true});
+ try{
+  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+  if(mounted.nodes.get('review-panel').hidden)await mounted.click('review');mounted.nodes.get('move-trash').onclick();
+  for(let count=0;count<600&&!/still marked/.test(mounted.nodes.get('status').textContent);count++)await new Promise(resolve=>setTimeout(resolve,10));
+  await mounted.settle();
+  const status=mounted.nodes.get('status').textContent;
+  assert.match(status,/^1 of 2 moved to Trash; 1 still marked for deletion\. Couldn’t confirm gone\.jpg in Google Photos Trash\. If it was already deleted in Google Photos, untick it in Going to Trash\.$/);
+  assert.doesNotMatch(status,/Check deleted items/);
+  const saved=Object.fromEntries((await mounted.read()).items.map(item=>[item.mediaKey,`${item.decision}/${item.state}`]));
+  assert.deepEqual(saved,{moved:'remove/in_trash',gone:'remove/active'});
+ }finally{await mounted.nodes.get('close').onclick();}
+});
+
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
  const stats=mounted.nodes.get('stats').textContent;
