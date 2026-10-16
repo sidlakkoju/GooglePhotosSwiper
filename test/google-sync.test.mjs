@@ -688,3 +688,33 @@ test('a used, expired or unknown sign-in link shows a readable page with a way b
   assert.doesNotMatch(html,/<script/);
  }
 });
+
+test('a successful same-tab Google sign-in still returns to Google Photos in a real browser, Back skips the used sign-in page, and reopening it shows the expired page',async t=>{
+ let chromium;try{({chromium}=await import('playwright'));}catch{t.skip('Playwright is unavailable');return;}
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='y'.repeat(43),target='https://photos.google.com/u/2/';
+ assert.equal((await request(env,'/auth/session',{state,name:'Synthetic browser',platform:'test'})).status,200);
+ const {nonce}=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ const credential=await token(nonce);
+ const browser=await chromium.launch();t.after(()=>browser.close());
+ const page=await (await browser.newContext({ignoreHTTPSErrors:true})).newPage();
+ await page.route('**/*',async route=>{
+  const url=new URL(route.request().url());
+  if(url.origin===syncOrigin){const response=await handleGoogleAuthRequest(new Request(url,{method:route.request().method(),headers:await route.request().allHeaders(),...(route.request().postData()?{body:route.request().postData()}:{})}),env);return route.fulfill({status:response.status,headers:Object.fromEntries(response.headers),body:Buffer.from(await response.arrayBuffer())});}
+  if(url.href==='https://accounts.google.com/gsi/client')return route.fulfill({contentType:'text/javascript',body:`window.google={accounts:{id:{initialize(options){window.__signIn=()=>options.callback({credential:${JSON.stringify(credential)}});},renderButton(element){const button=document.createElement('button');button.id='google-button';button.textContent='Sign in with Google';button.onclick=()=>window.__signIn();element.append(button);},prompt(){}}}};`});
+  if(url.origin==='https://photos.google.com')return route.fulfill({contentType:'text/html',body:'<!doctype html><title>Google Photos</title><p>synthetic photos</p>'});
+  return route.abort();
+ });
+ await page.goto('https://photos.google.com/u/2/?before=1');
+ const start=`${syncOrigin}/auth/start?state=${state}&return=${encodeURIComponent(target)}`;
+ await page.evaluate(href=>{window.location.href=href;},start);await page.waitForURL(start);
+ await page.click('#google-button');
+ await page.waitForURL(url=>url.href.startsWith(target+'#'),{timeout:10000});
+ const landed=new URL(page.url()),returned=new URLSearchParams(landed.hash.slice(1));
+ assert.equal(landed.origin+landed.pathname,target);assert.equal(await page.title(),'Google Photos');
+ assert.equal(returned.get('photos-swipe-state'),state);assert.match(returned.get('photos-swipe-code'),/^[A-Za-z0-9_-]{43}$/);
+ await page.goBack();await page.waitForLoadState();
+ assert.equal(page.url(),'https://photos.google.com/u/2/?before=1');
+ await page.goto(start);
+ assert.match(await page.locator('h1').textContent(),/This sign-in link has expired/);
+ assert.equal(await page.locator('a').getAttribute('href'),target);
+});
