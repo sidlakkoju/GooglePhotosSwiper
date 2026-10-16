@@ -19,7 +19,7 @@ test('stamp layout setup parses as a classic browser script',()=>{
 const chrome=['google-chrome','chromium','chromium-browser','/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(command=>spawnSync(command,['--version']).status===0);
 
 for(const reduced of [false,true])for(const theme of ['light','dark'])for(const [width,height,pointerType] of [[1280,900,'mouse'],[393,852,'touch']]){
- test(`KEEP and REMOVE stay inside the dragged card at ${width}×${height} in ${theme}, reduced motion ${reduced}`,{skip:!chrome&&'Chrome is not installed'},async()=>{
+ test(`KEEP and TRASH stay inside the dragged card at ${width}×${height} in ${theme}, reduced motion ${reduced}`,{skip:!chrome&&'Chrome is not installed'},async()=>{
   const dir=await mkdtemp(join(tmpdir(),'userscript-stamp-'));
   try{
    const page=join(dir,'layout.html');
@@ -62,7 +62,7 @@ for(const reduced of [false,true])for(const theme of ['light','dark'])for(const 
    const output=result.stdout.match(/<pre>(.*?)<\/pre>/s);
    assert.ok(output,result.stdout);
    const snapshots=JSON.parse(output[1]);
-   assert.deepEqual(snapshots.map(snapshot=>snapshot.label),['KEEP','REMOVE']);
+   assert.deepEqual(snapshots.map(snapshot=>snapshot.label),['KEEP','TRASH']);
    for(const snapshot of snapshots){
     assert.equal(snapshot.theme,theme);
     assert.equal(snapshot.positionedBefore,true);

@@ -253,14 +253,14 @@ test('Flashbacks long place leaves the memory count clear of fullscreen on narro
    overlayElement.hidden=false;
    memoryLabel.hidden=false;
    memoryDate.textContent='September 2025';
-   memoryPlace.textContent=' · Synthetic city with a very long location name repeated across the card';
-   memoryPosition.textContent=' · 12 of 99';
+   memoryPlaceSep.textContent=' · ';memoryPlace.textContent='Synthetic city with a very long location name repeated across the card';
+   memoryPositionSep.textContent=' · ';memoryPosition.textContent='12 of 99';
    const labels=[];
-   for(const place of ['', ' · Seoul']){
-    memoryDate.textContent='May 2017';memoryPlace.textContent=place;memoryPlace.hidden=!place;memoryPosition.textContent=' · 1 of 12';
+   for(const place of ['', 'Seoul']){
+    memoryDate.textContent='May 2017';memoryPlace.textContent=place;memoryPlace.hidden=memoryPlaceSep.hidden=!place;memoryPosition.textContent='1 of 12';
     labels.push([...memoryLabel.children].filter(span=>!span.hidden).map(span=>span.innerText).join(''));
    }
-   memoryDate.textContent='September 2025';memoryPlace.hidden=false;memoryPlace.textContent=' · Synthetic city with a very long location name repeated across the card';memoryPosition.textContent=' · 12 of 99';
+   memoryDate.textContent='September 2025';memoryPlace.hidden=memoryPlaceSep.hidden=false;memoryPlace.textContent='Synthetic city with a very long location name repeated across the card';memoryPosition.textContent='12 of 99';
    const snapshots=[];
    for(const expanded of [false,true]){
     cardElement.classList.toggle('expanded',expanded);
