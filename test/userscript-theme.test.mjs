@@ -98,5 +98,32 @@ test('the dragged card and the dock buttons never get their own backdrop blur',(
  assert.match(glass,/\.actions #keep\{background:var\(--ps-glass-tint-blue\)/);
  assert.match(glass,/\.actions #remove\{background:var\(--ps-glass-fill-strong\);color:var\(--ps-destructive\)\}/);
  assert.match(glass,/\.trash-bar #move-trash,\.trash-bar \.preview-trash\{background:var\(--ps-glass-tint-red\)/);
- assert.match(glass,/#card>\.under-card\{opacity:0\}\n#card:has\(>\.top-card\[style\*="will-change"\]\)>\.under-card\{opacity:1\}/);
+ assert.match(glass,/#card>\.under-card\{opacity:0\}\n#card>\.under-card\.peek\{opacity:1\}/);
+});
+
+test('inline styles written on every drag frame never feed a :has() selector',()=>{
+ for(const match of source.matchAll(/:has\(([^{]*)\)/g))assert.doesNotMatch(match[1],/\[style/,match[0]);
+});
+
+test('the hidden video spinner does not animate while idle',()=>{
+ const spinner=source.match(/\.video-spinner\{position:absolute[^}]*\}/)[0];
+ assert.match(spinner,/animation:ps-spin [^;}]*infinite paused/);
+ assert.match(source,/#card\.video-loading \.video-spinner\{[^}]*animation-play-state:running/);
+});
+
+test('touch devices tint, rather than re-blur, glass that only ever sits over the pre-blurred ambient',()=>{
+ for(const [name,value] of Object.entries({regular:'saturate(160%)',thick:'saturate(140%)'}))assert.ok(light.includes(`--ps-tint-${name}:${value};`),name);
+ const touch=glassBlock('@supports').match(/@media \(pointer:coarse\)\{([\s\S]*)\}\s*\}$/)[1];
+ assert.match(touch,/\.content \.actions\{backdrop-filter:var\(--ps-tint-regular\);-webkit-backdrop-filter:var\(--ps-tint-regular\)\}/);
+ assert.match(touch,/\.settings-sheet,\.review-panel\{backdrop-filter:var\(--ps-tint-thick\);-webkit-backdrop-filter:var\(--ps-tint-thick\)\}/);
+ assert.doesNotMatch(touch,/order-menu|share-sheet|pair-onboarding|settings-header|trash-preview|trash-done/,'surfaces that can sit over a photo or scrolling content keep their blur');
+ assert.ok(glass.indexOf('@media (pointer:coarse)')<glass.indexOf('@media (prefers-reduced-transparency:reduce)'),'reduced transparency still wins');
+});
+
+test('every safe-area inset goes through one host variable per edge',()=>{
+ for(const edge of ['top','right','bottom','left'])assert.ok(light.includes(`--ps-safe-${edge}:env(safe-area-inset-${edge},0px);`),edge);
+ assert.equal(source.match(/env\(safe-area-inset/g).length,4);
+ assert.match(source,/var\(--ps-safe-top\)/);
+ assert.match(glass,/\.overlay\{background:var\(--ps-chrome\)\}\n\.ambient\{[^}]*background:var\(--ps-chrome\)\}/);
+ assert.match(light,/--ps-chrome:#DCDCE1;/);assert.match(dark,/--ps-chrome:#1C1C1E;/);
 });

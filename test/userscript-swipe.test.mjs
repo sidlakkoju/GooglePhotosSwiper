@@ -218,3 +218,14 @@ test('vertical drags on a video and drags from video control buttons never decid
  s.send('pointerdown',0,0,1,undefined,button);s.send('pointermove',150,0,1,undefined,button);s.send('pointerup',150,0,1,undefined,button);
  assert.deepEqual(s.decisions,[]);assert.equal(toggles,0);assert.equal(s.card.style.transform||'','');
 });
+
+test('a drag lifts the card and reveals the next card once per gesture, not on every frame',()=>{
+ const s=setup(),toggles=[];
+ s.under.classList={toggle:(name,on)=>toggles.push(['toggle',name,on]),remove:name=>toggles.push(['remove',name])};
+ let lifts=0;const style=s.card.style;s.card.style=new Proxy(style,{set(target,key,value){if(key==='willChange')lifts++;target[key]=value;return true;}});
+ s.send('pointerdown',0);
+ for(let x=20;x<=100;x+=20){s.send('pointermove',x);s.paint();}
+ assert.equal(lifts,1);assert.deepEqual(toggles,[['toggle','peek',true]]);
+ s.send('pointerup',10);
+ assert.equal(s.card.style.willChange,'');assert.deepEqual(toggles.at(-1),['remove','peek']);
+});
