@@ -97,7 +97,7 @@ for(const [width,height] of [[1280,900],[393,852]])for(const id of ['keep','remo
 test('the first-run coach shows on an untouched deck and leaves after the first decision',async t=>{
  const page=await mount(t,{width:393,height:852,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const first=await measure(page,`const coach=q('.coach');return {hidden:coach.hidden,text:coach.textContent,box:box(coach),card:box('#card'),pointer:getComputedStyle(coach).pointerEvents};`);
- assert.equal(first.hidden,false);assert.match(first.text,/Delete/);assert.match(first.text,/Keep/);assert.equal(first.pointer,'none');
+ assert.equal(first.hidden,false);assert.match(first.text,/Trash/);assert.doesNotMatch(first.text,/Delete|delete/);assert.match(first.text,/Keep/);assert.equal(first.pointer,'none');
  assert.ok(first.box.width>0&&first.box.y>=first.card.y&&first.box.y+first.box.height<=first.card.y+first.card.height+1);
  await measure(page,`root.getElementById('keep').click();`);
  await page.waitForTimeout(100);
@@ -255,7 +255,7 @@ test('the sync privacy disclosure uses the app vocabulary',async t=>{
  const page=await mount(t,{width:393,height:852,touch:true,onboarding:true,items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
  await measure(page,`root.getElementById('settings').click();`);await page.waitForTimeout(300);
  const text=await measure(page,`return q('.settings-sheet').textContent;`);
- assert.match(text,/Each Keep\/Delete decision, keyed by Google Photos' internal item ID/);
+ assert.match(text,/Each Keep or Trash decision, keyed by Google Photos' internal item ID/);
  assert.match(text,/Your review progress and undo history: for each photo you\u2019ve reviewed, its item ID/);
  assert.doesNotMatch(text,/review queue|Keep\/Remove/);
 });
@@ -267,7 +267,7 @@ for(const [free,sentence] of [[1,'1 stored free, so it doesn\u2019t use storage'
  assert.ok(subtitle.endsWith(` · ${sentence}`),subtitle);
 });
 
-for(const [marked,trashName] of [[0,'Going to Trash'],[1,'Going to Trash, 1 item'],[3,'Going to Trash, 3 items']])test(`controls are named after what they show, with ${marked} marked for deletion`,async t=>{
+for(const [marked,trashName] of [[0,'Going to Trash'],[1,'Going to Trash, 1 item'],[3,'Going to Trash, 3 items']])test(`controls are named after what they show, with ${marked} marked for Trash`,async t=>{
  const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:5},(_,index)=>item(index,index<marked?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
  assert.equal(await page.getByRole('button',{name:trashName,exact:true}).count(),1);
  const order=page.locator('#order-switcher');
@@ -295,7 +295,7 @@ for(const [marked,expected] of [[0,'back'],[2,'move-trash']])test(`opening Going
  await measure(page,`root.getElementById('review').focus();`);await page.keyboard.press('Enter');await page.waitForTimeout(300);
  const focus=await measure(page,`const e=root.activeElement,panel=root.getElementById('review-panel');return {open:!panel.hidden,inside:panel.contains(e),id:e?.id||'',text:e?.textContent?.trim()||''};`);
  assert.equal(focus.open,true);assert.equal(focus.inside,true,JSON.stringify(focus));
- if(expected==='back')assert.equal(focus.text,'\u2039 Back');else assert.equal(focus.id,'move-trash');
+ if(expected==='back')assert.equal(focus.text,'Back');else assert.equal(focus.id,'move-trash');
 });
 
 for(const marked of [0,2])test(`Going to Trash explains itself with ${marked} marked`,async t=>{
@@ -303,7 +303,7 @@ for(const marked of [0,2])test(`Going to Trash explains itself with ${marked} ma
  await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
  const shown=await measure(page,`const p=root.getElementById('review-panel');return {sub:q('.trash-subtitle').textContent,help:q('.trash-help').textContent,selectAll:[...p.querySelectorAll('.trash-nav button')].some(b=>b.textContent==='Select All'&&b.getClientRects().length>0)};`);
  if(marked){assert.match(shown.sub,/^2 of 2 selected/);assert.match(shown.help,/^Tap a photo to preview/);assert.equal(shown.selectAll,true);}
- else{assert.equal(shown.sub,'Nothing marked for deletion');assert.match(shown.help,/^Swipe left or tap \u2715 to mark photos/);assert.equal(shown.selectAll,false);}
+ else{assert.equal(shown.sub,'Nothing marked for Trash');assert.match(shown.help,/^Swipe left or tap \u2715 to mark photos/);assert.equal(shown.selectAll,false);}
 });
 
 for(const how of ['keyboard','mouse'])test(`Esc with the order menu open (${how}) closes only the menu`,async t=>{
@@ -326,13 +326,13 @@ for(const how of ['Escape','Close'])test(`closing the share sheet with ${how} re
  assert.deepEqual(await measure(page,`return {sheet:q('.share-sheet').hidden,overlay:!root.getElementById('overlay').hidden,focus:root.activeElement?.id||null};`),{sheet:true,overlay:true,focus:'share'});
 });
 
-for(const how of ['Escape','Done'])test(`closing the Going to Trash preview with ${how} returns focus to that photo`,async t=>{
+for(const how of ['Escape','Back'])test(`closing the Going to Trash preview with ${how} returns focus to that photo`,async t=>{
  const page=await mount(t,{width:393,height:852,touch:true,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index,index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
  await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
  const tile=page.locator('.trash-tile [aria-label^="Preview "]').nth(1);const label=await tile.getAttribute('aria-label');
  await tile.focus();await page.keyboard.press('Enter');await page.waitForTimeout(300);
  assert.equal(await measure(page,`return !!q('.trash-preview');`),true);
- if(how==='Escape')await page.keyboard.press('Escape');else await page.locator('.trash-preview .trash-nav button',{hasText:'Done'}).click();
+ if(how==='Escape')await page.keyboard.press('Escape');else await page.locator('.trash-preview .trash-nav button',{hasText:'Back'}).click();
  await page.waitForTimeout(300);
  assert.deepEqual(await measure(page,`return {preview:!!q('.trash-preview'),panel:!root.getElementById('review-panel').hidden,focus:root.activeElement?.getAttribute('aria-label')||null};`),{preview:false,panel:true,focus:label});
 });

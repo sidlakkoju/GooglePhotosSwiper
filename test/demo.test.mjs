@@ -6,6 +6,7 @@ import {join,extname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {openReviewDatabase} from '../lib/userscript-db.mjs';
 import {emptyReview} from '../lib/userscript-core.mjs';
+import {fulfillVideo} from './fixtures/video-route.mjs';
 import {createMemoryIndexedDB,createDemoPhotos,demoItems,demoLibrary,demoLandscapeSVG} from '../lib/userscript-demo.mjs';
 
 let chromium;
@@ -206,4 +207,45 @@ test('an idle deck schedules no frames and runs no animations, and a top inset k
  const appearance=page=>page.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,style=getComputedStyle(root.querySelector('.ambient'));return {bg:getComputedStyle(root.querySelector('.content')).getPropertyValue('--ps-bg').trim(),dim:style.getPropertyValue('--ps-ambient-dim').trim(),scheme:getComputedStyle(root.querySelector('#overlay')).colorScheme};});
  const dark={bg:'#000',dim:'rgba(0,0,0,.42)',scheme:'dark'},light={bg:'#F2F2F7',dim:'rgba(242,242,247,.5)',scheme:'light'};
  for(const [query,os,expected] of [['?embed=1&top=50&scheme=dark','light',dark],['?embed=1&scheme=light','dark',light],['?embed=1&scheme=sepia','dark',dark],['?embed=1','light',light]]){const other=await open(query,os);assert.deepEqual(await appearance(other),expected,`${query} on a ${os} OS`);await other.close();}
+});
+
+test('a full demo flow, through the video, fullscreen, Settings and Trash, logs no Content-Security-Policy violation, standalone or embedded',{timeout:180000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ for(const embedded of [false,true])for(const [width,height] of [[390,844],[1440,900]]){
+  const label=`${embedded?'embedded':'standalone'} at ${width}x${height}`;
+  const page=await browser.newPage({viewport:{width,height},hasTouch:width<900,isMobile:width<900});
+  const violations=[],outside=[];
+  page.on('console',message=>{if(/Content.Security.Policy|violates the following/i.test(message.text()))violations.push(message.text());});
+  await page.addInitScript(()=>document.addEventListener('securitypolicyviolation',event=>console.log(`Content Security Policy violation: ${event.violatedDirective} ${event.blockedURI}`)));
+  await page.route('**/*',async route=>{
+   const url=new URL(route.request().url());
+   if(url.hostname==='site.test')return route.fulfill({contentType:'text/html',body:`<!doctype html><body style="margin:0"><iframe src="https://demo.test/photos-swipe/demo/?embed=1&top=50" style="width:${width}px;height:${height}px;border:0"></iframe></body>`});
+   if(url.hostname!=='demo.test'){outside.push(url.href);return route.abort();}
+   const path=url.pathname.replace(/^\/photos-swipe\/demo\//,'').replace(/^\//,'')||'index.html';
+   if(path.endsWith('.mp4'))return fulfillVideo(route,await readFile(join(directory,path)),'video/mp4');
+   try{return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}
+  });
+  await page.goto(embedded?'https://site.test/':'https://demo.test/photos-swipe/demo/');
+  const frame=()=>embedded?page.frame({url:/demo\.test/}):page.mainFrame();
+  await frame().waitForFunction(()=>/to review/.test(document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('stats').textContent||''),null,{timeout:15000});
+  const shadow=code=>frame().evaluate(source=>Function('const root=document.getElementById("photos-swipe-userscript-host").shadowRoot;const q=s=>root.querySelector(s);'+source)(),code);
+  let video=false;
+  for(let index=0;index<14&&!video;index++){video=await shadow(`return !!q('#media video');`);if(!video){await shadow(`q('#keep').click();`);await page.waitForTimeout(450);}}
+  assert.equal(video,true,`${label}: reached the video`);
+  await page.waitForTimeout(1500);
+  await shadow(`q('#enlarge').click();`);await page.waitForTimeout(800);await shadow(`q('#enlarge').click();`);await page.waitForTimeout(300);
+  await shadow(`q('#settings').click();`);await page.waitForTimeout(600);await shadow(`q('.settings-header button').click();`);await page.waitForTimeout(300);
+  await shadow(`q('#undo').click();`);await page.waitForTimeout(400);
+  for(let index=0;index<4;index++){await shadow(`q('#remove').click();`);await page.waitForTimeout(450);}
+  await shadow(`q('#review').click();`);await page.waitForTimeout(600);
+  const tiles=await shadow(`return root.querySelectorAll('.trash-photo').length;`);
+  for(let index=0;index<tiles;index++){await shadow(`root.querySelectorAll('.trash-photo')[${index}].click();`);await page.waitForTimeout(600);await shadow(`q('.trash-preview .trash-nav button').click();`);await page.waitForTimeout(200);}
+  await shadow(`q('#move-trash').click();`);await page.waitForTimeout(1200);
+  assert.deepEqual(violations,[],label);
+  assert.deepEqual(outside,[],label);
+  await page.close();
+ }
 });

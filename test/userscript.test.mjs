@@ -40,7 +40,7 @@ test('library place names reach Flashbacks separately from coordinates',async()=
  assert.deepEqual(result.items.map(row=>row.location),[coordinates,coordinates,null]);
  assert.deepEqual(result.items.map(row=>row.locationName),['Paris',null,null]);
  const mounted=await mountedReview([result.items[0]]),label=mounted.nodes.get('card').querySelector('.memory-label');
- assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · Paris · 1 of 1`);
+ assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · Paris`);
  await mounted.nodes.get('close').onclick();
 });
 test('metadata failures retain review items with unknown sizes; invalid preview hosts fail',async()=>{
@@ -248,7 +248,7 @@ test('userscript installed without UTF-8 decoding preserves Unicode UI labels',a
  const mounted=bundleEnvironment();
  vm.runInNewContext(bytes.toString('latin1'),mounted.environment);
  await mounted.nodes.get('launcher').onclick();
- assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for deletion');assert.equal(mounted.nodes.get('remove').childNodes[0].tagName,'SVG');
+ assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for Trash');assert.equal(mounted.nodes.get('remove').childNodes[0].tagName,'SVG');
  assert.equal(mounted.nodes.get('keep')['aria-label'],'Keep');
  assert.match(mounted.nodes.get('stats').textContent,/ to review \u00b7 /);
 });
@@ -1079,7 +1079,7 @@ test('Going to Trash, stats and captions round sizes like the Freed counter inst
   assert.match(mounted.nodes.get('caption').textContent,/ · 1\.00 GB$/);
   assert.match(mounted.nodes.get('stats').textContent,/estimated savings: 1\.00 GB/);
   await mounted.click('review');
-  assert.match(mounted.nodes.get('trash-review-subtitle').textContent,/^1 of 1 selected · 1\.00 GB/);
+  assert.match(mounted.nodes.get('trash-review-subtitle').textContent,/^1 of 1 selected$/);
   assert.doesNotMatch(mounted.nodes.get('stats').textContent+mounted.nodes.get('trash-review-subtitle').textContent+mounted.nodes.get('caption').textContent,/1000\.0/);
  }finally{await mounted.nodes.get('close').onclick();}
 });
@@ -1097,7 +1097,7 @@ test('a photo Google cannot find after Move to Trash is named, with how to clear
   for(let count=0;count<600&&!/still marked/.test(mounted.nodes.get('status').textContent);count++)await new Promise(resolve=>setTimeout(resolve,10));
   await mounted.settle();
   const status=mounted.nodes.get('status').textContent;
-  assert.match(status,/^1 of 2 moved to Trash; 1 still marked for deletion\. Couldn’t confirm gone\.jpg in Google Photos Trash\. If it was already deleted in Google Photos, untick it in Going to Trash\.$/);
+  assert.match(status,/^1 of 2 moved to Trash; 1 still marked for Trash\. Couldn’t confirm gone\.jpg in Google Photos Trash\. If it was already deleted in Google Photos, untick it in Going to Trash\.$/);
   assert.doesNotMatch(status,/Check deleted items/);
   const saved=Object.fromEntries((await mounted.read()).items.map(item=>[item.mediaKey,`${item.decision}/${item.state}`]));
   assert.deepEqual(saved,{moved:'remove/in_trash',gone:'remove/active'});
@@ -1309,7 +1309,7 @@ test('decision history previews the same next Undo and updates after undo and re
  const mounted=await mountedReview([item('a'),item('b')]);await mounted.click('remove');await mounted.click('keep');
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: b · Unreviewed → Keep; restores Unreviewed/);assert.equal(mounted.nodes.get('undo')['aria-describedby'],'undo-preview');
  await mounted.nodes.get('close').onclick();const reopened=bundleEnvironment();reopened.environment.window.indexedDB=mounted.environment.window.indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reopened.environment);await reopened.nodes.get('launcher').onclick();assert.equal(reopened.nodes.get('undo-preview').textContent,mounted.nodes.get('undo-preview').textContent);
- reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Delete; restores Unreviewed/);reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
+ reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.match(reopened.nodes.get('undo-preview').textContent,/Unreviewed → Trash; restores Unreviewed/);reopened.nodes.get('undo').onclick();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(reopened.nodes.get('undo-preview').textContent,'No previous decisions can be undone.');
 });
 test('release metadata names the author and install guide explains Chrome script execution',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
@@ -2842,7 +2842,7 @@ test('failed sync remains visible alongside keep, queue and undo confirmations',
  mounted.environment.AbortSignal=AbortSignal;
 
  await enableSyntheticSync(mounted);
- for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Marked b for deletion\./],['undo',/Last swipe undone for b\./]]){
+ for(const [action,confirmation] of [['keep',/Kept a\./],['remove',/Marked b for Trash\./],['undo',/Last swipe undone for b\./]]){
   await mounted.click(action);
   assert.match(mounted.nodes.get('status').textContent,confirmation);
   assert.match(mounted.nodes.get('status').textContent,/Sync HTTP 503 · saved locally; retry on next action/);
@@ -3030,9 +3030,9 @@ test('unticking keeps items immediately and only the remaining selection reaches
  await mounted.click('move-trash');assert.deepEqual(batches,[['stable-a']]);const state=await mounted.read();assert.equal(state.items[0].state,'in_trash');assert.equal(state.items[1].state,'active');assert.equal(state.items[1].decision,'keep');assert.equal(mounted.nodes.get('move-trash').disabled,true);
 });
 
-test('review preview Done and Escape return to grid before closing review',async()=>{
+test('review preview Back and Escape return to grid before closing review',async()=>{
  const mounted=await mountedReview([item('a',{decision:'remove'}),item('b')]);await mounted.click('review');const grid=mounted.nodes.get('trash-review-grid');grid.childNodes[0].childNodes[0].onclick();
- assert.equal(mounted.nodes.get('trash-preview').childNodes[0].childNodes[1].textContent,'1 of 1');mounted.nodes.get('trash-preview').childNodes[0].childNodes[2].onclick();assert.equal(mounted.nodes.get('review-panel').querySelector('.trash-preview'),null);
+ assert.equal(mounted.nodes.get('trash-preview').childNodes[0].childNodes[1].textContent,'1 of 1');assert.equal(mounted.nodes.get('trash-preview').childNodes[0].childNodes.length,2);mounted.nodes.get('trash-preview').childNodes[0].childNodes[0].onclick();assert.equal(mounted.nodes.get('review-panel').querySelector('.trash-preview'),null);
  grid.childNodes[0].childNodes[0].onclick();const escape=()=>mounted.environment.window.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});escape();assert.equal(mounted.nodes.get('review-panel').hidden,false);assert.equal(mounted.nodes.get('review-panel').querySelector('.trash-preview'),null);escape();assert.equal(mounted.nodes.get('review-panel').hidden,true);assert.equal(mounted.nodes.get('overlay').hidden,false);
 });
 
@@ -3071,10 +3071,10 @@ test('undoing a review Keep returns to swipe review across reopen',async()=>{
  mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('undo');
  assert.equal((await mounted.read()).items[0].decision,'remove');
  assert.match(mounted.nodes.get('caption').textContent,/^b · /);
- assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for deletion');
+ assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for Trash');
  await mounted.click('close');await mounted.click('launcher');
  assert.match(mounted.nodes.get('caption').textContent,/^b · /);
- assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for deletion');
+ assert.equal(mounted.nodes.get('remove')['aria-label'],'Mark for Trash');
  await mounted.click('remove');
  assert.deepEqual((await mounted.read()).items.map(row=>row.decision),['remove','remove']);
 });
@@ -3555,8 +3555,8 @@ test('order capsule cycles approved names, pins the card, opens its menu and res
  const rows=Array.from({length:320},(_,index)=>item(`synthetic-order-${index}`,{date:new Date(Date.UTC(2000+Math.floor(index/8),1,1,0,index%8)).toISOString()})),indexedDB=fakeIndexedDB(),mounted=await mountedReview(rows,{indexedDB}),button=mounted.nodes.get('order-switcher'),menu=mounted.nodes.get('order-menu');
  const caption=()=>mounted.nodes.get('caption').textContent;
  const first=caption();assert.match(button.childNodes[0].textContent,/Flashbacks/);
- for(const name of ['Timeline','Oldest first','Largest first','Flashbacks']){button.onclick();assert.match(button.childNodes[0].textContent,new RegExp(name));assert.equal(caption(),first);}
- button.listeners.contextmenu({preventDefault(){}});assert.equal(menu.hidden,false);assert.deepEqual(menu.childNodes.map(node=>node.textContent.replace(/^\S+ /,'')),['Flashbacks','Timeline','Oldest first','Largest first']);assert.equal(menu.childNodes[0]['aria-checked'],'true');
+ for(const name of ['Timeline','Oldest first','Largest first','Flashbacks']){button.onclick();assert.equal(button.childNodes[0].textContent,name);assert.equal(caption(),first);}
+ button.listeners.contextmenu({preventDefault(){}});assert.equal(menu.hidden,false);assert.deepEqual(menu.childNodes.map(node=>node.childNodes.map(child=>child.textContent||'').join('')),['Flashbacks','Timeline','Oldest first','Largest first'],'menu items carry no stray glyphs');assert.equal(menu.childNodes[0]['aria-checked'],'true');
  menu.childNodes[0].onclick();assert.equal(menu.hidden,true);
  await mounted.click('keep');await mounted.click('keep');await mounted.click('keep');const resumed=caption();await mounted.nodes.get('close').onclick();
  const restored=bundleEnvironment();restored.environment.window.indexedDB=indexedDB;vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),restored.environment);await restored.nodes.get('launcher').onclick();assert.match(restored.nodes.get('order-switcher').childNodes[0].textContent,/Flashbacks/);assert.equal(restored.nodes.get('caption').textContent,resumed);await restored.nodes.get('close').onclick();
@@ -3573,9 +3573,9 @@ for(const locationName of ['Paris',null,''])test(`Flashbacks memory label advanc
  await mounted.nodes.get('close').onclick();
 });
 
-test('Flashbacks single-item memory keeps long place text in a shrinking ellipsis segment',async()=>{
+test('Flashbacks single-item memory keeps long place text in a shrinking ellipsis segment and drops the pointless 1 of 1',async()=>{
  const place='Synthetic city with a very long location name',date='2025-02-17T12:00:00.000Z',mounted=await mountedReview([item('synthetic-single-memory',{date,location:[48.86,2.35],locationName:place})]),label=mounted.nodes.get('card').querySelector('.memory-label');
- assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${place} · 1 of 1`);
+ assert.equal(label.childNodes.map(node=>node.textContent).join(''),`${new Date(date).toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${place}`);
  assert.equal(label.querySelector('.memory-place').title,place);
  const styles=mounted.root.childNodes.filter(node=>node.tagName==='STYLE').map(node=>node.textContent).join('');
  assert.match(styles,/memory-label>span\{flex:none;white-space:pre\}/);
@@ -4234,7 +4234,7 @@ test('a Move to Trash that fails after a verified batch reports how many moved a
  const items=Array.from({length:30},(_,index)=>item(`t${index}`,{decision:'remove',dedupKey:`stable-t${index}`,size:1e6}));
  const mounted=await mountedReview(items,{fetch,confirm:()=>true});
  await mounted.click('move-trash');
- assert.match(mounted.nodes.get('status').textContent,/^25 of 30 moved to Trash; 5 still marked for deletion\./);
+ assert.match(mounted.nodes.get('status').textContent,/^25 of 30 moved to Trash; 5 still marked for Trash\./);
  assert.equal((await mounted.read()).items.filter(row=>row.state==='in_trash').length,25);
  assert.equal(mounted.nodes.get('trash-done').hidden,true);
  await mounted.nodes.get('close').onclick();
@@ -4271,8 +4271,9 @@ test('saves check a small revision record, adopt legacy records without one, and
  const next=await db.save('synthetic-account',{...saved,items:[item('legacy',{decision:'remove'})]});
  assert.equal(next.revision,9);assert.equal((await db.read('synthetic-account')).revision,9);
 });
-test('user-facing text uses Delete and Going to Trash instead of the old queue wording',async()=>{
+test('user-facing text says Trash and Going to Trash, never queue or delete, because nothing is deleted on a swipe',async()=>{
  const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  for(const phrase of ['Swipe left to queue','\\u00d7 Queue','Removal queue','reviewed \\u00b7 Queue:','The removal queue is empty','The queue changed in another tab','still queued','local removal queue'])assert.equal(source.includes(phrase),false,phrase);
- for(const phrase of ['Swipe left to delete','\\u00d7 Delete','Nothing is marked for deletion.','Going to Trash changed in another tab','still marked for deletion.'])assert.equal(source.includes(phrase),true,phrase);
+ for(const phrase of ['Swipe left to delete','\\u00d7 Delete','\\u2190 Delete','for deletion','Mark for deletion','Keep/Delete','REMOVE'])assert.equal(source.includes(phrase),false,phrase);
+ for(const phrase of ['Swipe left to trash','\\u2190 Trash','Mark for Trash','Nothing is marked for Trash.','Going to Trash changed in another tab','still marked for Trash.'])assert.equal(source.includes(phrase),true,phrase);
 });

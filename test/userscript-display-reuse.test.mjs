@@ -13,7 +13,7 @@ const displaySource=source.slice(source.indexOf(' async function display(item,')
 function fixture(reuse){
  const item={mediaKey:'next',name:'Next',type:reuse==='video'?'video':'photo',thumbUrl:'https://fixture.invalid/next'};
  const created=[],refreshes=[],played=[],cleared=[];
- const element=tag=>({tag,style:{},dataset:{},complete:true,naturalWidth:640,hidden:false,src:item.thumbUrl,readyState:2,duration:60,currentTime:0,listeners:{},addEventListener(type,listener){(this.listeners[type]??=[]).push(listener);},setAttribute(){},pause(){this.paused=true;},removeAttribute(name){delete this[name];},load(){this.loads=(this.loads||0)+1;},play(){played.push(this);return Promise.resolve();}});
+ const element=tag=>({tag,style:{},dataset:{},children:[],append(...nodes){this.children.push(...nodes);},complete:true,naturalWidth:640,hidden:false,src:item.thumbUrl,readyState:2,duration:60,currentTime:0,listeners:{},addEventListener(type,listener){(this.listeners[type]??=[]).push(listener);},setAttribute(){},pause(){this.paused=true;},removeAttribute(name){delete this[name];},load(){this.loads=(this.loads||0)+1;},play(){played.push(this);return Promise.resolve();}});
  const broken=element('img');broken.naturalWidth=0;broken.dataset.key=item.mediaKey;
  const ready=element(item.type==='video'?'video':'img');
  let assignments=0;Object.defineProperty(ready,'src',{configurable:true,get:()=>item.thumbUrl,set:()=>{assignments++;}});
