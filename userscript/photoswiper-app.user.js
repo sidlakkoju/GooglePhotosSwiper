@@ -2520,7 +2520,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 .settings-sheet .group>h2{margin:2px 4px}
 .settings-sheet .group>p,.settings-sheet .group>details,.settings-sheet .group>label{padding-left:4px;padding-right:4px;box-sizing:border-box}
 .settings-sheet .group>label{justify-content:flex-start}
-@media (min-width:601px){
+@media (min-width:601px) and (min-height:521px){
 .content{border-radius:36px}
 .content>header:first-child{height:56px}
 .settings-sheet,.review-panel{border-radius:36px}
