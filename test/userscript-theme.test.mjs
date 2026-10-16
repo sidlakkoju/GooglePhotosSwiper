@@ -112,11 +112,10 @@ test('the hidden video spinner does not animate while idle',()=>{
 });
 
 test('touch devices tint, rather than re-blur, glass that only ever sits over the pre-blurred ambient',()=>{
- for(const [name,value] of Object.entries({regular:'saturate(160%)',thick:'saturate(140%)'}))assert.ok(light.includes(`--ps-tint-${name}:${value};`),name);
+ assert.ok(light.includes('--ps-tint-regular:saturate(160%);'));
  const touch=glassBlock('@supports').match(/@media \(pointer:coarse\)\{([\s\S]*)\}\s*\}$/)[1];
  assert.match(touch,/\.content \.actions\{backdrop-filter:var\(--ps-tint-regular\);-webkit-backdrop-filter:var\(--ps-tint-regular\)\}/);
- assert.match(touch,/\.settings-sheet,\.review-panel\{backdrop-filter:var\(--ps-tint-thick\);-webkit-backdrop-filter:var\(--ps-tint-thick\)\}/);
- assert.doesNotMatch(touch,/order-menu|share-sheet|pair-onboarding|settings-header|trash-preview|trash-done/,'surfaces that can sit over a photo or scrolling content keep their blur');
+ assert.doesNotMatch(touch,/order-menu|share-sheet|pair-onboarding|settings-sheet|settings-header|review-panel|trash-preview|trash-done/,'surfaces that can sit over a photo or scrolling content keep their blur');
  assert.ok(glass.indexOf('@media (pointer:coarse)')<glass.indexOf('@media (prefers-reduced-transparency:reduce)'),'reduced transparency still wins');
 });
 

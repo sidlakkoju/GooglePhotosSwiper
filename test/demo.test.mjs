@@ -182,8 +182,8 @@ test('an idle deck schedules no frames and runs no animations, and a top inset k
  const directory=await buildDemo(t);
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
- const open=async query=>{
-  const page=await browser.newPage({viewport:{width:390,height:844}});
+ const open=async(query,colorScheme='light')=>{
+  const page=await browser.newPage({viewport:{width:390,height:844},colorScheme});
   await page.route('**/*',async route=>{
    const url=new URL(route.request().url());
    if(url.hostname!=='demo.test')return route.abort();
@@ -203,4 +203,7 @@ test('an idle deck schedules no frames and runs no animations, and a top inset k
  const inset=await geometry(page);
  assert.ok(inset.header>=50,`header ${inset.header}`);assert.deepEqual(inset.ambient,[0,844]);assert.notEqual(inset.overlay,'rgb(0, 0, 0)');
  for(const query of ['?embed=1&top=500','?embed=1&top=abc','?top=50']){const other=await open(query);assert.ok((await geometry(other)).header<50,query);await other.close();}
+ const appearance=page=>page.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,style=getComputedStyle(root.querySelector('.ambient'));return {bg:getComputedStyle(root.querySelector('.content')).getPropertyValue('--ps-bg').trim(),dim:style.getPropertyValue('--ps-ambient-dim').trim(),scheme:getComputedStyle(root.querySelector('#overlay')).colorScheme};});
+ const dark={bg:'#000',dim:'rgba(0,0,0,.42)',scheme:'dark'},light={bg:'#F2F2F7',dim:'rgba(242,242,247,.5)',scheme:'light'};
+ for(const [query,os,expected] of [['?embed=1&top=50&scheme=dark','light',dark],['?embed=1&scheme=light','dark',light],['?embed=1&scheme=sepia','dark',dark],['?embed=1','light',light]]){const other=await open(query,os);assert.deepEqual(await appearance(other),expected,`${query} on a ${os} OS`);await other.close();}
 });
