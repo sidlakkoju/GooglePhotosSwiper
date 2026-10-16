@@ -671,3 +671,20 @@ test('Trash safety names only the photos another device kept, so the rest of the
  assert.equal(check.safe,false);assert.deepEqual(check.kept,['synthetic-x']);
  assert.deepEqual(await (await api(a,'trash-check','POST',{ids:['synthetic-a','synthetic-b']})).json(),{safe:true,kept:[]});
 });
+
+test('a used, expired or unknown sign-in link shows a readable page with a way back to Google Photos instead of JSON',async()=>{
+ const env={DB:new D1(),GOOGLE_FETCH:fetchKeys},state='w'.repeat(43),target='https://photos.google.com/u/1/?a=1&b="2"';
+ await request(env,'/auth/session',{state,name:'Synthetic browser',platform:'test'});
+ const pending=await env.DB.prepare('SELECT nonce FROM google_pending WHERE state_hash = ?').bind(await hash(state)).first();
+ assert.equal((await googleAuthRequest(new Request(syncOrigin+'/auth/start?state='+state),env)).status,200);
+ await request(env,'/auth/complete',{state,credential:await token(pending.nonce)});
+ for(const [path,back] of [['/auth/start?state='+state+'&return='+encodeURIComponent(target),'https://photos.google.com/u/1/?a=1&#38;b=%222%22'],['/auth/start?state='+'x'.repeat(43),'https://photos.google.com/'],['/auth/return?state='+'x'.repeat(43),'https://photos.google.com/']]){
+  const response=await googleAuthRequest(new Request(syncOrigin+path),env),html=await response.text();
+  assert.equal(response.status,400,path);assert.match(response.headers.get('Content-Type'),/^text\/html/);
+  assert.match(response.headers.get('Content-Security-Policy'),/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'$/);
+  assert.equal(response.headers.get('Cache-Control'),'no-store');
+  assert.match(html,/<h1>This sign-in link has expired<\/h1>/);assert.match(html,/If you just signed in, you’re all set\./);
+  assert.ok(html.includes(`<a href="${back}">Back to Google Photos</a>`),path+' '+html.match(/<a href="[^"]*"/)?.[0]);
+  assert.doesNotMatch(html,/<script/);
+ }
+});
