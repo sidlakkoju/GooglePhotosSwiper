@@ -580,19 +580,19 @@ test('Trash completion status resets on reload and cached-page restore while est
  };
  const mounted=await mountedReview([item('previous',{decision:'remove',state:'in_trash',spaceTaken:55000}),...candidates],{fetch,confirm:()=>true});
  const ready='';
- assert.match(mounted.nodes.get('stats').textContent,/In Trash: 0.06 MB \(running total\)/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 55 KB \(running total\)/);
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  if(mounted.nodes.get('review-panel').hidden)await mounted.click('review');await mounted.click('move-trash');
  assert.equal(mounted.nodes.get('status').textContent,'Verified 5 items in Trash.');
- assert.match(mounted.nodes.get('stats').textContent,/In Trash: 0.11 MB \(running total\)/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  await mounted.environment.window.listeners.pageshow({persisted:true});
  assert.equal(mounted.nodes.get('status').textContent,ready);
- assert.match(mounted.nodes.get('stats').textContent,/In Trash: 0.11 MB \(running total\)/);
+ assert.match(mounted.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  await mounted.nodes.get('close').onclick();const reloaded=bundleEnvironment();reloaded.environment.window.indexedDB=mounted.environment.window.indexedDB;
  vm.runInNewContext(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8'),reloaded.environment);
  await reloaded.nodes.get('launcher').onclick();
  assert.equal(reloaded.nodes.get('status').textContent,ready);
- assert.match(reloaded.nodes.get('stats').textContent,/In Trash: 0.11 MB \(running total\)/);
+ assert.match(reloaded.nodes.get('stats').textContent,/In Trash: 112 KB \(running total\)/);
  reloaded.nodes.get('review').onclick();assert.equal(reloaded.nodes.get('move-trash').textContent,'Move 0 to Trash');
 });
 test('mounted Trash and deleted-item checks retain all 45 undecided items despite six older dedup matches',async()=>{
@@ -1087,7 +1087,7 @@ test('Going to Trash, stats and captions round sizes like the Freed counter inst
 test('mounted stats distinguish queue savings from the Trash running total',async()=>{
  const mounted=await mountedReview([item('queued',{decision:'remove',spaceTaken:23000}),item('trashed',{decision:'remove',state:'in_trash',spaceTaken:112000})]);
  const stats=mounted.nodes.get('stats').textContent;
- assert.equal(stats,'0 to review · 2/2 reviewed · Going to Trash: 1 (estimated savings: 0.02 MB) · In Trash: 0.11 MB (running total)');
+ assert.equal(stats,'0 to review · 2/2 reviewed · Going to Trash: 1 (estimated savings: 23 KB) · In Trash: 112 KB (running total)');
  assert.equal(stats.match(/estimated savings/g).length,1);
 });
 test('mounted Keep names the decided item after advancing and during candidate inspection',async()=>{
@@ -1119,7 +1119,7 @@ test('filename stays below the card through status changes, decisions and undo',
 
 test('mounted photo and video captions show file size with explicit unknown metadata',async()=>{
  for(const type of ['photo','video']){
-  for(const [size,label] of [[112000,'0.11 MB'],[2500000,'2.50 MB'],[1200000000,'1.20 GB'],[0,'0.00 MB'],[undefined,'Unknown size'],[null,'Unknown size']]){
+  for(const [size,label] of [[112000,'112 KB'],[2500000,'2.50 MB'],[1200000000,'1.20 GB'],[0,'0 KB'],[undefined,'Unknown size'],[null,'Unknown size']]){
    const name=type==='photo'?'sample.jpg':'sample.mp4';
    const mounted=await mountedReview([item('sample',{name,type,size,spaceTaken:1000})],{fetch:async()=>({ok:true,text:async()=>envelope('VrseUb',[['sample'],'https://lh3.googleusercontent.com/synthetic-video'])})});
    assert.equal(mounted.nodes.get('caption').textContent,`${name} · Unknown date · ${label}`);
@@ -2610,7 +2610,7 @@ test('paired wiped database rebuilds synced batch, Undo and storage totals befor
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs'),db=await openReviewDatabase(mounted.environment.window.indexedDB),restored=await db.read(account);
  assert.equal(restored.started,true);assert.equal(restored.items.length,64);assert.equal(restored.items.filter(item=>item.decision).length,10);
  assert.deepEqual(restored.history,history);assert.equal(canUndoReview(restored,history.at(-1)),true);assert.equal(restored.lifetimeFreed,224000);
- assert.match(mounted.nodes.get('stats').textContent,/54 to review · 10\/64 reviewed.*In Trash: 0.11 MB/);
+ assert.match(mounted.nodes.get('stats').textContent,/54 to review · 10\/64 reviewed.*In Trash: 112 KB/);
  assert.match(mounted.nodes.get('undo-preview').textContent,/Next Undo: QA-DUMMY-4/);
  assert.match(mounted.nodes.get('caption').textContent,/^QA-DUMMY-10/);
  assert.equal(mounted.nodes.get('media').querySelector('img').src.includes('synthetic'),true);
@@ -3469,7 +3469,7 @@ test('completed Move to Trash resets the session capsule and new swipes count fr
  const mounted=await mountedReview([item('a',{decision:'remove',dedupKey:'stable-a',size:38.2e6}),item('b',{size:5e6})],{fetch,confirm:()=>true});
  const capsule=mounted.nodes.get('overlay').childNodes[0].childNodes[0].childNodes.find(node=>node.class==='counter storage-counter');
  assert.match(capsule['aria-label'],/^38.2 MB/);
- await mounted.click('move-trash');assert.equal((await mounted.read()).items[0].state,'in_trash');assert.match(capsule['aria-label'],/^0.00 MB/);
+ await mounted.click('move-trash');assert.equal((await mounted.read()).items[0].state,'in_trash');assert.match(capsule['aria-label'],/^0 KB/);
  mounted.nodes.get('review-panel').childNodes[0].childNodes[0].onclick();await mounted.click('remove');assert.match(capsule['aria-label'],/^5.00 MB/);
  await mounted.nodes.get('close').onclick();
 });
@@ -3521,8 +3521,8 @@ for(const scenario of ['partial batch failure','Check deleted items'])test(`comp
  }
  await mounted.click('move-trash');
  assert.ok((await mounted.read()).items.every(item=>item.state==='in_trash'));
- assert.match(capsule['aria-label'],/^0.00 MB/);
- await mounted.click('trash');assert.match(capsule['aria-label'],/^0.00 MB/);
+ assert.match(capsule['aria-label'],/^0 KB/);
+ await mounted.click('trash');assert.match(capsule['aria-label'],/^0 KB/);
  await mounted.nodes.get('close').onclick();
 });
 

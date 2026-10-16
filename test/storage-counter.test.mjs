@@ -26,7 +26,7 @@ test('reset excludes only submitted items and preserves queued items after hydra
  assert.equal(counter.total(items),12e6);
 });
 test('storage formatting follows approved decimal units and precision',()=>{
- assert.equal(formatStorageBytes(0),'0.00 MB');assert.equal(formatStorageBytes(38.2e6),'38.2 MB');assert.equal(formatStorageBytes(500e6),'500 MB');assert.equal(formatStorageBytes(1.24e9),'1.24 GB');
+ assert.equal(formatStorageBytes(0),'0 KB');assert.equal(formatStorageBytes(38.2e6),'38.2 MB');assert.equal(formatStorageBytes(500e6),'500 MB');assert.equal(formatStorageBytes(1.24e9),'1.24 GB');
 });
 
 function counterFixture({reduced=false}={}){
@@ -45,8 +45,8 @@ function counterFixture({reduced=false}={}){
 
 test('the counter shows the formatted total with an accessible label and stays still when unchanged',()=>{
  const {capsule,element,label,value,note,shown}=counterFixture();
- capsule.update(0);assert.equal(shown(),'0.00 MB');assert.equal(label.textContent,'Freed');assert.equal(value.dataset.text,'0.00 MB');
- assert.match(element.attributes['aria-label'],/^0.00 MB approximate storage freed/);assert.equal(element.attributes.role,'img');
+ capsule.update(0);assert.equal(shown(),'0 KB');assert.equal(label.textContent,'Freed');assert.equal(value.dataset.text,'0 KB');
+ assert.match(element.attributes['aria-label'],/^0 KB approximate storage freed/);assert.equal(element.attributes.role,'img');
  capsule.update(0,{animate:true,delta:0});assert.equal(note.classList.contains('sv-go'),false);
 });
 
@@ -69,7 +69,7 @@ test('reset returns to zero at once and reduced motion skips the caption swap',(
  const {capsule,element,note,shown}=counterFixture({reduced:true});
  capsule.update(0);capsule.update(38.2e6,{animate:true,delta:38.2e6});
  assert.equal(shown(),'38.2 MB');assert.equal(note.classList.contains('sv-go'),false);assert.match(element.attributes['aria-label'],/^38.2 MB/);
- capsule.reset();assert.equal(shown(),'0.00 MB');assert.equal(element.classList.contains('sv-noting'),false);assert.match(element.attributes['aria-label'],/^0.00 MB/);
+ capsule.reset();assert.equal(shown(),'0 KB');assert.equal(element.classList.contains('sv-noting'),false);assert.match(element.attributes['aria-label'],/^0 KB/);
 });
 
 test('sizes just under a unit boundary round into the next format instead of showing an extra digit',()=>{
@@ -77,4 +77,10 @@ test('sizes just under a unit boundary round into the next format instead of sho
  assert.equal(formatStorageBytes(99.94e6),'99.9 MB');assert.equal(formatStorageBytes(99.96e6),'100 MB');
  assert.equal(formatStorageBytes(999.4e6),'999 MB');assert.equal(formatStorageBytes(999.5e6),'1.00 GB');assert.equal(formatStorageBytes(999.99e6),'1.00 GB');
  assert.equal(formatStorageBytes(9.996e9),'10.0 GB');assert.equal(formatStorageBytes(99.96e9),'100 GB');
+});
+
+test('sizes under 1 MB show whole KB and roll over to MB and GB only after rounding',()=>{
+ assert.equal(formatStorageBytes(0),'0 KB');assert.equal(formatStorageBytes(20480),'20 KB');assert.equal(formatStorageBytes(499.5e3),'500 KB');
+ assert.equal(formatStorageBytes(999.4e3),'999 KB');assert.equal(formatStorageBytes(999.96e3),'1.00 MB');assert.equal(formatStorageBytes(1e6),'1.00 MB');
+ assert.equal(formatStorageBytes(999.4e6),'999 MB');assert.equal(formatStorageBytes(999.96e6),'1.00 GB');assert.equal(formatStorageBytes(1e9),'1.00 GB');
 });
