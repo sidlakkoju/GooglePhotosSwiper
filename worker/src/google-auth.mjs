@@ -28,6 +28,12 @@ export async function verifyGoogleToken(token,nonce,fetchKeys=fetch){
  if(claims.exp<=Date.now()/1000)throw new InvalidGoogleToken('Invalid token');
  return claims;
 }
+async function expiredPage(returnURL){
+ const style='body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font:18px/1.5 system-ui,sans-serif;color:#202124;background:#f8f9fa}main{max-width:560px;text-align:center}h1{font-size:1.5rem}';
+ const styleHash=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(style)))));
+ const href=(returnURL||'https://photos.google.com/').replace(/[&<>"]/g,character=>`&#${character.charCodeAt(0)};`);
+ return new Response(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Photos Swipe sign-in</title><style>${style}</style></head><body><main><h1>This sign-in link has expired</h1><p>If you just signed in, you’re all set. Otherwise it was already used or is more than 5 minutes old: go back to Google Photos and choose Sign in with Google again.</p><p><a href="${href}">Back to Google Photos</a></p></main></body></html>`,{status:400,headers:{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':`default-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'}});
+}
 export async function googleAuthRequest(request,env){
  const url=new URL(request.url),db=env.DB,now=Math.floor(Date.now()/1000);
  const json=(value,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
@@ -48,7 +54,7 @@ export async function googleAuthRequest(request,env){
  const state=url.searchParams.get('state');
  if(url.pathname==='/auth/return'&&request.method==='GET'){
   const pending=await db.prepare('SELECT return_url,browser_hash FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at >= 0 AND claimed_at IS NULL').bind(await hash(state||''),now).first();
-  if(!pending?.return_url||!await browserMatches(pending))return json({error:'Invalid or expired sign-in'},400);
+  if(!pending?.return_url||!await browserMatches(pending))return expiredPage(pending?.return_url);
   return new Response(null,{status:302,headers:{Location:pending.return_url,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
  }
  if(url.pathname==='/auth/start'&&request.method==='GET'){
@@ -56,7 +62,7 @@ export async function googleAuthRequest(request,env){
   if(url.searchParams.has('return')){
    try{const target=new URL(url.searchParams.get('return'));if(target.origin!=='https://photos.google.com'||target.username||target.password)throw Error();returnURL=target.href;}catch{return json({error:'Invalid return URL'},400);}
   }
-  const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(await hash(state||''),now).first();if(!pending)return json({error:'Invalid state'},400);
+  const pending=await db.prepare('SELECT * FROM google_pending WHERE state_hash = ? AND expires_at > ? AND completed_at IS NULL').bind(await hash(state||''),now).first();if(!pending)return expiredPage(returnURL);
   const secret=random();
   await db.prepare('UPDATE google_pending SET return_url = ?, browser_hash = ? WHERE state_hash = ? AND completed_at IS NULL').bind(returnURL,await hash(secret),await hash(state)).run();
   const script=`google.accounts.id.initialize({client_id:${inlineJSON(googleClientId)},nonce:${inlineJSON(pending.nonce)},login_hint:${inlineJSON(pending.login_hint)},auto_select:false,callback:async result=>{const status=document.getElementById('status');try{const response=await fetch('/auth/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:${inlineJSON(state)},credential:result.credential})});if(!response.ok)throw Error('Sign-in failed. Please return to Google Photos and try again.');status.textContent="You're signed in. Return to Google Photos.";const {code}=await response.json();const message={type:'photos-swipe-google-sign-in',state:${inlineJSON(state)},code};try{const channel=new BroadcastChannel('photos-swipe-google-sign-in');channel.postMessage({type:message.type});channel.close();}catch{}try{window.opener?.postMessage(message,'https://photos.google.com');}catch{}if(${inlineJSON(returnURL)}){const target=new URL(${inlineJSON(returnURL)});const fragment=new URLSearchParams({'photos-swipe-state':message.state,'photos-swipe-code':code,'photos-swipe-return-hash':target.hash.slice(1)});target.hash=fragment.toString();window.location.replace(target.href);return;}try{window.close();}catch{}}catch(error){status.textContent=error.message||'Sign-in failed. Please return to Google Photos and try again.';}}});google.accounts.id.renderButton(document.getElementById('button'),{theme:'outline',size:'large'});`;
