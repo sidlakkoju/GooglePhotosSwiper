@@ -13,3 +13,4 @@ diagrams/**/.grok/
 
 worker/generated/
 *.key
+demo-dist/

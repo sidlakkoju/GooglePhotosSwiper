@@ -958,12 +958,12 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
     media.setAttribute('aria-busy',String(loading));poster.hidden=!loading;media.querySelector('video').hidden=loading;
     const box=bounds(media),front=bounds(top),image=bounds(poster),behind=bounds(under),filename=bounds(caption);
     const playback=Array.from(media.querySelectorAll('[data-video-control]'));
-    const opaque=doc.defaultView.getComputedStyle(top).backgroundColor===background&&doc.defaultView.getComputedStyle(media).backgroundColor===background;
+    const stageClear=doc.defaultView.getComputedStyle(under).opacity==='0'&&doc.defaultView.getComputedStyle(top).backgroundColor==='rgba(0, 0, 0, 0)'&&doc.defaultView.getComputedStyle(media).backgroundColor==='rgba(0, 0, 0, 0)';
     const covered=doc.defaultView.getComputedStyle(top).opacity==='1'&&doc.defaultView.getComputedStyle(top).visibility==='visible'&&front.left<=behind.left&&front.right>=behind.right&&front.top<=behind.top&&front.bottom>=behind.bottom&&doc.defaultView.getComputedStyle(top).zIndex>doc.defaultView.getComputedStyle(under).zIndex;
     const captionVisible=caption.parentElement===content&&filename.height>0&&(filename.top>=bounds(root.getElementById('card')).bottom&&filename.bottom<=bounds(root.getElementById('remove')).top||filename.left>=bounds(root.getElementById('card')).right)&&filename.left>=modal.left&&filename.right<=modal.right&&doc.defaultView.getComputedStyle(caption).visibility==='visible';
     const mediaAboveControls=playback.filter(button=>!button.hidden).every(button=>bounds(loading?poster:media.querySelector('video')).bottom<=bounds(button).top);
     const clearOfControls=playback.every(button=>{const control=bounds(button);return control.left>=box.left&&control.right<=box.right&&(control.bottom<=filename.top||control.right<=filename.left||control.top>=filename.bottom);});
-    videoChecks.push({expanded,captionHidden:doc.defaultView.getComputedStyle(caption).display==='none',loading,background,opaque,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
+    videoChecks.push({expanded,captionHidden:doc.defaultView.getComputedStyle(caption).display==='none',loading,background,stageClear,covered,captionVisible,clearOfControls,mediaAboveControls,posterFits:!loading||(image.left>=box.left&&image.right<=box.right&&image.top>=box.top&&image.bottom<=box.bottom&&doc.defaultView.getComputedStyle(poster).objectFit==='contain')});
    }
    sheet.hidden=false;
    const controls=['filter'].map(id=>root.getElementById(id));
@@ -983,7 +983,7 @@ test('centered shell and loading video cards fit desktop and phone viewports in 
   assert.equal(result.status,0,result.stderr);
   const measurements=JSON.parse(result.stdout.match(/<pre>(.*?)<\/pre>/s)?.[1]||'null');assert.equal(measurements?.length,6,result.stdout);
   for(const measurement of measurements){
-   for(const check of measurement.videoChecks)for(const key of check.expanded?['opaque','covered','captionHidden','mediaAboveControls','posterFits']:['opaque','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
+   for(const check of measurement.videoChecks)for(const key of check.expanded?['stageClear','covered','captionHidden','mediaAboveControls','posterFits']:['stageClear','covered','captionVisible','clearOfControls','mediaAboveControls','posterFits'])assert.equal(check[key],true,JSON.stringify({width:measurement.width,...check}));
    for(const field of measurement.syncFields)for(const key of ['absent'])assert.equal(field[key],true,JSON.stringify({width:measurement.width,...field}));
    for(const key of ['modalFits','backdropFits','controlsFit','orderRemoved'])assert.equal(measurement[key],true,JSON.stringify(measurement));
    assert.equal(measurement.modalWidth,measurement.width>=900&&measurement.height>=700?Math.min(2560,measurement.width-48):Math.min(440,measurement.width),JSON.stringify(measurement));

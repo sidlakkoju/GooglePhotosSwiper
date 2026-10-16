@@ -57,3 +57,46 @@ test('compacted rules preserve control, caption, queue and decision styling',()=
  assert.match(css,/\.card.expanded \.media\{height:72vh;/);
  assert.doesNotMatch(css,/overflow:hidden;position:relative|\.album-controls\{background:|\.queue span\{font:/);
 });
+
+const glass=source.match(/glassStyle\.textContent=`([^`]*)`/)[1];
+const glassBlock=(start)=>{const from=glass.indexOf(start);let depth=0;for(let index=glass.indexOf('{',from);index<glass.length;index++){if(glass[index]==='{')depth++;if(glass[index]==='}'&&!--depth)return glass.slice(from,index+1);}return '';};
+
+test('liquid glass materials, tints and photo chips are tokenized for both appearances',()=>{
+ for(const name of ['glass-fill','glass-fill-strong','glass-stroke','glass-shadow','glass-tint-blue','glass-tint-red','glass-solid','glass-scrim','photo-chip','photo-label','ambient-dim'])for(const theme of [light,dark])assert.match(theme,new RegExp(`--ps-${name}:`),name);
+ for(const [name,value] of Object.entries({clear:'blur(6px) saturate(180%)',regular:'blur(20px) saturate(160%)',thick:'blur(40px) saturate(140%)'}))assert.ok(light.includes(`--ps-blur-${name}:${value};`),name);
+ assert.ok(dark.includes('--ps-glass-fill:rgba(255,255,255,.07);')&&dark.includes('--ps-glass-fill-strong:rgba(255,255,255,.14);')&&dark.includes('--ps-glass-stroke:rgba(255,255,255,.22);'));
+ assert.ok(dark.includes('--ps-glass-tint-blue:rgba(10,132,255,.62);')&&dark.includes('--ps-glass-tint-red:rgba(255,69,58,.58);'));
+ assert.match(light,/--ps-glass-fill:rgba\(255,255,255,\.55\);.*--ps-photo-label:#000;/);
+ assert.doesNotMatch(glass,/#(?:[\da-f]{3,8})\b|\brgba?\(|\b(?:white|black)\b/i,'glass rules use tokens only');
+});
+
+test('the page behind the overlay is no longer blurred; an ambient copy of the photo replaces it',()=>{
+ assert.doesNotMatch(source,/blur\(12px\)|rgba\(0,0,0,\.55\);backdrop-filter/);
+ assert.match(source,/\.overlay\{scrollbar-gutter:auto;display:flex;align-items:center;justify-content:center;background:var\(--ps-bg\)/);
+ assert.match(glass,/\.ambient\{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none/);
+ assert.doesNotMatch(glassBlock('.ambient canvas{'),/filter/,'the ambient layer is a pre-blurred tiny canvas, never a filtered full-size image');
+ assert.match(source,/mediaURL\(item\.thumbUrl,false,\{width:64,height:64\}\)/);
+});
+
+test('blurred glass keeps an opaque fallback and a reduced-transparency fallback',()=>{
+ const supported=glass.indexOf('@supports');
+ assert.ok(supported>0);
+ for(const selector of ['.content .actions{','.content .storage-counter{','.share-sheet{'])assert.match(glass.slice(0,supported),new RegExp(selector.replace(/[.{]/g,character=>'\\'+character)+'[^}]*background:var\\(--ps-glass-solid\\)'),selector);
+ const glassy=glassBlock('@supports');
+ assert.match(glassy,/backdrop-filter:var\(--ps-blur-regular\);-webkit-backdrop-filter:var\(--ps-blur-regular\)/);
+ assert.match(glassy,/backdrop-filter:var\(--ps-blur-thick\);-webkit-backdrop-filter:var\(--ps-blur-thick\)/);
+ assert.doesNotMatch(glass.slice(0,supported),/backdrop-filter:var/,'blur only applies where it is supported');
+ const reduced=glassBlock('@media (prefers-reduced-transparency:reduce)');
+ assert.match(reduced,/\.content \.actions,[^{]*\{background:var\(--ps-glass-solid\);backdrop-filter:none;-webkit-backdrop-filter:none\}/);
+ assert.match(glassBlock('@media (prefers-reduced-motion:reduce)'),/\.ambient canvas\{transition:none\}/);
+});
+
+test('the dragged card and the dock buttons never get their own backdrop blur',()=>{
+ const glassy=glassBlock('@supports');
+ assert.doesNotMatch(glassy,/top-card|#card|\.media|memory-label|card-tool|#enlarge|#remove|#keep|#undo|trash-check/);
+ for(const selector of ['.memory-label{','.card-tool,#enlarge{'])assert.match(glassBlock(selector),/backdrop-filter:none;-webkit-backdrop-filter:none/,selector);
+ assert.match(glass,/\.actions #keep\{background:var\(--ps-glass-tint-blue\)/);
+ assert.match(glass,/\.actions #remove\{background:var\(--ps-glass-fill-strong\);color:var\(--ps-destructive\)\}/);
+ assert.match(glass,/\.trash-bar #move-trash,\.trash-bar \.preview-trash\{background:var\(--ps-glass-tint-red\)/);
+ assert.match(glass,/#card>\.under-card\{opacity:0\}\n#card:has\(>\.top-card\[style\*="will-change"\]\)>\.under-card\{opacity:1\}/);
+});

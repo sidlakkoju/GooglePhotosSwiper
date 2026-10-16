@@ -67,7 +67,7 @@ test('buffer and display share an exact synthetic preview URL and reuse without 
  const {readFile}=await import('node:fs/promises');
  const ui=await readFile(new URL('../lib/userscript-ui.mjs',import.meta.url),'utf8');
  const {runInNewContext}=await import('node:vm');
- const context={cardPreviewURL,previewURL,createPreloadBuffer,URL,AbortController,smallBuffer:true,location:{pathname:'/u/2/'},$:()=>({getBoundingClientRect:()=>({width:359.5,height:480.2})}),window:{devicePixelRatio:3,navigator:{userAgent:'iPhone'}}};
+ const context={demo:null,cardPreviewURL,previewURL,createPreloadBuffer,URL,AbortController,smallBuffer:true,location:{pathname:'/u/2/'},$:()=>({getBoundingClientRect:()=>({width:359.5,height:480.2})}),window:{devicePixelRatio:3,navigator:{userAgent:'iPhone'}}};
  const urlFunctions=ui.slice(ui.indexOf(' function mediaURL('),ui.indexOf(' const preloader='))+ui.slice(ui.indexOf(' function previewSource('),ui.indexOf(' function preloadReview('));
  runInNewContext(urlFunctions,context);
  const previewSource=context.previewSource;
