@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openReviewDatabase,CHUNK_SIZE} from '../lib/userscript-db.mjs';
 
-function recordingIndexedDB(){
+function recordingIndexedDB(putError=()=>null){
  const stores=new Map(),log=[];
  const database={
   objectStoreNames:{contains:name=>stores.has(name)},
@@ -12,7 +12,7 @@ function recordingIndexedDB(){
    const settle=()=>queueMicrotask(()=>{if(pending||aborted||done)return;done=true;stores.set(name,staged);log.push(...writes);tx.oncomplete?.();});
    const tx={objectStore:()=>({
     get(key){const request={};pending++;queueMicrotask(()=>{request.result=structuredClone(staged.get(key));request.onsuccess?.();pending--;settle();});return request;},
-    put(value,key){staged.set(key,structuredClone(value));writes.push(['put',name,key]);},
+    put(value,key){const error=putError();if(error)throw error;staged.set(key,structuredClone(value));writes.push(['put',name,key]);},
     delete(key){staged.delete(key);writes.push(['delete',name,key]);}
    }),abort(){aborted=true;queueMicrotask(()=>tx.onabort?.());}};
    return tx;
@@ -91,4 +91,15 @@ test('blocked browser storage gives one clear message, while a newer database ve
  await assert.rejects(openReviewDatabase(failing(new DOMException('The user denied permission to access the database.','SecurityError'))),message);
  const newer=new DOMException('The requested version (2) is less than the existing version (3).','VersionError');
  await assert.rejects(openReviewDatabase(failing(newer)),error=>error===newer);
+});
+
+test('a save that fails because browser storage is full says so clearly, and saving works again once there is space',async()=>{
+ let full=false;const {indexedDB}=recordingIndexedDB(()=>full?new DOMException('The quota has been exceeded.','QuotaExceededError'):null);
+ const db=await openReviewDatabase(indexedDB),items=[item(0),item(1)];
+ const first=await db.save('account',{revision:0,history:[],items});
+ full=true;
+ await assert.rejects(db.save('account',{...first,items:items.map((row,index)=>index?row:{...row,decision:'remove',revision:1})}),/^Error: Photos Swipe couldn’t save: this browser’s storage is full\. Free up space and try again\.$/);
+ full=false;
+ const saved=await db.save('account',{...first,items:items.map((row,index)=>index?row:{...row,decision:'remove',revision:1})});
+ assert.equal((await db.read('account')).items[0].decision,'remove');assert.equal(saved.items[0].decision,'remove');
 });
