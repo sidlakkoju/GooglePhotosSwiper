@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.155
+// @version 1.2.156
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -404,6 +404,7 @@ async function createLeaseOwner(window,crypto) {
  handoff=owner;
  return owner;
 }
+const storageError=error=>error?.name==='QuotaExceededError'?Error('Photos Swipe couldn\u2019t save: this browser\u2019s storage is full. Free up space and try again.'):error||Error('Local storage transaction failed.');
 async function openReviewDatabase(indexedDB) {
  const unavailable=()=>Error('Photos Swipe can\u2019t use storage in this browser. Use a normal window or allow site data for photos.google.com, then reload.');
  const db=await new Promise((resolve,reject)=>{
@@ -423,7 +424,7 @@ async function openReviewDatabase(indexedDB) {
     try {result=change?change(request.result):request.result;if(change){if(result===undefined)table.delete(key);else table.put(result,key)};}catch(error){failure=error;tx.abort();}
    };
    tx.oncomplete=()=>resolve(result);
-   tx.onabort=()=>reject(failure||tx.error||Error('Local storage transaction failed.'));
+   tx.onabort=()=>reject(storageError(failure||tx.error));
    tx.onerror=()=>{};
   });
  }
@@ -432,7 +433,7 @@ async function openReviewDatabase(indexedDB) {
    const tx=db.transaction('settings','readonly'),table=tx.objectStore('settings'),request=table.get(`resume:${account}`);let result={};
    request.onsuccess=()=>{result=request.result||{};if(!result.flashbacks?.split)return;const lists=table.get(`resume-lists:${account}`);lists.onsuccess=()=>{const {split:_split,...flashbacks}=result.flashbacks;result={...result,flashbacks:{...flashbacks,...(lists.result||{})}};resumeLists.set(account,lists.result||null);};};
    tx.oncomplete=()=>resolve(result);
-   tx.onabort=()=>reject(tx.error||Error('Local storage transaction failed.'));
+   tx.onabort=()=>reject(storageError(tx.error));
    tx.onerror=()=>{};
   }),
   saveResume:(account,value)=>new Promise((resolve,reject)=>{
@@ -441,7 +442,7 @@ async function openReviewDatabase(indexedDB) {
    const request=table.get(`resume:${account}`);
    request.onsuccess=()=>{table.put(flashbacks?{...value,flashbacks:{...flashbacks,keys:undefined,starts:undefined,split:true}}:value,`resume:${account}`);if(changed)table.put(lists,`resume-lists:${account}`);};
    tx.oncomplete=()=>{if(changed)resumeLists.set(account,lists);resolve(value);};
-   tx.onabort=()=>reject(tx.error||Error('Local storage transaction failed.'));
+   tx.onabort=()=>reject(storageError(tx.error));
    tx.onerror=()=>{};
   }),
   settings:async()=>await transaction('settings','sync')||{},
@@ -461,7 +462,7 @@ async function openReviewDatabase(indexedDB) {
     const legacy=table.get(account);legacy.onsuccess=()=>{result=legacy.result||emptyReview();loaded.delete(account);if(legacy.result)legacyAccounts.add(account);};
    };
    tx.oncomplete=()=>resolve(result);
-   tx.onabort=()=>reject(tx.error||Error('Local storage transaction failed.'));
+   tx.onabort=()=>reject(storageError(tx.error));
    tx.onerror=()=>{};
   }),
   save:(account,state)=>new Promise((resolve,reject)=>{
@@ -481,7 +482,7 @@ async function openReviewDatabase(indexedDB) {
    }catch(error){failure=error;tx.abort();}};
    request.onsuccess=()=>{if(Number.isSafeInteger(request.result)){commit(request.result);return;}const meta=table.get(metaKey(account));meta.onsuccess=()=>{if(meta.result){commit(meta.result.revision);return;}const full=table.get(account);full.onsuccess=()=>commit(full.result?.revision);};};
    tx.oncomplete=()=>{loaded.set(account,written);legacyAccounts.delete(account);resolve(result);};
-   tx.onabort=()=>reject(failure||tx.error||Error('Local storage transaction failed.'));
+   tx.onabort=()=>reject(storageError(failure||tx.error));
    tx.onerror=()=>{};
   }),
   readLease:account=>transaction('leases',account),
@@ -2495,7 +2496,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for delet
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.155":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.156":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
