@@ -84,7 +84,7 @@ test('a resume saved by an older release keeps its inline Flashbacks lists',asyn
 });
 
 test('blocked browser storage gives one clear message, while a newer database version keeps its own error',async()=>{
- const message=/^Error: Photos Swipe couldn’t open its storage in this browser\. Use a normal window or allow site data for photos\.google\.com, then reload\.$/;
+ const message=/^Error: Photos Swipe can’t use storage in this browser\. Use a normal window or allow site data for photos\.google\.com, then reload\.$/;
  const failing=error=>({open(){const request={};queueMicrotask(()=>{request.error=error;request.onerror?.();});return request;}});
  await assert.rejects(openReviewDatabase(undefined),message);
  await assert.rejects(openReviewDatabase({open(){throw new DOMException('A mutation operation was attempted on a database that did not allow mutations.','InvalidStateError');}}),message);
