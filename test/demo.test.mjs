@@ -138,3 +138,41 @@ test('the userscript still refuses to mount off photos.google.com unless the env
  const source=await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8');
  assert.doesNotMatch(source.slice(source.indexOf('const environment={version')),/demo/);
 });
+
+test('Settings shows review stats and charts with text alternatives, and no media IDs',{timeout:60000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ for(const [width,height,colorScheme] of [[390,844,'dark'],[1440,900,'light']]){
+  const page=await browser.newPage({viewport:{width,height},colorScheme});
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.hostname!=='demo.test')return route.abort();const path=url.pathname.slice(1)||'index.html';try{return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}});
+  await page.goto('https://demo.test/');
+  const shadow=code=>page.evaluate(source=>Function('const root=document.getElementById("photos-swipe-userscript-host").shadowRoot;const q=s=>root.querySelector(s);'+source)(),code);
+  await page.waitForFunction(()=>/^14 to review/.test(document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('stats')?.textContent||''),null,{timeout:15000});
+  assert.equal(await shadow(`return q('#stats-body').childElementCount;`),0);
+  const read=()=>shadow(`const group=q('#stats-group'),tiles=[...q('#stats-tiles').children].map(tile=>tile.getBoundingClientRect());return {text:group.innerText,all:group.textContent,heading:group.querySelector('h2').textContent,tiles:[...q('#stats-tiles').children].map(tile=>tile.querySelector('.stats-value').textContent),rows:new Set(tiles.map(rect=>Math.round(rect.top))).size,plots:[...group.querySelectorAll('svg.stats-plot')].map(svg=>({role:svg.getAttribute('role'),label:svg.getAttribute('aria-label'),width:svg.getBoundingClientRect().width,bars:svg.querySelectorAll('.stats-keep,.stats-trash').length})),tables:group.querySelectorAll('table.stats-sr').length,legacy:!!(q('#history-details')||q('#history-list')||q('#lifetime-freed')),groups:[...root.querySelectorAll('#settings-sheet .group h2')].map(h=>h.textContent),today:[...[...group.querySelectorAll('#stats-reviews table tr')].at(-1).children].map(cell=>cell.textContent)};`);
+  await shadow(`q('#settings').click();`);await page.waitForTimeout(400);
+  const before=await read();
+  assert.equal(before.heading,'Stats');assert.equal(before.legacy,false);
+  assert.ok(!before.groups.includes('History')&&!before.groups.includes('Lifetime freed'));
+  assert.match(before.text,/Reviewed[\s\S]*Kept vs Trash[\s\S]*Storage freed[\s\S]*Going to Trash[\s\S]*Reviews per day[\s\S]*Storage/);
+  assert.doesNotMatch(before.all,/AF1Qip|demo-past|IMG_\d|→|Unavailable for Undo|ID:/);
+  assert.equal(before.rows,width<600?2:1);
+  assert.equal(before.plots.length,2);assert.equal(before.tables,2);
+  for(const plot of before.plots){assert.equal(plot.role,'img');assert.match(plot.label,/last 30 days/);assert.ok(plot.width>200);}
+  assert.ok(before.plots[0].bars>10,'the demo shows past activity on first open');
+  assert.ok(Number(before.tiles[0])>=100);assert.equal(before.tiles[3],'0');
+  await shadow(`q('.settings-header button').click();`);await page.waitForTimeout(200);
+  for(let index=0;index<2;index++){await shadow(`q('#remove').click();`);await page.waitForTimeout(200);}
+  await shadow(`q('#keep').click();`);await page.waitForTimeout(200);
+  assert.equal(await shadow(`return q('#stats-tiles .stats-value').textContent;`),before.tiles[0],'swipes do not rebuild the hidden stats');
+  await shadow(`q('#settings').click();`);await page.waitForTimeout(400);
+  const after=await read();
+  assert.equal(Number(after.tiles[0]),Number(before.tiles[0])+3);assert.equal(after.tiles[3],'2');
+  assert.deepEqual(after.today.slice(1),['1','2']);
+  assert.deepEqual(errors,[]);
+  await page.close();
+ }
+});
