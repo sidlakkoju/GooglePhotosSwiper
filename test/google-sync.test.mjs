@@ -686,6 +686,7 @@ test('a used, expired or unknown sign-in link shows a readable page with a way b
   assert.match(html,/<h1>This sign-in link has expired<\/h1>/);assert.match(html,/If you just signed in, you’re all set\./);
   assert.ok(html.includes(`<a href="${back}">Back to Google Photos</a>`),path+' '+html.match(/<a href="[^"]*"/)?.[0]);
   assert.doesNotMatch(html,/<script/);
+  assert.match(html,/<meta name="color-scheme" content="light dark">/);assert.match(html,/@media\(prefers-color-scheme:dark\)\{body\{color:#e8eaed;background:#202124\}/);
  }
 });
 

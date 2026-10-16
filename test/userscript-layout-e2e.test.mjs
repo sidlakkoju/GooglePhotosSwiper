@@ -561,10 +561,19 @@ test('the end-of-library message counts every page of a multi-page library, not 
  assert.match(result.status,/^151 new items to review · 151 library rows checked · End of library/);
 });
 
-test('when Photos Swipe cannot open, the card explains why and offers an enabled Retry instead of a dead Load library, without repeating the reason in the status line',async t=>{
+test('when Photos Swipe cannot open, the card explains why and offers an enabled Retry instead of a dead Load library, without repeating the reason in the status line, with focus on Retry',async t=>{
  const page=await mount(t,{width:1280,height:900,items:[item(1)],init:()=>{delete window.WIZ_global_data.SNlM0e;delete window.WIZ_global_data.oPEP7c;}});if(!page)return;
- const result=await measure(page,`const action=q('.empty-action');return {card:q('.empty-deck')?.innerText.replace(/\\s+/g,' '),disabled:action?.disabled,label:action?.textContent,status:q('#status').textContent};`);
+ const result=await measure(page,`const action=q('.empty-action');return {card:q('.empty-deck')?.innerText.replace(/\\s+/g,' '),disabled:action?.disabled,label:action?.textContent,status:q('#status').textContent,focused:root.activeElement?.id};`);
  assert.match(result.card,/^Couldn’t load your library \S.+ Retry$/);assert.doesNotMatch(result.card,/Ready when you are/);
  assert.equal(result.label,'Retry');assert.equal(result.disabled,false);
  assert.equal(result.status,'','the card already shows the reason, so the one-line status stays empty');
+ assert.equal(result.focused,'retry','keyboard focus moves to Retry');
+});
+
+for(const [width,height] of [[844,390],[320,568]])test(`the storage-full error fits the one-line status at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,items:[item(1)]});if(!page)return;
+ const {readFile:read}=await import('node:fs/promises');
+ const text=(await read(new URL('../lib/userscript-db.mjs',import.meta.url),'utf8')).match(/QuotaExceededError'\?Error\('([^']+)'\)/)[1];
+ const fit=await measure(page,`const status=q('#status');status.textContent=${JSON.stringify(text)};return {scroll:status.scrollWidth,client:status.clientWidth};`);
+ assert.ok(fit.scroll<=fit.client+1,`${text} needs ${fit.scroll}px, has ${fit.client}px`);
 });

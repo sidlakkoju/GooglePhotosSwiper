@@ -98,7 +98,7 @@ test('a save that fails because browser storage is full says so clearly, and sav
  const db=await openReviewDatabase(indexedDB),items=[item(0),item(1)];
  const first=await db.save('account',{revision:0,history:[],items});
  full=true;
- await assert.rejects(db.save('account',{...first,items:items.map((row,index)=>index?row:{...row,decision:'remove',revision:1})}),/^Error: Photos Swipe couldn’t save: this browser’s storage is full\. Free up space and try again\.$/);
+ await assert.rejects(db.save('account',{...first,items:items.map((row,index)=>index?row:{...row,decision:'remove',revision:1})}),/^Error: Couldn’t save: storage full\. Free up space\.$/);
  full=false;
  const saved=await db.save('account',{...first,items:items.map((row,index)=>index?row:{...row,decision:'remove',revision:1})});
  assert.equal((await db.read('account')).items[0].decision,'remove');assert.equal(saved.items[0].decision,'remove');
