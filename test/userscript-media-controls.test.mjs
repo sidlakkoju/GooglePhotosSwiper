@@ -73,3 +73,11 @@ for(const path of ['quality swap','fallback'])test(`${path} rebuilds the mute la
  displayed.muted=false;displayed.listeners.volumechange();assert.equal(mute.textContent,'Mute');
  displayed.muted=true;displayed.listeners.volumechange();assert.equal(mute.textContent,'Unmute');
 });
+
+test('the Mute button sets the sound choice for later videos in this session',()=>{
+ const f=fixture();f.context.addVideoControls(f.video);
+ const mute=f.buttons[1];
+ f.click(mute);assert.equal(f.context.soundOn,true);
+ f.click(mute);assert.equal(f.context.soundOn,false);
+ f.video.muted=false;f.video.listeners.volumechange?.();assert.equal(f.context.soundOn,false,'a muted change that is not a button press leaves the choice alone');
+});
