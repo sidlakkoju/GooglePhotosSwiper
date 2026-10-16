@@ -36,3 +36,14 @@ Measured on 2026-10-14 by replaying swipes headlessly against a real 33,909-item
 | JS heap after 40 swipes | 48 MB, flat | 48 MB, flat |
 
 `test/flashbacks-order.test.mjs` guards a 30,000-item first build spread over thousands of memories, and `test/userscript-db-chunks.test.mjs` checks that a decision rewrites only its chunk.
+
+## Safari and iPhone
+
+Measured on 2026-10-15 in Playwright WebKit (iPhone-sized 440x956 at 3x, and 1440x900) against the demo build, and checked by eye in the iOS Simulator.
+
+- The video spinner's infinite rotation is paused unless a video is loading. Before, it ran forever on the hidden spinner, which kept the compositor ticking at 60 fps on an idle deck.
+- The next card shows under a drag through a `peek` class set once per gesture. It used to be `:has(>.top-card[style*="will-change"])`, which made WebKit re-check a `:has()` rule on every inline style write during a drag. `will-change` is also written once per gesture instead of every frame.
+- On touch devices (`pointer:coarse`), glass that only ever sits over the ambient backdrop (header buttons, Freed counter, caption, order switcher, Going to Trash pill and swipe dock) uses `saturate()` without `blur()`. The ambient is already a blurred 48px canvas, so the blur pass is invisible: iOS Simulator screenshots of the deck differ by 0.28/255 on average. Everything that can sit over a photo or scrolling content keeps its blur, including the Settings and Going to Trash sheets: iOS 17 Safari leaves the deck visible behind them. Desktop keeps every blur.
+- The ambient image is decoded before it is drawn, and its crossfade waits for the fly-off to finish so the two don't animate together. The next-card preview decodes off the main thread before a drag reveals it.
+
+`test/demo.test.mjs` asserts that an idle deck requests no animation frames and runs no animations, and `test/userscript-theme.test.mjs` keeps per-frame inline styles out of `:has()` selectors.

@@ -30,6 +30,8 @@ Load the page in an `<iframe>` so its media queries follow the frame's own size:
 | | |
 | --- | --- |
 | `?embed=1` | Same UI, tuned for an embed: the built-in first-run coach is hidden (the page shows its own) and nothing grabs focus or scrolls the parent page on load. |
+| `?embed=1&top=50` | Top safe-area inset in CSS px (0 to 100; anything else is ignored, and it only applies with `embed=1`). The ambient photo backdrop still fills the whole frame, but the header, sheets and Going to Trash start below the inset, so a parent that draws its own transparent status bar (time, island, icons) over the top of the iframe doesn't cover any controls. It sets `--ps-safe-top` on the shadow host, the variable every top inset in the app reads. |
+| `&scheme=dark` or `&scheme=light` | Forces the UI's appearance whatever the visitor's OS setting, including the ambient backdrop dim and fade. It sets `data-scheme` on the shadow host, which overrides the `prefers-color-scheme` tokens. Any other value is ignored. The personal site uses `?embed=1&top=50&scheme=dark`, because its phone frame draws white status-bar glyphs. |
 | Demo → parent | `{type:'photos-swipe-demo', event:'ready'}` once the deck has opened. |
 | Demo → parent | `{type:'photos-swipe-demo', event:'first-swipe'}` after the first keep or delete, so the parent can hide its coach mark. Sent once per page load. |
 | Parent → demo | `{type:'photos-swipe-demo', command:'reset'}` reloads the demo with a fresh deck. Only messages from the parent window are accepted. |

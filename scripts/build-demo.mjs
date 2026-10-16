@@ -13,7 +13,7 @@ const stillStart=swipeSource.indexOf('export function stillClonedVideos(');
 if(stillStart<0)throw Error('stillClonedVideos missing from lib/swipe.mjs');
 sources.unshift(swipeSource.slice(stillStart,swipeSource.indexOf('\n}\n',stillStart)+3));
 const bundled=sources.map(source=>source.replace(/^import .*;\n/gm,'').replace(/^export /gm,'')).join('\n').replace(/[^\x00-\x7f]/g,character=>`\\u${character.charCodeAt(0).toString(16).padStart(4,'0')}`);
-const script=`(function () {\n'use strict';\n${bundled}\nconst params=new URLSearchParams(location.search);\nconst embed=params.get('embed')==='1';\nif(embed)document.documentElement.dataset.embed='1';\nmountPhotosSwipe(createDemoEnvironment({window,document,location,base:new URL('media/',document.baseURI).href,embed,version:${JSON.stringify(version)}}));\n})();\n`;
+const script=`(function () {\n'use strict';\n${bundled}\nconst params=new URLSearchParams(location.search);\nconst embed=params.get('embed')==='1';\nif(embed)document.documentElement.dataset.embed='1';\nmountPhotosSwipe(createDemoEnvironment({window,document,location,base:new URL('media/',document.baseURI).href,embed,top:params.get('top'),scheme:params.get('scheme'),version:${JSON.stringify(version)}}));\n})();\n`;
 const html=`<!doctype html>
 <html lang="en">
 <head>

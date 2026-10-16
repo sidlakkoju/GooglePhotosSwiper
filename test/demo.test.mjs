@@ -176,3 +176,34 @@ test('Settings shows review stats and charts with text alternatives, and no medi
   await page.close();
  }
 });
+
+test('an idle deck schedules no frames and runs no animations, and a top inset keeps the header clear of the site status bar',{timeout:60000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ const open=async(query,colorScheme='light')=>{
+  const page=await browser.newPage({viewport:{width:390,height:844},colorScheme});
+  await page.route('**/*',async route=>{
+   const url=new URL(route.request().url());
+   if(url.hostname!=='demo.test')return route.abort();
+   const path=url.pathname.replace(/^\/photos-swipe\/demo\//,'')||'index.html';
+   try{return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}
+  });
+  await page.addInitScript(()=>{window.frameRequests=0;const request=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=callback=>{window.frameRequests++;return request(callback);};});
+  await page.goto(`https://demo.test/photos-swipe/demo/${query}`);
+  await page.waitForFunction(()=>{const image=document.getElementById('photos-swipe-userscript-host')?.shadowRoot.querySelector('#media img');return !!image&&image.complete&&!image.hidden;},null,{timeout:15000});
+  return page;
+ };
+ const geometry=page=>page.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,ambient=root.querySelector('.ambient').getBoundingClientRect();return {header:root.querySelector('#settings').getBoundingClientRect().top,ambient:[ambient.top,ambient.height],overlay:getComputedStyle(root.querySelector('#overlay')).backgroundColor};});
+ const page=await open('?embed=1&top=50');
+ await page.keyboard.press('ArrowRight');await page.waitForTimeout(3600);
+ const idle=await page.evaluate(async()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot;window.frameRequests=0;await new Promise(resolve=>setTimeout(resolve,1500));return {frames:window.frameRequests,running:root.getAnimations().filter(animation=>animation.playState==='running').map(animation=>animation.animationName||animation.id||'animation')};});
+ assert.deepEqual(idle,{frames:0,running:[]});
+ const inset=await geometry(page);
+ assert.ok(inset.header>=50,`header ${inset.header}`);assert.deepEqual(inset.ambient,[0,844]);assert.notEqual(inset.overlay,'rgb(0, 0, 0)');
+ for(const query of ['?embed=1&top=500','?embed=1&top=abc','?top=50']){const other=await open(query);assert.ok((await geometry(other)).header<50,query);await other.close();}
+ const appearance=page=>page.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,style=getComputedStyle(root.querySelector('.ambient'));return {bg:getComputedStyle(root.querySelector('.content')).getPropertyValue('--ps-bg').trim(),dim:style.getPropertyValue('--ps-ambient-dim').trim(),scheme:getComputedStyle(root.querySelector('#overlay')).colorScheme};});
+ const dark={bg:'#000',dim:'rgba(0,0,0,.42)',scheme:'dark'},light={bg:'#F2F2F7',dim:'rgba(242,242,247,.5)',scheme:'light'};
+ for(const [query,os,expected] of [['?embed=1&top=50&scheme=dark','light',dark],['?embed=1&scheme=light','dark',light],['?embed=1&scheme=sepia','dark',dark],['?embed=1','light',light]]){const other=await open(query,os);assert.deepEqual(await appearance(other),expected,`${query} on a ${os} OS`);await other.close();}
+});
