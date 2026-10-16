@@ -607,3 +607,27 @@ test('after a successful Retry the photo card keeps keyboard focus instead of lo
  await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.empty-deck'),null,{timeout:10000});
  assert.equal(await measure(page,`return root.activeElement?.id||null;`),'card');
 });
+
+for(const started of [false,true])test(`after a successful Retry from the signed-out card the photo card gets keyboard focus (${started?'saved progress':'first load'})`,async t=>{
+ const envelope=(id,data)=>`)]}'\n\n123\n${JSON.stringify([['wrb.fr',id,JSON.stringify(data)]])}\n`;
+ const page=await mount(t,{width:1280,height:900,items:started?[item(0),item(1)]:[],state:started?{}:{started:false,exhausted:false,cursor:null},routes:(route,url)=>{
+  if(url.hostname!=='photos.google.com'||!url.pathname.endsWith('/data/batchexecute'))return null;
+  const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0];
+  if(call[0]==='lcxiM')return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[['AF1QipSignedOut',['https://lh3.googleusercontent.com/AF1QipSignedOut',800,600],Date.UTC(2026,0,1),'dedup-signed-out',0,{}]],null])});
+  return route.fulfill({contentType:'text/plain',body:envelope(call[0],[[],null])});
+ }});if(!page)return;
+ await measure(page,`q('#close').click();`);
+ await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').hidden);
+ await page.evaluate(()=>{window.signedIn=window.WIZ_global_data.SNlM0e;delete window.WIZ_global_data.SNlM0e;document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick();});
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.activeElement?.id==='retry',null,{timeout:10000});
+ assert.match(await measure(page,`return q('.empty-deck').textContent;`),/not signed in/);
+ await page.evaluate(()=>{window.WIZ_global_data.SNlM0e=window.signedIn;});
+ await page.keyboard.press('Enter');
+ if(!started){
+  await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.activeElement?.textContent==='Load library',null,{timeout:10000});
+  await page.keyboard.press('Enter');
+ }
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('caption').textContent.trim()&&!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.empty-deck'),null,{timeout:10000});
+ await page.waitForTimeout(300);
+ assert.equal(await measure(page,`return root.activeElement?.id||null;`),'card');
+});
