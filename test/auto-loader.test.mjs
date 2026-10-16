@@ -147,3 +147,10 @@ test('when the new and the cached app both fail to start, the update banner show
  assert.equal(await startAutoLoader(env),false);
  assert.deepEqual(requests,['/version','/app.js']);assert.equal(nodes.length,1);assert.equal(env.document.documentElement.dataset.psLoaderInjected,undefined);
 });
+test('when no app can start, the banner says Photos Swipe could not load instead of offering an update',async()=>{
+ const {env,nodes}=fixture(null,{...app,code:'invalid syntax {'});
+ assert.equal(await startAutoLoader(env),false);
+ assert.equal(nodes.length,1);assert.equal(nodes[0].textContent,'Photos Swipe couldn’t load. Check your connection and reload the page.');assert.equal(nodes[0].href,undefined);
+ const required=fixture(null);assert.equal(showUpdateBanner(required.env,'1.0.1'),true);
+ assert.equal(required.nodes[0].textContent,'Update available - tap to update Photos Swipe');assert.match(required.nodes[0].href,/\/photoswiper\.user\.js$/);
+});
