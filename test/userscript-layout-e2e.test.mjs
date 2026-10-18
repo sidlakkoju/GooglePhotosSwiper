@@ -93,6 +93,18 @@ for(const [width,height] of [[1280,900],[393,852]])for(const id of ['keep','remo
  assert.equal(during.overlay,true);assert.equal(during.page,true);assert.equal(during.fixed,false);
  assert.deepEqual(during.card,before);
 });
+for(const [width,height,touch] of [[1280,900,false],[393,852,true]])test(`the flying copy keeps the photo size and the Fullscreen, Open and Share buttons of the card it copies at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const layout=`const layout=card=>{const base=card.getBoundingClientRect();return [...card.querySelectorAll('*')].filter(node=>!node.closest('[hidden]')&&getComputedStyle(node).display!=='none').map(node=>{const r=node.getBoundingClientRect();return [node.tagName,node.id,Math.round(r.x-base.x),Math.round(r.y-base.y),Math.round(r.width),Math.round(r.height)];}).filter(entry=>entry[4]||entry[5]);};`;
+ const before=await measure(page,`${layout}return layout(q('.top-card'));`);
+ await measure(page,`root.getElementById('remove').click();`);
+ const during=await measure(page,`${layout}const clone=[...q('#card').children].find(node=>node!==q('.top-card')&&node.classList?.contains('top-card'));for(const animation of clone.getAnimations())animation.pause(),animation.currentTime=0;
+  const tool=s=>clone.querySelector(s).getBoundingClientRect(),icon=clone.querySelector('#enlarge svg').getBoundingClientRect();
+  return {layout:layout(clone),enlarge:Math.round(tool('#enlarge').width),open:Math.round(tool('#open-photos').top-tool('#enlarge').top),icon:Math.round(icon.width),live:[...root.querySelectorAll('#enlarge')].indexOf(root.getElementById('enlarge'))};`);
+ assert.ok(during.enlarge>=40&&during.enlarge<=48);assert.ok(during.icon<=20);assert.ok(during.open>=48);
+ assert.equal(during.live,0);
+ assert.deepEqual(during.layout,before);
+});
 
 test('the first-run coach shows on an untouched deck and leaves after the first decision',async t=>{
  const page=await mount(t,{width:393,height:852,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;

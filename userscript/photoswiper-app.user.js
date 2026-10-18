@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.169
+// @version 1.2.170
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -857,7 +857,6 @@ function createSwipeFeedback({window,targets,card,under,keep,remove,canSwipe,onD
    const outgoing=stillClonedVideos(card.cloneNode(true),card);
    outgoing.setAttribute('aria-hidden','true');outgoing.inert=true;
    for(const control of outgoing.querySelectorAll?.('button:not(.card-tool):not(#enlarge),a:not(.card-tool),input')||[])control.remove();
-   for(const element of outgoing.querySelectorAll?.('[id]')||[])element.removeAttribute('id');
    outgoing.removeAttribute?.('id');outgoing.style.willChange='';outgoing.style.transform=reduced()?'':card.style.transform;
    outgoing.style.position='absolute';outgoing.style.inset='0';outgoing.style.pointerEvents='none';outgoing.style.zIndex='7';outgoing.classList?.add?.('lifted');
    card.parentNode.append(outgoing);
@@ -2969,7 +2968,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for Trash
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.169":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.170":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
