@@ -534,10 +534,12 @@ test('mounted oldest-first preserves the current card and sorts the remaining de
 });
 test('Trash writes require confirmation and bounded valid stable identifiers',async()=>{
  const f=fixture(()=>[]);
- for(const args of [{dedupKeys:['stable']},{confirmed:true,dedupKeys:[]},{confirmed:true,dedupKeys:['bad/key']},{confirmed:true,dedupKeys:Array(26).fill('stable')}])assert.equal((await f.api('moveToTrash',args)).ok,false);
+ for(const args of [{dedupKeys:['stable']},{confirmed:true,dedupKeys:[]},{confirmed:true,dedupKeys:['bad/key']},{confirmed:true,dedupKeys:['a:b:c']},{confirmed:true,dedupKeys:[':stable']},{confirmed:true,dedupKeys:['stable:']},{confirmed:true,dedupKeys:['stable','stable']},{confirmed:true,dedupKeys:Array(26).fill('stable')}])assert.equal((await f.api('moveToTrash',args)).ok,false);
  assert.equal(f.calls.length,0);
  assert.equal((await call(f,'moveToTrash',{confirmed:true,dedupKeys:['stable']})).requested,1);
  assert.equal(f.calls[0].id,'XwAOJf');assert.deepEqual(f.calls[0].args,[null,1,['stable'],3]);
+ assert.equal((await call(f,'moveToTrash',{confirmed:true,dedupKeys:['AF1QipStable_Key-27charsxxx:Abc_def-123','stable']})).requested,2);
+ assert.deepEqual(f.calls[1].args,[null,1,['AF1QipStable_Key-27charsxxx:Abc_def-123','stable'],3]);
 });
 test('mounted undo survives a fresh script instance with the same IndexedDB',async()=>{
  const first=await mountedReview([item('a',{size:1}),item('b',{size:100})]);await first.click('keep');
@@ -644,6 +646,29 @@ test('Move to Trash on a large library verifies only the moved batches, three at
  assert.ok(candidates.every(row=>rows.get(row.mediaKey).state==='in_trash'));
  assert.ok(purged.every(row=>rows.get(row.mediaKey).state==='in_trash'&&(rows.get(row.mediaKey).revision||0)===0));
  assert.ok(library.every(row=>rows.get(row.mediaKey).state==='active'));
+});
+test('Move to Trash sends Google’s colon dedup keys, shares a repeated key, and leaves only an item without a key marked',async()=>{
+ const dedupKey=index=>index===30||index===31?`AF1QipColonKey${index}xxxxxxxxxxxx:Abc_def-123`:index===40?undefined:index===42?'queued-stable-41':`queued-stable-${index}`;
+ const candidates=Array.from({length:44},(_,index)=>item(`queued-${index}`,{decision:'remove',dedupKey:dedupKey(index),size:1e6}));
+ const byDedup=new Map();for(const row of candidates)if(row.dedupKey)byDedup.set(row.dedupKey,[...(byDedup.get(row.dedupKey)||[]),row.mediaKey]);
+ const trashed=[],sent=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){assert.equal(new Set(args[2]).size,args[2].length);sent.push(...args[2]);trashed.unshift(...args[2].flatMap(key=>byDedup.get(key)));return {ok:true,text:async()=>envelope('XwAOJf',[])};}
+  if(entry[0]==='zy0IHe')return {ok:true,text:async()=>envelope('zy0IHe',[trashed.map(key=>[key,null,null,null]),null])};
+  return {ok:true,text:async()=>envelope(entry[0],[[args[0],['https://photos.fife.usercontent.google.com/fresh',800,600]],null])};
+ };
+ const mounted=await mountedReview(candidates,fetch);
+ mounted.environment.window.confirm=()=>true;
+ mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+ await mounted.click('move-trash');
+ for(let count=0;count<200&&!/still marked/.test(mounted.nodes.get('status').textContent);count++)await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(mounted.nodes.get('status').textContent,'43 of 44 moved to Trash; 1 still marked for Trash. Google Photos didn’t give a Trash identifier for queued-40. Refresh latest and try again, or move it to Trash in Google Photos.');
+ assert.ok(sent.includes(dedupKey(30))&&sent.includes(dedupKey(31)));assert.equal(sent.filter(key=>key==='queued-stable-41').length,1);assert.equal(sent.length,42);
+ const rows=new Map((await mounted.read()).items.map(row=>[row.mediaKey,row]));
+ assert.ok(candidates.filter(row=>row.mediaKey!=='queued-40').every(row=>rows.get(row.mediaKey).state==='in_trash'));
+ assert.equal(rows.get('queued-40').state,'active');assert.equal(rows.get('queued-40').decision,'remove');
+ assert.equal(mounted.nodes.get('move-trash').textContent,'Move 1 to Trash');
 });
 test('legacy candidates share one Going to Trash grid and persist Keep across reload',async()=>{
  const sent=Array.from({length:5},(_,index)=>item(`QA-DUMMY-${index}`,{decision:'remove',queueSent:true,dedupKey:`stable-${index}`}));
