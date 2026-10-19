@@ -99,6 +99,9 @@ for(const [width,height,touch] of [[1280,900,false],[393,852,true],[320,568,true
  assert.ok(await measure(page,`return q('#free-sheet').contains(root.activeElement);`));
  await page.keyboard.press('Escape');await page.waitForTimeout(100);
  assert.deepEqual(await measure(page,`return {open:!q('#free-sheet').hidden,panel:!q('.review-panel').hidden,focus:root.activeElement?.id,marked:q('.trash-badge').textContent};`),{open:false,panel:true,focus:'move-trash',marked:'2'});
+ await measure(page,`root.getElementById('move-trash').click();`);await page.waitForTimeout(350);
+ await measure(page,`root.getElementById('free-keep').click();`);await page.waitForTimeout(400);
+ assert.deepEqual(await measure(page,`return {tiles:root.querySelectorAll('.trash-tile').length,move:q('#move-trash').textContent,panel:!q('.review-panel').hidden,status:q('#status').textContent};`),{tiles:0,move:'Move 0 to Trash',panel:true,status:'Kept 2 stored-free items. Nothing to move to Trash.'});
 });
 for(const [width,height] of [[1280,900],[393,852]])for(const id of ['keep','remove'])test(`a ${id} fly-off stays clipped inside the card stack at ${width}×${height}`,async t=>{
  const page=await mount(t,{width,height,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
