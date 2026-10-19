@@ -77,7 +77,9 @@ test('every view keeps concentric corners, real gaps and a header without overla
   await click('.trash-photo');await page.waitForTimeout(500);
   views.preview=await page.evaluate(audit);
   await click('.trash-preview .trash-nav button');await page.waitForTimeout(300);
-  await click('#move-trash');await page.waitForTimeout(1200);
+  await click('#move-trash');await page.waitForTimeout(500);
+  if(await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('free-sheet')?.hidden===false)){views.free=await page.evaluate(audit);await click('#free-trash');}
+  await page.waitForTimeout(1200);
   views.done=await page.evaluate(audit);
   await click('#keep-swiping');await page.waitForTimeout(400);
   await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('order-switcher').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true})));await page.waitForTimeout(300);

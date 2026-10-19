@@ -82,6 +82,24 @@ test('at 320×568 the window does not scroll and decision controls receive taps'
  assert.deepEqual(result,{scroll:true,remove:'remove',keep:'keep',enlarge:'enlarge',status:24});
 });
 
+for(const [width,height,touch] of [[1280,900,false],[393,852,true],[320,568,true]])test(`a stored-free card says Trash frees no space beside its chips, and Move to Trash asks first at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,items:[item(0,{takesUpSpace:false,spaceTaken:0,decision:'remove'}),item(1,{takesUpSpace:false,spaceTaken:0}),item(2,{takesUpSpace:false,spaceTaken:0})],state:{exhausted:true}});if(!page)return;
+ const card=await measure(page,`const r=q('.top-card').getBoundingClientRect(),label=q('.memory-label'),note=q('.free-note'),n=note.getBoundingClientRect(),l=label.getBoundingClientRect(),tools=[...root.querySelectorAll('#enlarge,#open-photos,#share')].filter(b=>!b.hidden).map(b=>b.getBoundingClientRect());
+  return {text:note.textContent,visible:!note.hidden&&n.width>0,inside:n.left>=r.left&&n.right<=r.right&&n.top>=r.top&&n.bottom<=r.bottom,belowLabel:label.hidden?Math.round(n.top-r.top):Math.round(n.top-l.bottom),clearOfTools:tools.every(b=>n.right<=b.left||n.bottom<=b.top||n.top>=b.bottom),oneLine:n.height<=32,caption:q('#caption').textContent};`);
+ assert.equal(card.text,'Stored free · Trash frees no space');assert.equal(card.visible,true);assert.equal(card.inside,true);assert.equal(card.clearOfTools,true);assert.equal(card.oneLine,true);
+ assert.ok(card.belowLabel>=4&&card.belowLabel<=24,String(card.belowLabel));assert.match(card.caption,/stored free$/);
+ await measure(page,`root.getElementById('remove').click();`);await page.waitForTimeout(450);
+ assert.match(await measure(page,`return q('#status').textContent;`),/It’s stored free, so trashing it won’t free space\./);
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ await page.keyboard.press('Tab');await measure(page,`root.getElementById('move-trash').focus();root.getElementById('move-trash').click();`);await page.waitForTimeout(350);
+ const sheet=await measure(page,`const s=q('#free-sheet'),r=s.getBoundingClientRect(),buttons=[...s.querySelectorAll('button')].map(b=>b.getBoundingClientRect());
+  return {open:!s.hidden,role:s.getAttribute('role'),title:q('#free-title').textContent,inView:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,targets:buttons.every(b=>b.height>=44&&b.width>=44),labels:[...s.querySelectorAll('button')].map(b=>b.textContent),focus:root.activeElement?.id,page:document.scrollingElement.scrollWidth<=innerWidth};`);
+ assert.deepEqual(sheet,{open:true,role:'alertdialog',title:'All 2 are stored free',inView:true,targets:true,labels:['Keep them','Trash anyway','Cancel'],focus:'free-keep',page:true});
+ for(let index=0;index<4;index++)await page.keyboard.press('Tab');
+ assert.ok(await measure(page,`return q('#free-sheet').contains(root.activeElement);`));
+ await page.keyboard.press('Escape');await page.waitForTimeout(100);
+ assert.deepEqual(await measure(page,`return {open:!q('#free-sheet').hidden,panel:!q('.review-panel').hidden,focus:root.activeElement?.id,marked:q('.trash-badge').textContent};`),{open:false,panel:true,focus:'move-trash',marked:'2'});
+});
 for(const [width,height] of [[1280,900],[393,852]])for(const id of ['keep','remove'])test(`a ${id} fly-off stays clipped inside the card stack at ${width}×${height}`,async t=>{
  const page=await mount(t,{width,height,items:Array.from({length:4},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
  const before=await measure(page,`return box('#card');`);

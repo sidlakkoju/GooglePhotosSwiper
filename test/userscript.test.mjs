@@ -670,6 +670,41 @@ test('Move to Trash sends Google’s colon dedup keys, shares a repeated key, an
  assert.equal(rows.get('queued-40').state,'active');assert.equal(rows.get('queued-40').decision,'remove');
  assert.equal(mounted.nodes.get('move-trash').textContent,'Move 1 to Trash');
 });
+for(const [label,freeCount,countingCount,choice,expected] of [
+ ['all stored free, Keep clears them from the queue without asking Google',2,0,'free-keep',{title:'All 2 are stored free',keep:'Keep them',trash:'Trash anyway',sent:0,kept:2,status:'Kept 2 stored-free items. Nothing to move to Trash.'}],
+ ['one stored free among others, Keep 1 trashes only the rest',1,3,'free-keep',{title:'1 of 4 is stored free',keep:'Keep 1, trash 3',trash:'Trash all 4',sent:3,kept:1,status:'Verified 3 items in Trash.'}],
+ ['stored free among others, Trash all moves everything',2,3,'free-trash',{title:'2 of 5 are stored free',keep:'Keep 2, trash 3',trash:'Trash all 5',sent:5,kept:0,status:'Verified 5 items in Trash.'}],
+ ['Cancel changes nothing',2,3,'free-cancel',{title:'2 of 5 are stored free',keep:'Keep 2, trash 3',trash:'Trash all 5',sent:0,kept:0,status:null}],
+])test(`Move to Trash warns when marked items are stored free: ${label}`,async()=>{
+ const free=Array.from({length:freeCount},(_,index)=>item(`free-${index}`,{decision:'remove',dedupKey:`free-stable-${index}`,size:2e6,spaceTaken:0,takesUpSpace:false}));
+ const counting=Array.from({length:countingCount},(_,index)=>item(`counting-${index}`,{decision:'remove',dedupKey:`counting-stable-${index}`,size:3e6,spaceTaken:3e6,takesUpSpace:true}));
+ const byDedup=new Map([...free,...counting].map(row=>[row.dedupKey,row.mediaKey])),trashed=[],sent=[],prompts=[];
+ const fetch=async(url,options)=>{
+  const entry=JSON.parse(new URLSearchParams(options.body).get('f.req'))[0][0],args=JSON.parse(entry[1]);
+  if(entry[0]==='XwAOJf'){sent.push(...args[2]);trashed.push(...args[2].map(key=>byDedup.get(key)));return {ok:true,text:async()=>envelope('XwAOJf',[])};}
+  if(entry[0]==='zy0IHe')return {ok:true,text:async()=>envelope('zy0IHe',[trashed.map(key=>[key,null,null,null]),null])};
+  return {ok:true,text:async()=>envelope(entry[0],[[args[0],['https://photos.fife.usercontent.google.com/fresh',800,600]],null])};
+ };
+ const mounted=await mountedReview([...free,...counting],fetch);
+ mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return true;};
+ mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
+ if(mounted.nodes.get('review-panel').hidden)await mounted.click('review');
+ await mounted.click('move-trash');
+ const sheet=mounted.nodes.get('free-sheet');
+ assert.equal(sheet.hidden,false);assert.equal(prompts.length,0);assert.equal(sent.length,0);
+ assert.deepEqual({title:mounted.nodes.get('free-title').textContent,keep:mounted.nodes.get('free-keep').textContent,trash:mounted.nodes.get('free-trash').textContent},{title:expected.title,keep:expected.keep,trash:expected.trash});
+ assert.match(mounted.nodes.get('free-body').textContent,freeCount===1?/stores it for free, so moving it to Trash won’t free any space\. The other 3 free 9\.00 MB\./:countingCount?/stores them for free, so moving them to Trash won’t free any space\. The other 3 free 9\.00 MB\./:/^Google stores them for free, so moving them to Trash won’t free any space\.$/);
+ await mounted.click(choice);
+ for(let count=0;count<200&&expected.sent&&!/Verified/.test(mounted.nodes.get('status').textContent);count++)await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(sheet.hidden,true);
+ assert.equal(sent.length,expected.sent);assert.equal(prompts.length,expected.sent?1:0);
+ if(expected.sent)assert.match(prompts[0],new RegExp(`exactly ${expected.sent} items`));
+ if(expected.status)assert.equal(mounted.nodes.get('status').textContent,expected.status);
+ const rows=new Map((await mounted.read()).items.map(row=>[row.mediaKey,row]));
+ assert.equal(free.filter(row=>rows.get(row.mediaKey).decision==='keep').length,expected.kept);
+ assert.equal([...free,...counting].filter(row=>rows.get(row.mediaKey).state==='in_trash').length,expected.sent);
+ if(choice==='free-cancel')assert.ok([...free,...counting].every(row=>rows.get(row.mediaKey).decision==='remove'&&rows.get(row.mediaKey).state==='active'));
+});
 test('legacy candidates share one Going to Trash grid and persist Keep across reload',async()=>{
  const sent=Array.from({length:5},(_,index)=>item(`QA-DUMMY-${index}`,{decision:'remove',queueSent:true,dedupKey:`stable-${index}`}));
  const mounted=await mountedReview([...sent,item('kept',{decision:'keep'}),item('trashed',{decision:'remove',state:'in_trash'}),item('undecided')]);await mounted.click('review');
