@@ -173,18 +173,46 @@ test('a zoomed enlarged photo pans by mouse drag and shift-wheel without decidin
  const before=await measure(page,`return q('#caption').textContent;`);
  await measure(page,`root.getElementById('enlarge').click();`);await page.waitForTimeout(300);
  await measure(page,`const zoom=root.getElementById('zoom');zoom.value='2';zoom.oninput();`);
- const zoomed=await measure(page,`const media=q('#media');return {scroll:media.scrollWidth>media.clientWidth&&media.scrollHeight>media.clientHeight,left:media.scrollLeft,top:media.scrollTop,box:box(media),overflow:getComputedStyle(media).overflowX};`);
- assert.equal(zoomed.scroll,true);assert.equal(zoomed.overflow,'auto');
- assert.ok(zoomed.left>0,'zoom keeps the centre in view');
+ const shift=`const m=new DOMMatrix(getComputedStyle(q('#media img')).transform);return {x:m.e,y:m.f,scale:m.a,box:box('#media'),image:box('#media img')};`;
+ await page.waitForTimeout(400);
+ const zoomed=await measure(page,shift);
+ assert.equal(zoomed.scale,2);
+ assert.ok(zoomed.image.width>zoomed.box.width,'the photo overflows the frame');
  const cx=zoomed.box.x+zoomed.box.width/2,cy=zoomed.box.y+zoomed.box.height/2;
- await page.mouse.move(cx,cy);await page.mouse.down();await page.mouse.move(cx+150,cy+80,{steps:5});await page.mouse.up();
- const dragged=await measure(page,`const media=q('#media');return {left:media.scrollLeft,top:media.scrollTop,caption:q('#caption').textContent};`);
- assert.ok(dragged.left<zoomed.left-100,`${zoomed.left} → ${dragged.left}`);assert.ok(dragged.top<zoomed.top-40);
+ await page.mouse.move(cx,cy);await page.mouse.down();await page.mouse.move(cx+150,cy+80,{steps:5});await page.mouse.up();await page.waitForTimeout(400);
+ const dragged=await measure(page,shift);
+ assert.ok(dragged.x>zoomed.x+100,`${zoomed.x} → ${dragged.x}`);
+ assert.ok(dragged.image.x<=zoomed.box.x+1&&dragged.image.x+dragged.image.width>=zoomed.box.x+zoomed.box.width-1,'the photo still covers the frame');
  await page.mouse.move(cx,cy);await page.keyboard.down('Shift');await page.mouse.wheel(0,200);await page.keyboard.up('Shift');await page.waitForTimeout(100);
+ const wheeled=await measure(page,shift);
+ assert.ok(wheeled.x<dragged.x-100,`${dragged.x} → ${wheeled.x}`);
  assert.equal(await measure(page,`return root.getElementById('zoom').value;`),'2');
- assert.equal(dragged.caption,before);
+ assert.equal(await measure(page,`return q('#caption').textContent;`),before);
  await measure(page,`const zoom=root.getElementById('zoom');zoom.value='1';zoom.oninput();`);
  assert.equal(await measure(page,`return q('#card').classList.contains('zoomed');`),false);
+});
+
+if((process.env.PS_ENGINE||'chromium')==='chromium')test('pinching a photo with two fingers zooms it on a phone, one finger pans it, and double-tap restores swiping',async t=>{
+ const page=await mount(t,{width:393,height:852,touch:true,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ const before=await measure(page,`return q('#caption').textContent;`);
+ const media=await measure(page,`return box('#media');`),cx=media.x+media.width/2,cy=media.y+media.height/2;
+ const cdp=await page.context().newCDPSession(page);
+ const touch=(type,points)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:points.map(([x,y],id)=>({x,y,id}))});
+ await touch('touchStart',[[cx-30,cy]]);await touch('touchStart',[[cx-30,cy],[cx+30,cy]]);
+ for(let step=1;step<=8;step++){await touch('touchMove',[[cx-30-step*6,cy],[cx+30+step*6,cy]]);await page.waitForTimeout(16);}
+ await touch('touchEnd',[]);await page.waitForTimeout(400);
+ const pinched=await measure(page,`return {zoom:Number(root.getElementById('zoom').value),zoomed:q('#card').classList.contains('zoomed'),caption:q('#caption').textContent};`);
+ assert.ok(pinched.zoom>2.4&&pinched.zoom<2.8,String(pinched.zoom));
+ assert.equal(pinched.zoomed,true);assert.equal(pinched.caption,before);
+ const matrix=`const m=new DOMMatrix(getComputedStyle(q('#media img')).transform);return m.e;`;
+ const x0=await measure(page,matrix);
+ await touch('touchStart',[[cx,cy]]);for(let step=1;step<=8;step++){await touch('touchMove',[[cx+step*10,cy]]);await page.waitForTimeout(16);}await touch('touchEnd',[]);await page.waitForTimeout(600);
+ assert.ok(await measure(page,matrix)>x0+40,'one finger pans the zoomed photo');
+ assert.equal(await measure(page,`return q('#caption').textContent;`),before,'panning does not decide');
+ await measure(page,`q('#media').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));`);await page.waitForTimeout(400);
+ assert.deepEqual(await measure(page,`return {zoom:root.getElementById('zoom').value,zoomed:q('#card').classList.contains('zoomed'),expanded:q('#card').classList.contains('expanded')};`),{zoom:'1',zoomed:false,expanded:false});
+ await touch('touchStart',[[cx,cy]]);for(let step=1;step<=10;step++){await touch('touchMove',[[cx-step*20,cy]]);await page.waitForTimeout(16);}await touch('touchEnd',[]);await page.waitForTimeout(700);
+ assert.notEqual(await measure(page,`return q('#caption').textContent;`),before,'a fitted photo swipes again');
 });
 
 for(const reduced of [false,true])test(`the settings sheet ${reduced?'appears without motion':'slides up'} when opened${reduced?' with reduced motion':''}`,async t=>{
@@ -451,7 +479,7 @@ test('Open in Google Photos links to the shown item and the Share sheet sends th
  assert.equal(/stored free/.test(shown.caption),key==='synthetic-1');
  for(const control of ['share','open'])assert.ok(shown[control].width>=36&&shown[control].height>=36,control);
  await measure(page,`q('#share').click();`);
- await page.waitForFunction(()=>{const send=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('share-send');return send&&!send.disabled;});
+ await page.waitForFunction(()=>{const send=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('share-send');return send&&!send.disabled&&!send.classList.contains('share-preparing');});
  await page.waitForTimeout(400);
  const sheet=await measure(page,`return {open:!q('.share-sheet').hidden,title:q('.share-title').textContent,send:q('#share-send .share-label').textContent,link:q('#share-link .share-label').textContent,box:box('.share-sheet')};`);
  assert.deepEqual({open:sheet.open,title:sheet.title,send:sheet.send,link:sheet.link},{open:true,title:`${key}.jpg`,send:'Send photo',link:'Create public link'});
@@ -462,6 +490,48 @@ test('Open in Google Photos links to the shown item and the Share sheet sends th
  await page.waitForFunction(()=>window.__shared.length===1);
  assert.equal(JSON.stringify(await page.evaluate(()=>window.__shared)),JSON.stringify([['files',[`${key}.jpg`,true]]]));
  assert.equal(await measure(page,`return q('.share-sheet').hidden;`),true);
+});
+
+test('a slow share shows its progress around Share, waits in the share tray while swiping, and sends from the tray when ready',async t=>{
+ const init=()=>{
+  window.__shared=[];window.__release={};
+  Object.defineProperty(navigator,'share',{configurable:true,value:async data=>{window.__shared.push(data.files.map(file=>file.name));}});
+  Object.defineProperty(navigator,'canShare',{configurable:true,value:data=>!!data.files});
+  const real=window.fetch.bind(window);
+  window.fetch=(url,options)=>{
+   if(!String(url).includes('=w4096'))return real(url,options);
+   const key=/synthetic-\d+/.exec(String(url))[0];let sent=0;
+   const stream=new ReadableStream({async pull(controller){if(sent>=4){controller.close();return;}if(sent>=2)await new Promise(resolve=>{window.__release[key]=resolve;});controller.enqueue(new Uint8Array(250));sent++;}});
+   return Promise.resolve(new Response(stream,{headers:{'content-type':'image/jpeg','content-length':'1000'}}));
+  };
+ };
+ const page=await mount(t,{width:393,height:852,touch:true,init,items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
+ const first=await measure(page,`return /^(synthetic-\\d+)/.exec(q('#caption').textContent)[1];`);
+ await measure(page,`q('#share').click();`);
+ await page.waitForFunction(()=>/50%/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#share-send .share-detail').textContent));
+ const preparing=await measure(page,`return {label:q('#share-send .share-label').textContent,detail:q('#share-send .share-detail').textContent,ring:!q('.share-send-ring').hasAttribute('hidden'),hint:!q('.share-hint').hidden};`);
+ assert.deepEqual({...preparing,detail:/^Preparing… 50% · \S+ \S+ of \S+ \S+$/.test(preparing.detail)},{label:'Send when ready',detail:true,ring:true,hint:true},preparing.detail);
+ await measure(page,`q('.share-close').click();`);await page.waitForTimeout(100);
+ const waiting=await measure(page,`return {ring:!q('.share-tool-ring').hasAttribute('hidden'),arc:q('.share-tool-ring .ring-arc').getAttribute('stroke-dasharray'),label:q('#share').getAttribute('aria-label'),status:q('#status').textContent};`);
+ assert.equal(waiting.ring,true);assert.match(waiting.label,/preparing 50%/);assert.match(waiting.status,new RegExp(`${first}.jpg will wait in the share tray`));
+ assert.ok(Math.abs(parseFloat(waiting.arc)-2*Math.PI*20*.5)<.5,waiting.arc);
+ await measure(page,`q('#keep').click();`);await page.waitForTimeout(500);
+ assert.notEqual(await measure(page,`return q('#caption').textContent;`),`${first}.jpg`,'swiping keeps working while it prepares');
+ await page.evaluate(key=>window.__release[key](),first);await page.waitForTimeout(50);await page.evaluate(key=>window.__release[key](),first);
+ await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.share-count').hidden);
+ const ready=await measure(page,`return {count:q('.share-count').textContent,ready:q('#share').classList.contains('share-ready'),ring:q('.share-tool-ring').hasAttribute('hidden'),status:q('#status').textContent};`);
+ assert.deepEqual({count:ready.count,ready:ready.ready,ring:ready.ring},{count:'1',ready:true,ring:true});
+ assert.match(ready.status,/is ready to share/);
+ await measure(page,`q('#share').click();`);await page.waitForTimeout(200);
+ const tray=await measure(page,`const rows=[...q('.share-tray').querySelectorAll('.share-tray-row')];return {hidden:q('.share-tray').hidden,title:q('.share-tray-title').textContent,rows:rows.map(row=>[row.querySelector('.share-label').textContent,row.querySelector('.share-detail').textContent,!row.querySelector('.share-tray-send').hidden])};`);
+ assert.deepEqual(tray,{hidden:false,title:'Share tray · 1 ready',rows:[[`${first}.jpg`,'Ready · 1 KB',true]]});
+ await measure(page,`q('.share-tray-send').click();`);
+ await page.waitForFunction(()=>window.__shared.length===1);
+ assert.deepEqual(await page.evaluate(()=>window.__shared),[[`${first}.jpg`]]);
+ await page.waitForTimeout(100);
+ assert.equal(await measure(page,`return q('.share-tray').hidden;`),true);
+ await measure(page,`q('.share-close').click();`);await page.waitForTimeout(100);
+ assert.deepEqual(await measure(page,`return {count:q('.share-count').hidden,ring:q('.share-tool-ring').hasAttribute('hidden'),label:q('#share').getAttribute('aria-label')};`),{count:true,ring:true,label:'Share'},'sending from the tray does not leave this photo in it');
 });
 
 test('Create public link asks Google for a share link once and offers Copy and Share icons without pre-selecting the link',async t=>{
