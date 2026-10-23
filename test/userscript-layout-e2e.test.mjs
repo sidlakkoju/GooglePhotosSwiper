@@ -509,6 +509,7 @@ test('a slow share shows its progress around Share, waits in the share tray whil
  const first=await measure(page,`return /^(synthetic-\\d+)/.exec(q('#caption').textContent)[1];`);
  await measure(page,`q('#share').click();`);
  await page.waitForFunction(()=>/50%/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#share-send .share-detail').textContent));
+ await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('.share-hint').hidden);
  const preparing=await measure(page,`return {label:q('#share-send .share-label').textContent,detail:q('#share-send .share-detail').textContent,ring:!q('.share-send-ring').hasAttribute('hidden'),hint:!q('.share-hint').hidden};`);
  assert.deepEqual({...preparing,detail:/^Preparing… 50% · \S+ \S+ of \S+ \S+$/.test(preparing.detail)},{label:'Send when ready',detail:true,ring:true,hint:true},preparing.detail);
  await measure(page,`q('.share-close').click();`);await page.waitForTimeout(100);

@@ -31,6 +31,28 @@ test('downloads retry without credentials, reject empty or unshareable files, an
  assert.deepEqual(aborted,['include']);
 });
 
+test('a video without a 720p rendition falls back to 360p, as Google serves 360p-only uploads',async()=>{
+ const tried=[];
+ const fetch=async(source,options)=>{tried.push([source,options.credentials]);if(source.endsWith('=m22')){if(options.credentials==='include')throw TypeError('Failed to fetch');return {ok:false,status:404};}return streamed([7],{'content-type':'video/mp4'});};
+ const file=await downloadShareFile({window:browser,fetch,sources:['https://video.test/v=m22','https://video.test/v=m18'],name:'IMG_0036.MOV',video:true});
+ assert.deepEqual(tried,[['https://video.test/v=m22','include'],['https://video.test/v=m22','omit'],['https://video.test/v=m18','include']]);
+ assert.equal(file.name,'IMG_0036.mp4');assert.equal(file.size,7);
+ await assert.rejects(downloadShareFile({window:browser,fetch:async()=>({ok:false,status:404}),sources:['a','b'],name:'a.mov',video:true}),/Unavailable/);
+});
+
+test('a rendition that never answers times out and the next one is tried, while a user abort still stops everything',async()=>{
+ const window={...browser,AbortController,setTimeout,clearTimeout};
+ const hang=(options)=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('stop','AbortError'))));
+ const tried=[];
+ const file=await downloadShareFile({window,fetch:async(source,options)=>{tried.push(source);return source==='cold'?hang(options):streamed([3]);},sources:['cold','warm'],name:'a.mov',video:true,timeout:20});
+ assert.deepEqual(tried,['cold','warm']);assert.equal(file.size,3);
+ const user=new AbortController(),seen=[];
+ const pending=downloadShareFile({window,fetch:async(source,options)=>{seen.push(source);return hang(options);},sources:['cold','warm'],name:'a.mov',video:true,signal:user.signal,timeout:60000});
+ user.abort();
+ await assert.rejects(pending,{name:'AbortError'});
+ assert.deepEqual(seen,['cold']);
+});
+
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
 
