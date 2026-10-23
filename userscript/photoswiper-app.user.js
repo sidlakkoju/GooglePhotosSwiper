@@ -2,7 +2,7 @@
 // @name Photos Swipe
 // @author sidlakkoju
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.175
+// @version 1.2.176
 // @description Review Google Photos with local swipe decisions and verified review albums. RPC formats adapted from Google Photos Toolkit by xob0t.
 // @match https://photos.google.com/*
 // @run-at document-idle
@@ -3055,6 +3055,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for Trash
 .overlay.lifting{overflow:hidden}
 .overlay.lifting>.content{overflow:visible}
 .content #card:not(.expanded)>.top-card.lifted::before{background:linear-gradient(var(--ps-glass-fill),var(--ps-glass-fill)),var(--ps-tint,var(--ps-chrome))}
+.content #card.expanded>.top-card.lifted::before{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(var(--ps-glass-fill),var(--ps-glass-fill)),var(--ps-tint,var(--ps-chrome));pointer-events:none}
 .content .status{color:var(--ps-label)}
 #enlarge{display:flex;align-items:center;justify-content:center}
 .content #enlarge svg,.content .card-tool svg{width:18px;height:18px;flex:none}
@@ -3344,7 +3345,7 @@ $('remove').setAttribute('aria-label',inspected?'Back to review':'Mark for Trash
 }
 
 const pageWindow=typeof unsafeWindow==='undefined'?window:unsafeWindow;
-const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.175":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+const environment={version:typeof photosSwipeReleaseVersion==='undefined'?"1.2.176":photosSwipeReleaseVersion,autoUpdating:typeof photosSwipeReleaseVersion!=='undefined',window:pageWindow,document,location,GM:typeof GM==='undefined'?undefined:GM,fetch:pageWindow.fetch.bind(pageWindow),syncFetch:typeof fetch==='undefined'?window.fetch.bind(window):fetch.bind(globalThis),crypto:window.crypto,indexedDB:pageWindow.indexedDB,AbortController:pageWindow.AbortController,setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
 if(!pageWindow.WIZ_global_data?.SNlM0e||!pageWindow.WIZ_global_data?.oPEP7c)environment.photosCall=createPagePhotosBridge(environment);
 mountPhotosSwipe(environment);
 })();
