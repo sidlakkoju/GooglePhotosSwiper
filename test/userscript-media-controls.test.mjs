@@ -14,7 +14,7 @@ function fixture(){
  const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,setAttribute(key,value){this[key]=value;},querySelector:tag=>tag==='video'?video:image,append:button=>buttons.push(button),addEventListener:(type,fn)=>handlers[type]=fn};
  const card={style:{},classList:{contains:name=>classes.has(name),remove:name=>classes.delete(name),toggle(name,on){const value=on??!classes.has(name);if(value)classes.add(name);else classes.delete(name);return value;}}};
  const nodes={card,media:mediaElement,zoom:{value:'1'},enlarge:{},sort:{value:'original'}};
- const context=vm.createContext({otherTab:false,leaseError:null,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,createVideoTimeline:()=>[],captureVideo(){},mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector.includes('button')?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
+ const zoomCalls=[];const context=vm.createContext({zoomer:{zoomTo:value=>zoomCalls.push(['zoomTo',value]),reset:animate=>zoomCalls.push(['reset',animate])},zoomCalls,otherTab:false,leaseError:null,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,createVideoTimeline:()=>[],captureVideo(){},mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector.includes('button')?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
  vm.runInContext(source.slice(source.indexOf(' function updateVideoControls()'),source.indexOf(' queue_detailsElement.addEventListener')),context);
  createSwipeFeedback({window:{},targets:[mediaElement],card,under:{style:{}},keep:{style:{}},remove:{style:{}},canSwipe:()=>false,onDecide(){},playbackOnClick:true});
  const click=target=>{target.onclick?.();handlers.click({target});};
@@ -35,7 +35,7 @@ test('Play and Mute button clicks bubble without toggling media playback again',
  f.video.controls=true;f.click(f.video);assert.equal(f.video.plays,2);
 });
 
-test('display and zoom reset preserve swipe touch actions when expanded, while zoom above one allows pan and pinch',async()=>{
+test('display and zoom keep swipe touch actions when expanded and hand zoom to the pinch controller',async()=>{
  const f=fixture();
  vm.runInContext(source.slice(source.indexOf(' async function display(item,'),source.indexOf(' function updateVideoControls()')),f.context);
  f.context.renderEmpty=()=>{};
@@ -48,11 +48,10 @@ test('display and zoom reset preserve swipe touch actions when expanded, while z
  f.context.toggleEnlarge();
  assert.equal(f.classes.has('expanded'),true);
  f.nodes.zoom.value='2';f.nodes.zoom.oninput();
- assert.equal(f.mediaElement.style.touchAction,'pan-x pan-y pinch-zoom');
- assert.equal(f.image.style.touchAction,'pan-x pan-y pinch-zoom');
  f.nodes.zoom.value='1';f.nodes.zoom.oninput();
+ assert.deepEqual(f.context.zoomCalls,[['zoomTo',2],['reset',true]]);
  assert.equal(f.mediaElement.style.touchAction,'');
- assert.equal(f.image.style.touchAction,'');
+ assert.equal(f.image.style.touchAction||'','');
  await f.context.display(null);
  assert.equal(f.classes.has('expanded'),true);
  assert.equal(f.mediaElement.style.touchAction,'');
