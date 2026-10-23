@@ -60,6 +60,25 @@ for(const [width,height] of [[393,852],[1280,900]])test(`a drag moves the whole 
  assert.deepEqual(await measure(page,`return {lifted:!!q('.top-card.lifted'),contentClip:getComputedStyle(q('.content')).overflow,caption:q('#caption').textContent};`),{lifted:false,contentClip:'hidden',caption});
 });
 
+test('a drag in enlarged view without element fullscreen, as on iPhone, keeps the card opaque over the next card',async t=>{
+ const mounted=await mount(t,{width:393,height:852,items:Array.from({length:4},(_,index)=>item(index))});if(!mounted)return;
+ const {page}=mounted;
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card img')?.naturalWidth>0);
+ await page.evaluate(()=>{for(const name of ['fullscreenEnabled','webkitFullscreenEnabled'])Object.defineProperty(Document.prototype,name,{configurable:true,get:()=>false});});
+ await measure(page,`q('#enlarge').click();`);await page.waitForTimeout(400);
+ assert.deepEqual(await measure(page,`return {expanded:q('#card').classList.contains('expanded'),fullscreen:!!(document.fullscreenElement||document.webkitFullscreenElement)};`),{expanded:true,fullscreen:false});
+ const media=await page.locator('#media').boundingBox(),x=media.x+media.width/2,y=media.y+media.height/2;
+ await page.mouse.move(x,y);await page.mouse.down();
+ for(let step=1;step<=8;step++){await page.mouse.move(x+12*step,y+3*step);await page.waitForTimeout(16);}
+ await page.waitForTimeout(80);
+ const held=await measure(page,`const top=q('.top-card'),fill=getComputedStyle(top,'::before');
+  return {lifted:top.classList.contains('lifted'),peek:getComputedStyle(q('#next-card')).opacity,frame:fill.content!=='none'&&fill.backgroundImage!=='none',covers:Math.round(parseFloat(fill.width))===top.offsetWidth&&Math.round(parseFloat(fill.height))===top.offsetHeight};`);
+ assert.deepEqual(held,{lifted:true,peek:'1',frame:true,covers:true});
+ for(let step=7;step>=0;step--){await page.mouse.move(x+12*step,y+3*step);await page.waitForTimeout(16);}
+ await page.mouse.up();await page.waitForTimeout(500);
+ assert.equal(await measure(page,`return !!q('.top-card.lifted');`),false);
+});
+
 test('two hundred decisions keep DOM nodes, listeners and heap flat and force almost no synchronous layout',{timeout:180000},async t=>{
  const mounted=await mount(t,{width:440,height:956,dpr:3,touch:true,items:Array.from({length:260},(_,index)=>item(index,{spacing:hour/4}))});if(!mounted)return;
  const {page}=mounted,cdp=await page.context().newCDPSession(page);
