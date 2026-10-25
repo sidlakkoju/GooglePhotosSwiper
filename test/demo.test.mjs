@@ -328,3 +328,25 @@ for(const mode of ['ambient','matched'])test(`the ${mode} card fill paints behin
   await page.close();
  }
 });
+
+for(const mode of ['ambient','matched'])test(`with video controls showing, the ${mode} card fill matches the video area so its bars land at the sides`,{timeout:60000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ for(const [width,height] of [[320,690],[393,852]]){
+  const page=await browser.newPage({viewport:{width,height},hasTouch:true});
+  await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.hostname!=='demo.test')return route.abort();const path=url.pathname.slice(1)||'index.html';try{if(path.endsWith('.mp4'))return fulfillVideo(route,await readFile(join(directory,path)));return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}});
+  await page.goto('https://demo.test/?embed=1');
+  await page.waitForFunction(()=>/to review/.test(document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('stats')?.textContent||''),null,{timeout:15000});
+  const q=code=>page.evaluate(source=>Function('const root=document.getElementById("photos-swipe-userscript-host").shadowRoot;const q=s=>root.querySelector(s);'+source)(),code);
+  await q(`const s=q('#card-fill');s.value='${mode}';s.dispatchEvent(new Event('change'));`);
+  for(let i=0;i<16&&!(await q(`return !!q('#media>[data-video-control]:not([hidden])')&&!!q('#media video')`));i++){await q(`q('#keep').click();`);await page.waitForTimeout(400);}
+  await page.waitForFunction(mode=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,fill=root.querySelector('.top-card>.card-fill'),video=root.querySelector('#media video');if(!fill?.classList.contains('on')||!video)return false;const a=fill.getBoundingClientRect(),b=video.getBoundingClientRect();return fill.dataset.key.includes(`|${mode}|${Math.round(a.width)}x${Math.round(a.height)}`)&&Math.abs(a.height-b.height)<1;},mode,{timeout:15000});
+  const box=await q(`const fill=q('.top-card>.card-fill'),video=q('#media video'),a=fill.getBoundingClientRect(),b=video.getBoundingClientRect(),style=getComputedStyle(fill);return {fill:[a.x,a.y,a.width,a.height].map(Math.round),video:[b.x,b.y,b.width,b.height].map(Math.round),aspect:fill.width/fill.height,box:a.width/a.height,corners:[style.borderBottomLeftRadius,style.borderBottomRightRadius]};`);
+  assert.deepEqual(box.fill,box.video,JSON.stringify(box));
+  assert.ok(Math.abs(box.aspect-box.box)<0.03,JSON.stringify(box));
+  assert.deepEqual(box.corners,['0px','0px']);
+  await page.close();
+ }
+});
