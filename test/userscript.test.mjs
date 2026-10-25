@@ -674,6 +674,7 @@ for(const [label,freeCount,countingCount,choice,expected] of [
  ['all stored free, Keep clears them from the queue without asking Google',2,0,'free-keep',{title:'All 2 are stored free',keep:'Keep them',trash:'Trash anyway',sent:0,kept:2,status:'Kept 2 stored-free items. Nothing to move to Trash.',tiles:0,move:'Move 0 to Trash'}],
  ['one stored free among others, Keep 1 trashes only the rest',1,3,'free-keep',{title:'1 of 4 is stored free',keep:'Keep 1, trash 3',trash:'Trash all 4',sent:3,kept:1,status:'Verified 3 items in Trash.',done:'3 moved to Trash · 1 kept'}],
  ['stored free among others, Trash all moves everything',2,3,'free-trash',{title:'2 of 5 are stored free',keep:'Keep 2, trash 3',trash:'Trash all 5',sent:5,kept:0,status:'Verified 5 items in Trash.',done:'5 moved to Trash'}],
+ ['Keep 2, trash 3 then Cancel in the browser prompt leaves every item marked',2,3,'free-keep',{title:'2 of 5 are stored free',keep:'Keep 2, trash 3',trash:'Trash all 5',sent:0,kept:0,decline:true,prompts:1,status:null,tiles:5,move:'Move 5 to Trash'}],
  ['Cancel changes nothing',2,3,'free-cancel',{title:'2 of 5 are stored free',keep:'Keep 2, trash 3',trash:'Trash all 5',sent:0,kept:0,status:null,tiles:5,move:'Move 5 to Trash'}],
 ])test(`Move to Trash warns when marked items are stored free: ${label}`,async()=>{
  const free=Array.from({length:freeCount},(_,index)=>item(`free-${index}`,{decision:'remove',dedupKey:`free-stable-${index}`,size:2e6,spaceTaken:0,takesUpSpace:false}));
@@ -686,7 +687,7 @@ for(const [label,freeCount,countingCount,choice,expected] of [
   return {ok:true,text:async()=>envelope(entry[0],[[args[0],['https://photos.fife.usercontent.google.com/fresh',800,600]],null])};
  };
  const mounted=await mountedReview([...free,...counting],fetch);
- mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return true;};
+ mounted.environment.window.confirm=prompt=>{prompts.push(prompt);return !expected.decline;};
  mounted.nodes.get('trash-opt-in').checked=true;mounted.nodes.get('trash-opt-in').onchange();
  if(mounted.nodes.get('review-panel').hidden)await mounted.click('review');
  await mounted.click('move-trash');
@@ -697,13 +698,13 @@ for(const [label,freeCount,countingCount,choice,expected] of [
  await mounted.click(choice);
  for(let count=0;count<200&&expected.sent&&!/Verified/.test(mounted.nodes.get('status').textContent);count++)await new Promise(resolve=>setTimeout(resolve,10));
  assert.equal(sheet.hidden,true);
- assert.equal(sent.length,expected.sent);assert.equal(prompts.length,expected.sent?1:0);
- if(expected.sent)assert.match(prompts[0],new RegExp(`exactly ${expected.sent} items`));
+ assert.equal(sent.length,expected.sent);assert.equal(prompts.length,expected.prompts??(expected.sent?1:0));
+ if(prompts.length)assert.match(prompts[0],new RegExp(`exactly ${expected.sent||countingCount} items`));
  if(expected.status)assert.equal(mounted.nodes.get('status').textContent,expected.status);
  const rows=new Map((await mounted.read()).items.map(row=>[row.mediaKey,row]));
  assert.equal(free.filter(row=>rows.get(row.mediaKey).decision==='keep').length,expected.kept);
  assert.equal([...free,...counting].filter(row=>rows.get(row.mediaKey).state==='in_trash').length,expected.sent);
- if(choice==='free-cancel')assert.ok([...free,...counting].every(row=>rows.get(row.mediaKey).decision==='remove'&&rows.get(row.mediaKey).state==='active'));
+ if(choice==='free-cancel'||expected.decline)assert.ok([...free,...counting].every(row=>rows.get(row.mediaKey).decision==='remove'&&rows.get(row.mediaKey).state==='active'));
  if('tiles' in expected){assert.equal(mounted.nodes.get('trash-review-grid').childNodes.length,expected.tiles);assert.equal(mounted.nodes.get('move-trash').textContent,expected.move);}
  if(expected.done)assert.equal(mounted.nodes.get('trash-done-counts').textContent,expected.done);
 });
