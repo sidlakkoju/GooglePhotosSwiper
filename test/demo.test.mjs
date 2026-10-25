@@ -324,7 +324,7 @@ for(const mode of ['ambient','matched'])test(`the ${mode} card fill paints behin
   assert.ok(flight.copy,'the flying copy has a fill canvas');
   assert.deepEqual(flight.copy.size,flight.size);
   assert.ok(Math.abs(flight.copy.lit-flight.before)<0.01,JSON.stringify(flight));
-  assert.equal(Math.max(...flight.size),mode==='ambient'?24:192);
+  assert.equal(Math.max(...flight.size),mode==='ambient'?128:192);
   await page.close();
  }
 });

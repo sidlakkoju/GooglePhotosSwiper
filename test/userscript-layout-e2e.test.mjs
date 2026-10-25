@@ -826,7 +826,7 @@ for(const [width,height,touch] of [[393,852,true],[834,1112,true],[1280,900,fals
  await settle('ambient');
  const ambient=await fill();
  assert.deepEqual([ambient.mode,ambient.select,ambient.display,ambient.on],['ambient','ambient','block',true]);
- assert.match(ambient.key,/^synthetic-\d\|ambient\|\d+x\d+$/);assert.equal(ambient.edge,'none');if(width>=900)assert.deepEqual(ambient.clip,['clip',ambient.clip[1]===undefined?undefined:'24px']);assert.equal(Math.max(...ambient.size),24);
+ assert.match(ambient.key,/^synthetic-\d\|ambient\|\d+x\d+$/);assert.equal(ambient.edge,'none');if(width>=900)assert.deepEqual(ambient.clip,['clip',ambient.clip[1]===undefined?undefined:'24px']);assert.equal(Math.max(...ambient.size),128);
  await page.waitForFunction(top=>{const key=document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card>.card-fill')?.dataset.key||'';return /^synthetic-\d\|ambient\|/.test(key)&&key.split('|')[0]!==top;},ambient.key.split('|')[0],{timeout:10000});
  await choose('matched');
  const matched=await fill();
