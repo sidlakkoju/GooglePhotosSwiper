@@ -59,7 +59,7 @@ for(const [width,height] of [[393,852],[1280,900]])test(`a drag moves the whole 
  assert.equal(held.under.opacity,'1');assert.notEqual(held.under.fill,'rgba(0, 0, 0, 0)');
  for(let step=7;step>=0;step--){await page.mouse.move(x+12*step,y+3*step);await page.waitForTimeout(16);}
  await page.mouse.up();await page.waitForTimeout(500);
- assert.deepEqual(await measure(page,`return {lifted:!!q('.top-card.lifted'),contentClip:getComputedStyle(q('.content')).overflow,caption:q('#caption').textContent};`),{lifted:false,contentClip:'hidden',caption});
+ assert.deepEqual(await measure(page,`return {lifted:!!q('.top-card.lifted'),contentClip:getComputedStyle(q('.content')).overflow,caption:q('#caption').textContent};`),{lifted:false,contentClip:width>=900?'clip':'hidden',caption});
 });
 
 test('a drag in enlarged view without element fullscreen, as on iPhone, keeps the card opaque over the next card',async t=>{

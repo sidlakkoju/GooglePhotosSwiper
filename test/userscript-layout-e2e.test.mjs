@@ -820,20 +820,20 @@ for(const [width,height,touch] of [[834,1112,true],[393,852,true],[1280,900,fals
 
 for(const [width,height,touch] of [[393,852,true],[834,1112,true],[1280,900,false]])test(`Around photos switches the card fill between Ambient glow, Color-matched edges and Glass, and a reload keeps the choice at ${width}×${height}`,async t=>{
  const page=await mount(t,{width,height,touch,state:{exhausted:true},items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
- const fill=()=>measure(page,`const top=q('.top-card>.card-fill'),next=q('#next-card>.card-fill');return {mode:q('#card').dataset.fill,select:q('#card-fill').value,display:getComputedStyle(top).display,on:top.classList.contains('on'),key:top.dataset.key,size:[top.width,top.height],next:next?.dataset.key||''};`);
+ const fill=()=>measure(page,`const top=q('.top-card>.card-fill'),next=q('#next-card>.card-fill');return {edge:getComputedStyle(q('.top-card'),'::after').boxShadow,clip:[getComputedStyle(q('.content')).overflowX,getComputedStyle(q('.content')).overflowClipMargin],mode:q('#card').dataset.fill,select:q('#card-fill').value,display:getComputedStyle(top).display,on:top.classList.contains('on'),key:top.dataset.key,size:[top.width,top.height],next:next?.dataset.key||''};`);
  const settle=mode=>page.waitForFunction(mode=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,top=root.querySelector('.top-card>.card-fill');return mode==='glass'?getComputedStyle(top).display==='none':top.classList.contains('on')&&top.dataset.key.includes(`|${mode}|`);},mode,{timeout:10000});
  const choose=async mode=>{await measure(page,`const s=q('#card-fill');s.value='${mode}';s.dispatchEvent(new Event('change'));`);await settle(mode);};
  await settle('ambient');
  const ambient=await fill();
  assert.deepEqual([ambient.mode,ambient.select,ambient.display,ambient.on],['ambient','ambient','block',true]);
- assert.match(ambient.key,/^synthetic-\d\|ambient\|\d+x\d+$/);assert.equal(Math.max(...ambient.size),24);
+ assert.match(ambient.key,/^synthetic-\d\|ambient\|\d+x\d+$/);assert.equal(ambient.edge,'none');if(width>=900)assert.deepEqual(ambient.clip,['clip',ambient.clip[1]===undefined?undefined:'24px']);assert.equal(Math.max(...ambient.size),24);
  await page.waitForFunction(top=>{const key=document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card>.card-fill')?.dataset.key||'';return /^synthetic-\d\|ambient\|/.test(key)&&key.split('|')[0]!==top;},ambient.key.split('|')[0],{timeout:10000});
  await choose('matched');
  const matched=await fill();
- assert.equal(matched.key.split('|')[0],ambient.key.split('|')[0]);assert.match(matched.key,/\|matched\|/);assert.equal(Math.max(...matched.size),192);
+ assert.equal(matched.key.split('|')[0],ambient.key.split('|')[0]);assert.equal(matched.edge,'none');assert.match(matched.key,/\|matched\|/);assert.equal(Math.max(...matched.size),192);
  await page.waitForFunction(()=>/^synthetic-\d\|matched\|/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card>.card-fill')?.dataset.key||''),null,{timeout:10000});
  await choose('glass');
- assert.equal((await fill()).display,'none');
+ const glass=await fill();assert.equal(glass.display,'none');assert.match(glass.edge,/inset/);
  await page.waitForFunction(async()=>{const db=await new Promise(resolve=>{const request=indexedDB.open('photos-swipe-userscript');request.onsuccess=()=>resolve(request.result);});const values=await new Promise(resolve=>{const found=[],request=db.transaction('accounts').objectStore('accounts').openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor)return resolve(found);if(String(cursor.key).startsWith('resume'))found.push(cursor.value);cursor.continue();};});db.close();return values.some(value=>value?.cardFill==='glass');},null,{timeout:10000});
  await page.reload();
  await page.evaluate(()=>{window.WIZ_global_data={SNlM0e:'synthetic-token',oPEP7c:'synthetic@example.test',eptZe:'/_/PhotosUi/u/0/'};});
