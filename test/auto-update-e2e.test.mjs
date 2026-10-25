@@ -77,7 +77,7 @@ for(const engine of ['webkit','chromium'])test(`${engine}: stub installs, reuses
   assert.deepEqual(requests,['/version']);
 
   liveVersion='1.2.77';requests.length=0;
-  const navigated=tab.waitForEvent('framenavigated',{timeout:90000});
+  const navigated=tab.waitForEvent('load',{timeout:90000});
   stage='step 6: await tab.evaluate(()=>document.getElementById("photos-swipe';
   await tab.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').click());
   stage='step 7: await navigated;';

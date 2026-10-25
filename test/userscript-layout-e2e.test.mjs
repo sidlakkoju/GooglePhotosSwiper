@@ -798,3 +798,22 @@ for(const [width,height,touch] of [[393,852,true],[1280,900,false]])test(`in a G
  await press('Trash');assert.deepEqual(await state(),{preview:false});
  assert.equal(await measure(page,`return q('#move-trash').textContent;`),'Move 2 to Trash');
 });
+
+for(const [width,height,touch] of [[834,1112,true],[393,852,true],[1280,900,false]])test(`the browser's back button closes the top layer, then Photos Swipe, without leaving the page at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index,index<2?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
+ const url=page.url(),view=()=>measure(page,`return {overlay:!q('#overlay').hidden,review:!q('.review-panel').hidden,settings:!q('.settings-sheet').hidden,launcher:!q('#launcher').hidden,armed:!!history.state?.photosSwipe};`);
+ assert.deepEqual(await view(),{overlay:true,review:false,settings:false,launcher:false,armed:true});
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ await page.goBack();await page.waitForTimeout(400);
+ assert.deepEqual(await view(),{overlay:true,review:false,settings:false,launcher:false,armed:true});
+ await measure(page,`root.getElementById('settings').click();`);await page.waitForTimeout(300);
+ await page.goBack();await page.waitForTimeout(400);
+ assert.deepEqual(await view(),{overlay:true,review:false,settings:false,launcher:false,armed:true});
+ await page.goBack();await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').hidden,null,{timeout:5000});
+ assert.deepEqual(await view(),{overlay:false,review:false,settings:false,launcher:true,armed:false});
+ assert.equal(page.url(),url);
+ const before=await page.evaluate(()=>history.length);
+ await measure(page,`root.getElementById('launcher').onclick();`);await page.waitForFunction(()=>history.state?.photosSwipe===true,null,{timeout:5000});
+ await measure(page,`root.getElementById('close').click();`);await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').hidden&&!history.state?.photosSwipe,null,{timeout:5000});
+ assert.equal(page.url(),url);assert.equal(await page.evaluate(()=>history.length),before);
+});

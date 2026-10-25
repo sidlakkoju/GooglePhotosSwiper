@@ -85,6 +85,7 @@ test('the embedded demo swipes, simulates Trash, posts to its parent and resets 
  const opened=await shadow(`return {overlay:q('#overlay').hidden,launcher:getComputedStyle(q('#launcher')).display,close:q('#close').hidden,sync:q('#sync-settings').closest('.group').hidden,onboarding:q('#pair-onboarding').hidden,signIn:q('#google-sign-in').disabled,coach:q('.coach').hidden,reset:!!q('#demo-reset'),embed:document.documentElement.dataset.embed};`);
  assert.deepEqual(opened,{overlay:false,launcher:'none',close:true,sync:true,onboarding:true,signIn:true,coach:true,reset:true,embed:'1'});
  assert.deepEqual(await page.evaluate(()=>window.events),['ready']);
+ assert.equal(await frame().evaluate(()=>history.state?.photosSwipe??null),null);
  for(let index=0;index<3;index++){await shadow(`q('#remove').click();`);await frame().waitForTimeout(150);}
  await page.waitForFunction(()=>window.events.includes('first-swipe'));
  assert.deepEqual(await page.evaluate(()=>window.events.filter(event=>event==='first-swipe')),['first-swipe']);
