@@ -749,3 +749,23 @@ for(const [width,height,touch,layout] of [[834,1112,true,'stacked'],[744,1013,tr
  assert.ok(card.height>=height*.6,`card is ${card.height} tall in a ${height} window`);
  if(layout==='stacked')assert.ok(content.height>=height-40,`content is ${content.height} tall in a ${height} window`);
 });
+
+for(const [width,height,touch] of [[1280,900,false],[393,852,true],[320,568,true],[834,1112,true]])test(`Move to Trash shows a spinning ring until Google answers at ${width}×${height}`,async t=>{
+ const held=[];
+ const page=await mount(t,{width,height,touch,state:{exhausted:true},items:Array.from({length:4},(_,index)=>item(index,{dedupKey:`dedup-${index}`,...(index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{})})),routes:(route,url)=>{if(url.hostname==='photos.google.com'&&url.pathname.endsWith('/data/batchexecute')){held.push(route);return true;}}});if(!page)return;
+ page.on('dialog',dialog=>dialog.accept());
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ const idle=await measure(page,`const b=q('#move-trash');return {text:b.textContent,ring:!!b.querySelector('svg'),busy:b.getAttribute('aria-busy')};`);
+ assert.deepEqual(idle,{text:'Move 3 to Trash',ring:false,busy:null});
+ await measure(page,`root.getElementById('move-trash').click();`);
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('move-trash').getAttribute('aria-busy')==='true',null,{timeout:5000});
+ await page.waitForTimeout(200);
+ const busy=await measure(page,`const b=q('#move-trash'),ring=b.querySelector('svg.trash-ring'),label=b.querySelector('.trash-progress-label'),r=ring.getBoundingClientRect(),l=label.getBoundingClientRect(),br=b.getBoundingClientRect();
+  return {label:label.textContent,spinning:ring.classList.contains('ring-spin'),animated:getComputedStyle(ring).animationName,arc:getComputedStyle(ring.querySelector('.ring-arc')).stroke,opacity:getComputedStyle(b).opacity,size:[getComputedStyle(ring).width,getComputedStyle(ring).height],inside:r.left>=br.left&&r.right<=l.left&&l.right<=br.right+.5&&r.top>=br.top&&r.bottom<=br.bottom,centered:Math.abs((r.top+r.bottom)/2-(l.top+l.bottom)/2)<=2};`);
+ assert.deepEqual(busy,{label:'Moving 3 to Trash…',spinning:true,animated:'ps-ring-spin',arc:'rgb(255, 255, 255)',opacity:'1',size:['20px','20px'],inside:true,centered:true});
+ assert.ok(held.length>=1);
+ for(const route of held.splice(0))await route.fulfill({status:500,body:''});
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('move-trash').getAttribute('aria-busy')===null,null,{timeout:10000});
+ for(const route of held.splice(0))await route.fulfill({status:500,body:''}).catch(()=>{});
+ assert.equal(await measure(page,`return q('#move-trash').querySelector('svg');`),null);
+});
