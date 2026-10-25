@@ -817,3 +817,32 @@ for(const [width,height,touch] of [[834,1112,true],[393,852,true],[1280,900,fals
  await measure(page,`root.getElementById('close').click();`);await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').hidden&&!history.state?.photosSwipe,null,{timeout:5000});
  assert.equal(page.url(),url);assert.equal(await page.evaluate(()=>history.length),before);
 });
+
+for(const [width,height,touch] of [[393,852,true],[834,1112,true],[1280,900,false]])test(`Around photos switches the card fill between Ambient glow, Color-matched edges and Glass, and a reload keeps the choice at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,state:{exhausted:true},items:Array.from({length:3},(_,index)=>item(index))});if(!page)return;
+ const fill=()=>measure(page,`const top=q('.top-card>.card-fill'),next=q('#next-card>.card-fill');return {mode:q('#card').dataset.fill,select:q('#card-fill').value,display:getComputedStyle(top).display,on:top.classList.contains('on'),key:top.dataset.key,size:[top.width,top.height],next:next?.dataset.key||''};`);
+ const settle=mode=>page.waitForFunction(mode=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,top=root.querySelector('.top-card>.card-fill');return mode==='glass'?getComputedStyle(top).display==='none':top.classList.contains('on')&&top.dataset.key.includes(`|${mode}|`);},mode,{timeout:10000});
+ const choose=async mode=>{await measure(page,`const s=q('#card-fill');s.value='${mode}';s.dispatchEvent(new Event('change'));`);await settle(mode);};
+ await settle('ambient');
+ const ambient=await fill();
+ assert.deepEqual([ambient.mode,ambient.select,ambient.display,ambient.on],['ambient','ambient','block',true]);
+ assert.match(ambient.key,/^synthetic-\d\|ambient\|\d+x\d+$/);assert.equal(Math.max(...ambient.size),24);
+ await page.waitForFunction(top=>{const key=document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card>.card-fill')?.dataset.key||'';return /^synthetic-\d\|ambient\|/.test(key)&&key.split('|')[0]!==top;},ambient.key.split('|')[0],{timeout:10000});
+ await choose('matched');
+ const matched=await fill();
+ assert.equal(matched.key.split('|')[0],ambient.key.split('|')[0]);assert.match(matched.key,/\|matched\|/);assert.equal(Math.max(...matched.size),192);
+ await page.waitForFunction(()=>/^synthetic-\d\|matched\|/.test(document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('#next-card>.card-fill')?.dataset.key||''),null,{timeout:10000});
+ await choose('glass');
+ assert.equal((await fill()).display,'none');
+ await page.waitForFunction(async()=>{const db=await new Promise(resolve=>{const request=indexedDB.open('photos-swipe-userscript');request.onsuccess=()=>resolve(request.result);});const values=await new Promise(resolve=>{const found=[],request=db.transaction('accounts').objectStore('accounts').openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor)return resolve(found);if(String(cursor.key).startsWith('resume'))found.push(cursor.value);cursor.continue();};});db.close();return values.some(value=>value?.cardFill==='glass');},null,{timeout:10000});
+ await page.reload();
+ await page.evaluate(()=>{window.WIZ_global_data={SNlM0e:'synthetic-token',oPEP7c:'synthetic@example.test',eptZe:'/_/PhotosUi/u/0/'};});
+ const source=(await readFile(new URL('../userscript/photoswiper-app.user.js',import.meta.url),'utf8')).replace('document,location,GM:',"document,location:{origin:'https://photos.google.com',pathname:'/u/0/'},GM:");
+ await page.addScriptTag({content:source});
+ await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick());
+ await page.waitForFunction(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('overlay').getAttribute('aria-busy')==='false',null,{timeout:10000});
+ await settle('glass');
+ const restored=await fill();
+ assert.deepEqual([restored.mode,restored.select,restored.display],['glass','glass','none']);
+ await choose('matched');
+});

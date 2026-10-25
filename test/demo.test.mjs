@@ -301,3 +301,30 @@ test('a full demo flow, through the video, fullscreen, Settings and Trash, logs 
   await page.close();
  }
 });
+
+for(const mode of ['ambient','matched'])test(`the ${mode} card fill paints behind the photo, waits on the next card and flies off with the card`,{timeout:60000},async t=>{
+ if(!chromium){t.skip('Playwright is unavailable');return;}
+ const directory=await buildDemo(t);
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const types={'.html':'text/html','.js':'text/javascript','.svg':'image/svg+xml','.mp4':'video/mp4'};
+ for(const [width,height] of [[393,852],[834,1112]]){
+  const page=await browser.newPage({viewport:{width,height},hasTouch:true});
+  await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.hostname!=='demo.test')return route.abort();const path=url.pathname.slice(1)||'index.html';try{if(path.endsWith('.mp4'))return fulfillVideo(route,await readFile(join(directory,path)));return route.fulfill({body:await readFile(join(directory,path)),contentType:types[extname(path)]||'application/octet-stream'});}catch{return route.fulfill({status:404,body:''});}});
+  await page.goto('https://demo.test/');
+  await page.waitForFunction(()=>/to review/.test(document.getElementById('photos-swipe-userscript-host')?.shadowRoot.getElementById('stats')?.textContent||''),null,{timeout:15000});
+  const q=code=>page.evaluate(source=>Function('const root=document.getElementById("photos-swipe-userscript-host").shadowRoot;const q=s=>root.querySelector(s);'+source)(),code);
+  await q(`const s=q('#card-fill');s.value='${mode}';s.dispatchEvent(new Event('change'));`);
+  await page.waitForFunction(mode=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,top=root.querySelector('.top-card>.card-fill'),next=root.querySelector('#next-card>.card-fill');return top?.classList.contains('on')&&top.dataset.key.includes(`|${mode}|`)&&next?.dataset.key.includes(`|${mode}|`);},mode,{timeout:10000});
+  const flight=await q(`const lit=canvas=>{const data=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let opaque=0;for(let i=3;i<data.length;i+=4)if(data[i]>0)opaque++;return opaque/(data.length/4);};
+   const top=q('.top-card>.card-fill'),style=getComputedStyle(top),before=lit(top);q('#keep').click();
+   const outgoing=[...q('#card').querySelectorAll('.top-card')].find(card=>card.getAttribute('aria-hidden')==='true'),copy=outgoing?.querySelector('.card-fill');
+   return {display:style.display,opacity:style.opacity,zIndex:style.zIndex,before,size:[top.width,top.height],copy:copy?{size:[copy.width,copy.height],lit:lit(copy)}:null};`);
+  assert.equal(flight.display,'block');assert.equal(flight.zIndex,'-1');
+  assert.ok(flight.before>0.05,JSON.stringify(flight));
+  assert.ok(flight.copy,'the flying copy has a fill canvas');
+  assert.deepEqual(flight.copy.size,flight.size);
+  assert.ok(Math.abs(flight.copy.lit-flight.before)<0.01,JSON.stringify(flight));
+  assert.equal(Math.max(...flight.size),mode==='ambient'?24:192);
+  await page.close();
+ }
+});

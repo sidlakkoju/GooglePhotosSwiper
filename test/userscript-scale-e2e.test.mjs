@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {deflateSync,crc32} from 'node:zlib';
+const pngPhoto=(()=>{const width=90,height=120,raw=Buffer.alloc((width*4+1)*height);for(let y=0;y<height;y++)for(let x=0;x<width;x++){const i=y*(width*4+1)+1+x*4,sun=(x-45)**2+(y-50)**2<400;raw[i]=sun?255:51;raw[i+1]=sun?221:170;raw[i+2]=sun?85:119;raw[i+3]=255;}const chunk=(type,data)=>{const length=Buffer.alloc(4),body=Buffer.concat([Buffer.from(type),data]),crc=Buffer.alloc(4);length.writeUInt32BE(data.length);crc.writeUInt32BE(crc32(body));return Buffer.concat([length,body,crc]);};const header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]);})();
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {emptyReview} from '../lib/userscript-core.mjs';
@@ -17,7 +19,7 @@ async function mount(t,{width,height,items,dpr=1,touch=false,sort='flashbacks'})
  await page.route('**/*',route=>{
   const url=new URL(route.request().url());
   if(url.hostname==='photos-swipe.test')return route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'});
-  if(url.hostname==='lh3.googleusercontent.com'){requests.push(url.pathname);return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200"><rect width="900" height="1200" fill="#3a7"/><circle cx="450" cy="500" r="200" fill="#fd5"/></svg>'});}
+  if(url.hostname==='lh3.googleusercontent.com'){requests.push(url.pathname);return route.fulfill({contentType:'image/png',body:pngPhoto});}
   return route.abort();
  });
  await page.goto('https://photos-swipe.test');
