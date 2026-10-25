@@ -769,3 +769,32 @@ for(const [width,height,touch] of [[1280,900,false],[393,852,true],[320,568,true
  for(const route of held.splice(0))await route.fulfill({status:500,body:''}).catch(()=>{});
  assert.equal(await measure(page,`return q('#move-trash').querySelector('svg');`),null);
 });
+
+const trashRoutes=trashed=>(route,url)=>{if(url.hostname!=='photos.google.com'||!url.pathname.endsWith('/data/batchexecute'))return null;const call=JSON.parse(new URLSearchParams(route.request().postData()).get('f.req'))[0][0],args=JSON.parse(call[1]);let data=[];if(call[0]==='XwAOJf')for(const key of args[2])trashed.add(key.replace('dedup-','synthetic-'));if(call[0]==='zy0IHe')data=[[...trashed].map(key=>[key,null,null,key.replace('synthetic-','dedup-')]),null];if(call[0]==='VrseUb')data=[[args[0],{225032867:[trashed.has(args[0])?1:0]}]];return route.fulfill({contentType:'text/plain',body:`)]}'\n\n123\n${JSON.stringify([['wrb.fr',call[0],JSON.stringify(data)]])}\n`});};
+for(const [width,height,touch,how] of [[393,852,true,'Back'],[834,1112,true,'Back'],[1280,900,false,'Back'],[1280,900,false,'Escape']])test(`after Move to Trash, ${how} on the done screen returns to swiping at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,state:{exhausted:true},routes:trashRoutes(new Set()),items:Array.from({length:6},(_,index)=>item(index,{dedupKey:`dedup-${index}`,...(index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{})}))});if(!page)return;
+ page.on('dialog',dialog=>dialog.accept());
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ await measure(page,`root.getElementById('move-trash').click();`);
+ await page.waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('trash-done').hidden,null,{timeout:15000});await page.waitForTimeout(400);
+ const done=await measure(page,`const nav=q('.review-panel>.trash-nav'),back=nav.firstElementChild,select=nav.lastElementChild,r=back.getBoundingClientRect(),top=root.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {back:back.textContent,visible:getComputedStyle(back).visibility,tappable:top===back||back.contains(top),topLeft:r.left<innerWidth/4&&r.top<120,select:getComputedStyle(select).visibility};`);
+ assert.deepEqual(done,{back:'Back',visible:'visible',tappable:true,topLeft:true,select:'hidden'});
+ if(how==='Escape')await page.keyboard.press('Escape');
+ else{const r=await measure(page,`const r=q('.review-panel>.trash-nav').firstElementChild.getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2];`);if(touch)await page.touchscreen.tap(r[0],r[1]);else await page.mouse.click(r[0],r[1]);}
+ await page.waitForTimeout(400);
+ assert.deepEqual(await measure(page,`return {panel:q('.review-panel').hidden,done:q('#trash-done').hidden,focus:root.activeElement?.id,badge:q('.trash-badge').textContent,review:/to review/.test(q('#stats').textContent)};`),{panel:true,done:true,focus:'keep',badge:'0',review:true});
+});
+
+for(const [width,height,touch] of [[393,852,true],[1280,900,false]])test(`in a Going to Trash preview the chosen option is checked and choosing it again shows the next photo at ${width}×${height}`,async t=>{
+ const page=await mount(t,{width,height,touch,state:{exhausted:true},items:Array.from({length:5},(_,index)=>item(index,index<3?{decision:'remove',revision:1,lastDecisionAt:1000+index}:{}))});if(!page)return;
+ await measure(page,`root.getElementById('review').click();`);await page.waitForTimeout(300);
+ await measure(page,`root.querySelector('.trash-photo').click();`);await page.waitForTimeout(300);
+ const press=async label=>{const r=await measure(page,`const b=[...root.querySelectorAll('.trash-preview .trash-bar button')].find(b=>b.textContent===${JSON.stringify(label)}).getBoundingClientRect();return [b.left+b.width/2,b.top+b.height/2];`);if(touch)await page.touchscreen.tap(r[0],r[1]);else await page.mouse.click(r[0],r[1]);await page.waitForTimeout(350);};
+ const state=()=>measure(page,`const p=q('.trash-preview');if(!p)return {preview:false};const buttons=[...p.querySelectorAll('.trash-bar button')];return {position:q('.trash-position').textContent,pressed:buttons.filter(b=>b.getAttribute('aria-pressed')==='true').map(b=>b.textContent),check:buttons.map(b=>getComputedStyle(b,'::before').content)};`);
+ const first=await state();assert.equal(first.position,'1 of 3');assert.deepEqual(first.pressed,['Trash']);assert.deepEqual(first.check.map(c=>c.includes('✓')),[false,true]);
+ await press('Trash');assert.deepEqual((await state()).position,'2 of 3');
+ await press('Keep');const kept=await state();assert.deepEqual([kept.position,kept.pressed],['2 of 3',['Keep']]);assert.deepEqual(kept.check.map(c=>c.includes('✓')),[true,false]);
+ await press('Keep');assert.equal((await state()).position,'3 of 3');
+ await press('Trash');assert.deepEqual(await state(),{preview:false});
+ assert.equal(await measure(page,`return q('#move-trash').textContent;`),'Move 2 to Trash');
+});
