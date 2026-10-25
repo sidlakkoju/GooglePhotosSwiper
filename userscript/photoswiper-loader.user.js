@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Photos Swipe (signed test loader)
 // @namespace https://github.com/sidlakkoju/GooglePhotosSwiper
-// @version 1.2.176
+// @version 1.2.177
 // @description Fetch and verify signed Photos Swipe releases.
 // @match https://photos.google.com/*
 // @inject-into content

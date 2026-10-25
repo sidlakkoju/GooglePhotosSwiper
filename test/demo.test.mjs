@@ -94,7 +94,8 @@ test('the embedded demo swipes, simulates Trash, posts to its parent and resets 
  await shadow(`q('#open-photos').click();`);await frame().waitForTimeout(50);
  assert.match(await shadow(`return q('#status').textContent;`),/^Demo:/);assert.equal(page.frames().length,2);
  await shadow(`q('#review').click();`);await frame().waitForTimeout(200);
- await shadow(`q('#move-trash').click();`);
+ await shadow(`q('#move-trash').click();`);await frame().waitForTimeout(100);
+ if(await shadow(`return q('#free-sheet')?.hidden===false;`))await shadow(`q('#free-trash').click();`);
  await frame().waitForFunction(()=>!document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('trash-done').hidden,null,{timeout:10000});
  const done=await shadow(`return {status:q('.trash-review-status').textContent||q('#status').textContent,link:q('#open-trash').hidden,demo:q('.trash-done-demo').hidden,stats:q('#stats').textContent};`);
  assert.match(done.status,/Demo: nothing was deleted/);assert.equal(done.link,true);assert.equal(done.demo,false);assert.match(done.stats,/^12 to review/);

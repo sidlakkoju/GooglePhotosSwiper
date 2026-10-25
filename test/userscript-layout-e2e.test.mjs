@@ -735,3 +735,17 @@ for(const started of [false,true])test(`after a successful Retry from the signed
  await page.waitForTimeout(300);
  assert.equal(await measure(page,`return root.activeElement?.id||null;`),'card');
 });
+
+for(const [width,height,touch,layout] of [[834,1112,true,'stacked'],[744,1013,true,'stacked'],[1024,1292,true,'stacked'],[700,1000,false,'stacked'],[1024,1292,false,'side'],[1194,760,true,'side'],[1280,900,false,'side'],[393,852,true,'phone']])test(`a ${touch?'touch':'mouse'} window at ${width}×${height} uses the ${layout} layout and fills the screen`,async t=>{
+ const page=await mount(t,{width,height,touch,items:Array.from({length:3},(_,index)=>item(index)),state:{exhausted:false}});if(!page)return;
+ await page.waitForTimeout(300);
+ const {card,actions,content,overflow}=await measure(page,`return {card:box('#card'),actions:box('.actions'),content:box('.content'),overflow:document.scrollingElement.scrollWidth>innerWidth||document.scrollingElement.scrollHeight>innerHeight};`);
+ assert.equal(overflow,false);
+ assert.ok(actions.y+actions.height<=height+1&&actions.x>=0&&actions.x+actions.width<=width+1,JSON.stringify(actions));
+ if(layout==='side'){assert.ok(actions.x>=card.x+card.width,`${JSON.stringify(card)} ${JSON.stringify(actions)}`);return;}
+ assert.ok(actions.y>=card.y+card.height,`${JSON.stringify(card)} ${JSON.stringify(actions)}`);
+ assert.ok(Math.abs(card.x+card.width/2-width/2)<=2,JSON.stringify(card));
+ assert.ok(card.width>=Math.min(width,960)-50,`card is ${card.width} wide in a ${width} window`);
+ assert.ok(card.height>=height*.6,`card is ${card.height} tall in a ${height} window`);
+ if(layout==='stacked')assert.ok(content.height>=height-40,`content is ${content.height} tall in a ${height} window`);
+});
