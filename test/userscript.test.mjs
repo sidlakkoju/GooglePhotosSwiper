@@ -2812,7 +2812,7 @@ test('enlarged video timeline seeks against its own bounds and persists through 
  assert.equal(video.currentTime,90);
  video.listeners.loadedmetadata();
  assert.equal(video.currentTime,90);
- assert.equal(media.childNodes.find(node=>node.dataset.videoControl==='time').textContent,'1:30 / 2:00');
+ assert.equal(media.childNodes.find(node=>node.dataset.videoControl==='time').childNodes[0].textContent,'1:30 / 2:00');
  await new Promise(resolve=>setTimeout(resolve,20));
  const {openReviewDatabase}=await import('../lib/userscript-db.mjs');
  const db=await openReviewDatabase(mounted.environment.window.indexedDB);

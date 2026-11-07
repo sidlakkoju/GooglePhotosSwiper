@@ -535,3 +535,58 @@ test('a full-quality copy that can seek still upgrades',async()=>{
  full.readyState=2;full.emit('canplay');full.emit('seeked');await Promise.resolve();
  assert.deepEqual(swaps,[full]);
 });
+
+function reported(options={}){
+ const video=fakeVideo(),created=[],states=[],swaps=[];
+ const cancel=startProgressiveVideo({video,url,createVideo:()=>{const element=options.stubborn?stubbornVideo():fakeVideo();created.push(element);return element;},onSwap:value=>{swaps.push(value);states.push('swap');},onError:()=>{},isActive:()=>true,onUpgradeState:loading=>states.push(loading)});
+ return {video,created,states,swaps,cancel};
+}
+
+test('the upgrade reports loading while the sharper copy loads and stops just before it is swapped in',async()=>{
+ const {video,created,states,swaps}=reported();
+ assert.deepEqual(states,[]);
+ video.currentTime=3;video.readyState=2;video.emit('loadeddata');
+ assert.deepEqual(states,[true]);
+ const full=created[0];full.duration=20;full.seekable={length:1,end:()=>20};full.emit('loadedmetadata');
+ full.readyState=2;full.emit('canplay');full.emit('seeked');await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(swaps,[full]);assert.deepEqual(states,[true,false,'swap']);
+});
+
+test('a sharper copy the browser cannot seek in stops the loading state at metadata and never starts it again',t=>{
+ const clock=clocked(t),{video,created,states}=reported();
+ video.currentTime=3;video.readyState=2;video.emit('loadeddata');
+ const full=created[0];full.duration=20;full.seekable={length:1,end:()=>0};full.emit('loadedmetadata');
+ assert.deepEqual(states,[true,false]);
+ for(let index=0;index<120;index++){clock.advance(1000);video.paused=false;video.emit('timeupdate');}
+ full.onerror();assert.deepEqual(states,[true,false]);assert.equal(created.length,1);
+});
+
+test('a failed or abandoned sharper copy stops the loading state, waits without it, and reports again only when a retry loads',t=>{
+ const clock=clocked(t),{video,created,states}=reported({stubborn:true});
+ video.currentTime=12;video.readyState=2;for(const event of ['loadeddata','playing','timeupdate'])video.emit(event);
+ const first=created[0];first.readyState=2;first.emit('canplay');for(let index=0;index<20;index++)first.emit('seeked');
+ assert.equal(first.src,'');assert.deepEqual(states,[true,false]);
+ clock.advance(4000);video.emit('timeupdate');assert.deepEqual(states,[true,false]);
+ clock.advance(1000);video.emit('timeupdate');assert.equal(created.length,2);assert.deepEqual(states,[true,false,true]);
+ created[1].onerror();assert.deepEqual(states,[true,false,true,false]);
+ first.onerror();assert.deepEqual(states,[true,false,true,false]);
+});
+
+test('leaving the card or falling back to the original while the sharper copy loads stops the loading state',()=>{
+ const left=reported();left.video.readyState=2;left.video.emit('loadeddata');left.cancel();left.cancel();
+ assert.deepEqual(left.states,[true,false]);
+ const fell=reported();fell.video.readyState=2;fell.video.emit('loadeddata');
+ fell.video.onerror();assert.deepEqual(fell.states,[true]);
+ fell.video.onerror();assert.deepEqual(fell.states,[true,false]);
+});
+
+test('a phone upgrade chain reports the second sharper copy after the first one is swapped in',async()=>{
+ const video=fakeVideo(),created=[],states=[];
+ const onUpgradeState=loading=>states.push(loading);
+ const createVideo=()=>{const element=fakeVideo();created.push(element);return element;};
+ const onSwap=full=>{states.push('swap');startProgressiveVideo({video:full,url,compact:false,createVideo,onSwap:()=>states.push('swap'),onError(){},isActive:()=>true,onUpgradeState});};
+ startProgressiveVideo({video,url,compact:true,createVideo,onSwap,onError(){},isActive:()=>true,onUpgradeState});
+ video.readyState=2;video.emit('loadeddata');
+ const sharper=created[0];sharper.readyState=2;sharper.emit('canplay');await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(states,[true,false,'swap',true]);assert.equal(created[1].src,url);
+});

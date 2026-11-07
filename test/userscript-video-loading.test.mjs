@@ -18,20 +18,22 @@ test('video links run in parallel with per-account per-card deduplication',async
 
 test('stopping a passed card pauses and aborts its active video before removing it',()=>{
  const events=[],video={pause:()=>events.push('pause'),removeAttribute:name=>events.push(`remove:${name}`),load:()=>events.push('load')};
- const context=vm.createContext({setVideoLoading(){},captureVideo(){},swipeFeedback:{reset(){}},underCard:{replaceChildren(){},hidden:false},generation:0,state:{items:[]},shown:'passed',buffer:{},$:()=>({querySelector:tag=>tag==='video'?video:null,replaceChildren:()=>events.push('remove-card')})});
+ const context=vm.createContext({setVideoLoading(){},setVideoUpgrading(){},captureVideo(){},swipeFeedback:{reset(){}},underCard:{replaceChildren(){},hidden:false},generation:0,state:{items:[]},shown:'passed',buffer:{},$:()=>({querySelector:tag=>tag==='video'?video:null,replaceChildren:()=>events.push('remove-card')})});
  vm.runInContext(source.slice(source.indexOf(' function stopMedia('),source.indexOf(' function showLockCard(')),context);
  context.stopMedia();assert.deepEqual(events,['pause','remove:src','load','remove-card']);assert.equal(context.shown,null);
 });
 
 test('quality swap and fallback clear the active loading label',()=>{
- let busy='true',options;
+ let busy='true',options;const upgrading=[];
  const media={readyState:0,currentTime:0,addEventListener(){}},container={setAttribute(name,value){if(name==='aria-busy')busy=value;},replaceChildren(){}};
- const context=vm.createContext({demo:null,media,token:1,generation:1,handlingError:false,$:()=>container,watchVideoLoading(){},window:{},videoURL:async()=> 'video:original',item:{mediaKey:'v'},retried:false,forceRefresh:false,previewSize:()=>({compact:false}),document:{},captureVideo(){},failed(){},startProgressiveVideo(value){options=value;},newVideo(){},loopOnEnd,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,addVideoControls(){},painted(){},warmed:false,setVideoLoading(){},trackVideoLoading(){}});
+ const context=vm.createContext({demo:null,media,token:1,generation:1,handlingError:false,$:()=>container,watchVideoLoading(){},window:{},videoURL:async()=> 'video:original',item:{mediaKey:'v'},retried:false,forceRefresh:false,previewSize:()=>({compact:false}),document:{},captureVideo(){},failed(){},startProgressiveVideo(value){options=value;},newVideo(){},loopOnEnd,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,addVideoControls(){},painted(){},warmed:false,setVideoLoading(){},trackVideoLoading(){},setVideoUpgrading:(value,token)=>upgrading.push([value,token])});
  const start=source.indexOf('    const clearLoading=');
  const end=source.indexOf('\n   }\n   else',start);
  return vm.runInContext(`(async()=>{${source.slice(start,end)}})()`,context).then(()=>{
   options.onFallback();assert.equal(busy,'false');busy='true';
   options.onSwap({addEventListener(){}});assert.equal(busy,'false');
   busy='true';context.generation=2;options.onFallback();assert.equal(busy,'true');
+  options.onUpgradeState(true);options.onUpgradeState(false);context.handlingError=true;options.onUpgradeState(true);
+  assert.deepEqual(upgrading,[[true,1],[false,1],[false,1]]);
  });
 });

@@ -11,10 +11,10 @@ function fixture(){
  const handlers={},buttons=[],classes=new Set();
  const video={tagName:'VIDEO',paused:true,muted:true,controls:false,plays:0,pauses:0,listeners:{},addEventListener(type,fn){this.listeners[type]=fn;},play(){this.plays++;this.paused=false;this.listeners.play?.();return Promise.resolve();},pause(){this.pauses++;this.paused=true;this.listeners.pause?.();}};
  const image={style:{}};
- const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,setAttribute(key,value){this[key]=value;},querySelector:tag=>tag==='video'?video:image,append:button=>buttons.push(button),addEventListener:(type,fn)=>handlers[type]=fn};
+ const mediaElement={style:{touchAction:'pan-y'},childNodes:buttons,setAttribute(key,value){this[key]=value;},querySelector:tag=>tag==='video'?video:image,append:(...nodes)=>buttons.push(...nodes),addEventListener:(type,fn)=>handlers[type]=fn};
  const card={style:{},classList:{contains:name=>classes.has(name),remove:name=>classes.delete(name),toggle(name,on){const value=on??!classes.has(name);if(value)classes.add(name);else classes.delete(name);return value;}}};
  const nodes={card,media:mediaElement,zoom:{value:'1'},enlarge:{},sort:{value:'original'}};
- const zoomCalls=[];const context=vm.createContext({zoomer:{zoomTo:value=>zoomCalls.push(['zoomTo',value]),reset:animate=>zoomCalls.push(['reset',animate])},zoomCalls,otherTab:false,leaseError:null,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,createVideoTimeline:()=>[],captureVideo(){},mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector.includes('button')?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
+ const zoomCalls=[];const context=vm.createContext({zoomer:{zoomTo:value=>zoomCalls.push(['zoomTo',value]),reset:animate=>zoomCalls.push(['reset',animate])},zoomCalls,otherTab:false,leaseError:null,holdNextVideo(){},dwellKey:null,shownAt:0,lastDwell:0,createVideoTimeline:()=>[{dataset:{videoControl:'seek'}},{dataset:{videoControl:'time'},childNodes:[],append(...nodes){this.childNodes.push(...nodes);}}],createVideoQuality:({video,loading})=>({badge:{video,loading},setLoading(value){this.badge.loading=value;}}),videoUpgrading:false,videoQuality:null,captureVideo(){},mediaElement,document:{createElement:()=>({dataset:{},style:{},addEventListener(){},closest(selector){return selector.includes('button')?this:null;}})},$:id=>nodes[id],swipeFeedback:{reset(){}},refreshPreviews(){},stopMedia(){},underCard:{querySelector:()=>null},generation:0,shown:null});
  vm.runInContext(source.slice(source.indexOf(' function updateVideoControls()'),source.indexOf(' queue_detailsElement.addEventListener')),context);
  createSwipeFeedback({window:{},targets:[mediaElement],card,under:{style:{}},keep:{style:{}},remove:{style:{}},canSwipe:()=>false,onDecide(){},playbackOnClick:true});
  const click=target=>{target.onclick?.();handlers.click({target});};
@@ -79,4 +79,14 @@ test('the Mute button sets the sound choice for later videos in this session',()
  f.click(mute);assert.equal(f.context.soundOn,true);
  f.click(mute);assert.equal(f.context.soundOn,false);
  f.video.muted=false;f.video.listeners.volumechange?.();assert.equal(f.context.soundOn,false,'a muted change that is not a button press leaves the choice alone');
+});
+
+test('each rebuild of the video bar puts the resolution badge beside the time and carries over a sharper copy that is still loading',()=>{
+ const f=fixture();f.context.addVideoControls(f.video);
+ const time=f.buttons.find(node=>node.dataset.videoControl==='time');
+ assert.equal(time.childNodes.length,1);assert.equal(time.childNodes[0].video,f.video);assert.equal(time.childNodes[0].loading,false);
+ f.context.videoUpgrading=true;f.buttons.length=0;
+ const swapped={...f.video,listeners:{}};f.context.addVideoControls(swapped);
+ const badge=f.buttons.find(node=>node.dataset.videoControl==='time').childNodes.at(-1);
+ assert.equal(badge.video,swapped);assert.equal(badge.loading,true);assert.equal(f.context.videoQuality.badge,badge);
 });

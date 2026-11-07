@@ -41,7 +41,7 @@ for(const engineName of ['chromium','webkit'])for(const source of ['720p availab
  await page.evaluate(()=>document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('launcher').onclick());
  await page.waitForFunction(()=>{const shown=document.getElementById('photos-swipe-userscript-host').shadowRoot.getElementById('media').querySelector('video');return !!shown&&shown.readyState>=2&&shown.currentTime>0;},null,{timeout:20000});
  await page.waitForTimeout(3000);
- const shown=()=>page.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,videos=[...root.getElementById('media').querySelectorAll('video')].filter(element=>element.style.opacity!=='0');return {time:videos[0]?.currentTime,src:videos[0]?.currentSrc.replace(/^.*=/,''),label:root.querySelector('[data-video-control=time]').textContent};});
+ const shown=()=>page.evaluate(()=>{const root=document.getElementById('photos-swipe-userscript-host').shadowRoot,videos=[...root.getElementById('media').querySelectorAll('video')].filter(element=>element.style.opacity!=='0');return {time:videos[0]?.currentTime,src:videos[0]?.currentSrc.replace(/^.*=/,''),label:root.querySelector('[data-video-control=time]').firstChild.textContent};});
  const box=await page.evaluate(()=>{const rect=document.getElementById('photos-swipe-userscript-host').shadowRoot.querySelector('[data-video-control=seek]').getBoundingClientRect();return {x:rect.x,y:rect.y+rect.height/2,width:rect.width};});
  await page.mouse.click(box.x+box.width*.75,box.y);
  const clicked=await shown();
