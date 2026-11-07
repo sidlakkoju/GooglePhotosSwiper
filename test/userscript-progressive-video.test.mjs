@@ -33,7 +33,7 @@ test('phone starts at 360p and upgrades in place to 720p at current playback tim
 });
 
 for(const event of ['error','stalled'])test(`small ${event} immediately falls back to original and preserves time`,()=>{
- const {video,full,errors}=setup();video.currentTime=7;video.readyState=2;video.emit('loadeddata');
+ const {video,full,errors}=setup(true);video.currentTime=7;video.readyState=2;video.emit('loadeddata');
  if(event==='error')video.onerror();else video.emit(event);
  assert.equal(video.src,url);assert.equal(full.src,'');video.currentTime=0;video.emit('loadedmetadata');assert.equal(video.currentTime,7);
  video.onerror();assert.deepEqual(errors,['error']);
@@ -48,8 +48,8 @@ test('passing card cancels hidden original and prevents late swap',async()=>{
 test('paused playback stays paused after upgrade and original failure retains small fallback',()=>{
  const {video,full,swaps}=setup();video.pause();video.readyState=2;video.emit('loadeddata');full.readyState=2;full.emit('canplay');
  assert.deepEqual(swaps,[full]);assert.equal(full.paused,true);
- const second=setup();second.video.readyState=2;second.video.emit('loadeddata');second.full.onerror();
- assert.equal(second.video.src,smallerVideoURL(url));second.video.onerror();assert.equal(second.video.src,url);
+ const second=setup(true);second.video.readyState=2;second.video.emit('loadeddata');second.full.onerror();
+ assert.equal(second.video.src,smallerVideoURL(url,true));second.video.onerror();assert.equal(second.video.src,url);
 });
 
 test('frame handoff realigns after a seek and preserves a pause while preparing the frame',async()=>{
@@ -68,9 +68,9 @@ test('fallback before metadata keeps the saved resume position owned by the disp
 });
 
 test('normal initial waiting does not abandon the smaller rendition, and a stall with no data retries it once before the original',()=>{
- const {video}=setup();video.emit('waiting');assert.equal(video.src,smallerVideoURL(url));
+ const {video}=setup(true);video.emit('waiting');assert.equal(video.src,smallerVideoURL(url,true));
  const plays=video.playCalls;
- video.emit('stalled');assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,1);assert.equal(video.playCalls,plays+1);
+ video.emit('stalled');assert.equal(video.src,smallerVideoURL(url,true));assert.equal(video.loads,1);assert.equal(video.playCalls,plays+1);
  video.emit('stalled');assert.equal(video.src,url);
 });
 
@@ -82,7 +82,7 @@ test('retrying the smaller rendition keeps an applied resume position and leaves
 });
 
 test('a stall after the smaller rendition has data falls back to the original without a retry',()=>{
- const {video}=setup();video.readyState=2;video.emit('stalled');assert.equal(video.src,url);
+ const {video}=setup(true);video.readyState=2;video.emit('stalled');assert.equal(video.src,url);
 });
 
 test('a retried smaller rendition that recovers keeps playing and still upgrades',async()=>{
@@ -94,14 +94,14 @@ test('a retried smaller rendition that recovers keeps playing and still upgrades
 });
 
 for(const event of ['error','stalled'])test(`small ${event} resumes original after a browser error forces paused`,()=>{
- const {video}=setup();video.readyState=2;video.emit('loadeddata');
+ const {video}=setup(true);video.readyState=2;video.emit('loadeddata');
  video.error={code:4};video.paused=true;video.emit('pause');
  if(event==='error')video.onerror();else video.emit(event);
  assert.equal(video.src,url);assert.equal(video.playCalls,2);assert.equal(video.paused,false);
 });
 
 test('fallback respects a user pause before the rendition fails',()=>{
- const {video}=setup();video.pause();video.error={code:4};video.onerror();
+ const {video}=setup(true);video.pause();video.error={code:4};video.onerror();
  assert.equal(video.src,url);assert.equal(video.playCalls,1);assert.equal(video.paused,true);
 });
 
@@ -162,7 +162,7 @@ test('loading ignores nonadvancing time and events from a passed card',()=>{
 
 test('fallback clears loading without waiting for canplay',()=>{
  const video=fakeVideo();let busy=true;
- startProgressiveVideo({video,url,createVideo:fakeVideo,isActive:()=>true,onSwap:()=>{},onError:()=>{},onFallback:()=>{busy=false;}});
+ startProgressiveVideo({video,url,compact:true,createVideo:fakeVideo,isActive:()=>true,onSwap:()=>{},onError:()=>{},onFallback:()=>{busy=false;}});
  video.onerror();assert.equal(busy,false);
 });
 
@@ -331,11 +331,11 @@ test('the first full-quality attempt is held while the card is being dragged',()
 });
 
 test('a stalled download while the video is visibly playing does not fall back until playback runs dry',t=>{
- const clock=clocked(t),{video}=setup();
+ const clock=clocked(t),{video}=setup(true);
  video.readyState=2;video.emit('loadeddata');
  video.currentTime=20;video.emit('timeupdate');clock.advance(300);
  video.emit('stalled');
- assert.equal(video.src,smallerVideoURL(url));assert.equal(video.loads,0);
+ assert.equal(video.src,smallerVideoURL(url,true));assert.equal(video.loads,0);
  video.emit('waiting');
  assert.equal(video.src,url);
 });
@@ -507,4 +507,31 @@ test('a hidden video that is playing in sync swaps on its first frame even while
  assert.equal(full.playCalls,1);assert.equal(fullFrames.length,1);assert.deepEqual(swaps,[]);
  video.currentTime=3.5;full.currentTime=3.52;fullFrames.shift()(0,{mediaTime:3.52});
  await Promise.resolve();assert.deepEqual(swaps,[full]);assert.equal(full.style.opacity,'');assert.equal(video.src,'');
+});
+
+test('when the desktop 720p rendition is missing, as for videos under 720p, it steps down to 360p at the same time before the original',()=>{
+ const {video,full,errors}=setup();video.currentTime=7;video.readyState=2;video.emit('loadeddata');
+ video.error={code:4};video.paused=true;video.emit('pause');video.onerror();
+ assert.equal(video.src,smallerVideoURL(url,true));assert.equal(video.paused,false);assert.equal(full.src,url);
+ video.currentTime=0;video.emit('loadedmetadata');assert.equal(video.currentTime,7);
+ video.onerror();assert.equal(video.src,url);assert.equal(full.src,'');
+ video.onerror();assert.deepEqual(errors,['error']);
+});
+
+test('a full-quality copy the browser cannot seek in is dropped for good, so the timeline keeps a seekable video',t=>{
+ const clock=clocked(t),created=[],video=fakeVideo(),swaps=[];
+ startProgressiveVideo({video,url,createVideo:()=>{const element=fakeVideo();created.push(element);return element;},onSwap:value=>swaps.push(value),onError:()=>{},isActive:()=>true});
+ video.currentTime=3;video.readyState=2;video.emit('loadeddata');
+ const full=created[0];full.duration=20;full.seekable={length:1,end:()=>0};full.emit('loadedmetadata');
+ assert.equal(full.src,'');assert.equal(full.isConnected,false);
+ full.readyState=2;full.emit('canplay');
+ for(let index=0;index<120;index++){clock.advance(1000);video.emit('timeupdate');}
+ assert.equal(created.length,1);assert.deepEqual(swaps,[]);assert.equal(video.src,smallerVideoURL(url));
+});
+
+test('a full-quality copy that can seek still upgrades',async()=>{
+ const {video,full,swaps}=setup();video.currentTime=3;video.readyState=2;video.emit('loadeddata');
+ full.duration=20;full.seekable={length:1,end:()=>20};full.emit('loadedmetadata');
+ full.readyState=2;full.emit('canplay');full.emit('seeked');await Promise.resolve();
+ assert.deepEqual(swaps,[full]);
 });
